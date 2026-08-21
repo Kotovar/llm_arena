@@ -140,6 +140,7 @@ export class BenchmarkEngine {
             stdout: (text) => appendFileSync(backendStdout, text),
             stderr: (text) => appendFileSync(backendStderr, text),
           },
+          run.reasoning_effort,
         );
         this.#emit({ type: "backend.ready", runId: run.id, data: { port: backend.port, startupDurationMs: backend.startupDurationMs } });
       }
@@ -246,6 +247,7 @@ export class BenchmarkEngine {
           { path: model.path, alias: model.alias },
           snapshot.profile.parameters,
           { stdout: (text) => appendFileSync(stdoutPath, text), stderr: (text) => appendFileSync(stderrPath, text) },
+          run.reasoning_effort,
         );
       }
       const result = await this.#runAgent({

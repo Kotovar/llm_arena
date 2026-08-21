@@ -13,6 +13,7 @@ export function buildLlamaServerCommand(
   profile: LlamaProfile,
   port: number,
   slotSavePath: string,
+  reasoningEffort?: string | null,
 ): string[] {
   const command = [
     executable,
@@ -26,6 +27,7 @@ export function buildLlamaServerCommand(
     String(profile.nGpuLayers),
   ];
   if (profile.nCpuMoe !== undefined) command.push("--n-cpu-moe", String(profile.nCpuMoe));
+  if (reasoningEffort) command.push("--reasoning-effort", reasoningEffort);
   command.push(
     "-c",
     String(profile.context),
@@ -81,10 +83,11 @@ export class LlamaCppServerManager {
     model: LocalModel,
     profile: LlamaProfile,
     logs: { stdout: (text: string) => void; stderr: (text: string) => void },
+    reasoningEffort?: string | null,
   ) {
     const port = await allocatePort();
     const slotSavePath = mkdtempSync(join(tmpdir(), "llm-arena-slots-"));
-    const command = buildLlamaServerCommand(this.executable, model, profile, port, slotSavePath);
+    const command = buildLlamaServerCommand(this.executable, model, profile, port, slotSavePath, reasoningEffort);
     const startedAt = performance.now();
     const process = this.supervisor.spawn({ argv: command, onStdout: logs.stdout, onStderr: logs.stderr });
     const baseUrl = `http://127.0.0.1:${port}`;

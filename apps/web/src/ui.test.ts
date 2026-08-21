@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, latestProfiles, reviewSaveLabel, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
+import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
 
 const runners = [
   { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"], envPassthrough: [] },
@@ -49,6 +49,14 @@ describe("интерфейс запуска", () => {
     ];
 
     expect(latestProfiles(profiles)).toEqual([profiles[1], profiles[2]]);
+  });
+
+  it("не дублирует название и технический ID облачной модели", () => {
+    expect(modelOptionLabel({ id: "gpt-5.6-sol", name: "GPT-5.6-Sol" })).toBe("GPT-5.6-Sol");
+  });
+
+  it("предлагает поддерживаемые llama.cpp уровни обдумывания локальной модели", () => {
+    expect(reasoningEffortsForModel("local-gguf")).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
   });
 
   it("считает понятный прогресс набора промптов", () => {

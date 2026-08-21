@@ -40,6 +40,7 @@ nav { display: grid; gap: 5px; } nav a { color: #a9bac6; padding: 9px 11px; bord
 .launch-step select, .advanced select { display: block; width: 100%; margin-top: 8px; padding: 12px; }
 .launch-step > a { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; padding: 8px 13px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; white-space: nowrap; }
 .launch-fields { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.launch-fields small { display: block; margin-top: 6px; color: var(--muted); font-weight: 400; line-height: 1.4; }
 .result-mode { display: flex; gap: 10px; margin: 0; padding: 0; border: 0; }.result-mode legend { margin-bottom: 8px; color: #bfd0da; font-size: 13px; font-weight: 600; }.result-mode label { display: flex; align-items: center; gap: 7px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }.launch-mode-note { width: auto !important; height: auto !important; color: var(--muted) !important; background: none !important; border-radius: 0 !important; font: 12px/1.4 inherit !important; }
 .advanced { padding: 15px 26px; border-bottom: 1px solid var(--line); color: var(--muted); }
 .advanced summary { cursor: pointer; font-size: 13px; }

@@ -19,6 +19,7 @@ describe("llama-server command", () => {
       },
       43210,
       "/tmp/arena-slots",
+      "high",
     );
 
     expect(command).toContain("-fit");
@@ -26,6 +27,8 @@ describe("llama-server command", () => {
     expect(command).toContain("--n-cpu-moe");
     expect(command).toContain("--slot-save-path");
     expect(command).toContain("/tmp/arena-slots");
+    expect(command).toContain("--reasoning-effort");
+    expect(command[command.indexOf("--reasoning-effort") + 1]).toBe("high");
     expect(command.slice(-4)).toEqual(["--host", "127.0.0.1", "--port", "43210"]);
   });
 });

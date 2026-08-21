@@ -54,6 +54,14 @@ export function latestProfiles<T extends { modelId: string; name: string; revisi
   return [...latest.values()];
 }
 
+export function modelOptionLabel(option: { id: string; name: string }) {
+  return option.name;
+}
+
+export function reasoningEffortsForModel(kind?: Model["kind"], cloudEfforts: string[] = []) {
+  return kind === "local-gguf" ? ["minimal", "low", "medium", "high", "xhigh", "max"] : cloudEfforts;
+}
+
 export function runProgress(total: number, statuses: string[]) {
   const completed = statuses.filter((status) => status === "completed").length;
   return {
