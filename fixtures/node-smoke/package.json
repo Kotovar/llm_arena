@@ -1,0 +1,8 @@
+{
+  "name": "llm-arena-node-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

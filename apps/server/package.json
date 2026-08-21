@@ -1,0 +1,22 @@
+{
+  "name": "@llm-arena/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@llm-arena/shared": "workspace:*",
+    "fastify": "^5.0.0",
+    "yaml": "^2.8.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0"
+  }
+}

@@ -1,0 +1,187 @@
+import { z } from "zod";
+
+export const taskKindSchema = z.enum(["prompt", "coding"]);
+export const runStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled"]);
+export const runnerKindSchema = z.enum(["llama-chat", "omp", "claude-code", "codex"]);
+
+const taskBaseSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(4_000).optional(),
+  prompt: z.string().trim().min(1),
+  tags: z.array(z.string().trim().min(1).max(64)).default([]),
+});
+
+export const createTaskSchema = z.discriminatedUnion("kind", [
+  taskBaseSchema.extend({ kind: z.literal("prompt"), fixtureId: z.never().optional() }).strict(),
+  taskBaseSchema.extend({ kind: z.literal("coding"), fixtureId: z.string().trim().min(1) }).strict(),
+]);
+export const updateTaskSchema = createTaskSchema;
+
+export const taskRevisionSchema = createTaskSchema.and(
+  z.object({
+    id: z.string().uuid(),
+    taskId: z.string().uuid(),
+    revision: z.number().int().positive(),
+    contentHash: z.string().length(64),
+    fixtureHash: z.string().length(64).nullable(),
+    createdAt: z.string().datetime(),
+  }),
+);
+
+export const taskSchema = z.object({
+  id: z.string().uuid(),
+  archivedAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  currentRevision: taskRevisionSchema,
+});
+
+export const createBenchmarkSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(4_000).optional(),
+  taskRevisionIds: z.array(z.string().uuid()).min(1),
+});
+
+export const modelKindSchema = z.enum(["local-gguf", "cloud"]);
+export const createModelSchema = z
+  .object({
+    name: z.string().trim().min(1).max(160),
+    kind: modelKindSchema,
+    provider: z.string().trim().min(1),
+    modelRef: z.string().trim().min(1),
+    path: z.string().trim().min(1).optional(),
+    alias: z.string().trim().min(1).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.kind === "local-gguf" && (!value.path || !value.alias)) {
+      context.addIssue({ code: "custom", message: "Local GGUF models require path and alias" });
+    }
+  });
+
+export const llamaProfileSchema = z.object({
+  context: z.number().int().positive(),
+  nGpuLayers: z.union([z.literal("all"), z.number().int().nonnegative()]),
+  nCpuMoe: z.number().int().nonnegative().optional(),
+  cacheTypeK: z.string().min(1),
+  cacheTypeV: z.string().min(1),
+  batchSize: z.number().int().positive(),
+  ubatchSize: z.number().int().positive(),
+  flashAttention: z.boolean(),
+  cacheReuse: z.number().int().nonnegative(),
+  temperature: z.number().min(0).max(2).optional(),
+  seed: z.number().int().optional(),
+});
+
+export const createExecutionProfileSchema = z.object({
+  modelId: z.string().uuid(),
+  name: z.string().trim().min(1).max(160),
+  parameters: llamaProfileSchema,
+  ggufSha256: z.string().length(64).nullable().default(null),
+  calibrated: z.boolean().default(false),
+});
+
+export const createRunSchema = z.object({
+  benchmarkRevisionId: z.string().uuid(),
+  modelId: z.string().uuid(),
+  executionProfileId: z.string().uuid().nullable(),
+  runnerId: z.string().trim().min(1),
+  resultMode: z.enum(["text", "web"]),
+  reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).nullable().default(null),
+});
+
+const measuredSources = z.enum([
+  "llama.cpp",
+  "runner",
+  "client-observed",
+  "nvidia-smi",
+  "procfs",
+  "estimated",
+]);
+export const measuredSchema = z.union([
+  z.object({ value: z.number(), unit: z.string().optional(), source: measuredSources }),
+  z.object({ value: z.null(), unit: z.string().optional(), source: z.literal("unavailable") }),
+]);
+
+export const normalizedMetricsSchema = z.object({
+  totalDurationMs: measuredSchema,
+  startupDurationMs: measuredSchema,
+  ttftMs: measuredSchema,
+  inputTokens: measuredSchema,
+  cachedInputTokens: measuredSchema,
+  outputTokens: measuredSchema,
+  modelRequests: measuredSchema,
+  promptTokensPerSecond: measuredSchema,
+  generationTokensPerSecond: measuredSchema,
+});
+
+export const normalizedRunResultSchema = z.object({
+  finalAnswer: z.string(),
+  exitCode: z.number().int().nullable(),
+  sessionId: z.string().nullable(),
+  requestId: z.string().nullable(),
+  metrics: normalizedMetricsSchema,
+});
+
+const scoreSchema = z.number().int().min(1).max(10);
+export const reviewSchema = z.object({
+  correctness: scoreSchema,
+  codeQuality: scoreSchema,
+  uiQuality: scoreSchema,
+  instructionFollowing: scoreSchema,
+  comment: z.string().trim().max(10_000).default(""),
+});
+
+export const commandSpecSchema = z.object({
+  argv: z.array(z.string()).min(1),
+  cwd: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const fixtureManifestSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  source: z.string().trim().min(1),
+  instructions: z.string().trim().min(1).optional(),
+  install: commandSpecSchema.optional(),
+  checks: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1),
+        label: z.string().trim().min(1),
+        command: commandSpecSchema,
+      }),
+    )
+    .default([]),
+  preview: z
+    .object({
+      command: commandSpecSchema,
+      readyPath: z.string().default("/"),
+    })
+    .optional(),
+});
+
+export const runnerDefinitionSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  kind: runnerKindSchema,
+  exec: z.array(z.string()).min(1),
+  default: z.boolean().default(false),
+  envPassthrough: z.array(z.string()).default([]),
+  env: z.record(z.string(), z.string()).default({}),
+});
+
+export type CreateTask = z.infer<typeof createTaskSchema>;
+export type Task = z.infer<typeof taskSchema>;
+export type TaskRevision = z.infer<typeof taskRevisionSchema>;
+export type CreateBenchmark = z.infer<typeof createBenchmarkSchema>;
+export type CreateModel = z.infer<typeof createModelSchema>;
+export type CreateExecutionProfile = z.infer<typeof createExecutionProfileSchema>;
+export type LlamaProfile = z.infer<typeof llamaProfileSchema>;
+export type CreateRun = z.input<typeof createRunSchema>;
+export type RunStatus = z.infer<typeof runStatusSchema>;
+export type RunnerKind = z.infer<typeof runnerKindSchema>;
+export type RunnerDefinition = z.infer<typeof runnerDefinitionSchema>;
+export type FixtureManifest = z.infer<typeof fixtureManifestSchema>;
+export type CommandSpec = z.infer<typeof commandSpecSchema>;
+export type NormalizedRunResult = z.infer<typeof normalizedRunResultSchema>;
+export type Review = z.infer<typeof reviewSchema>;

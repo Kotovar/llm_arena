@@ -1,0 +1,17 @@
+{
+  "name": "llm-arena",
+  "private": true,
+  "packageManager": "pnpm@11.21.0",
+  "scripts": {
+    "dev": "pnpm --filter @llm-arena/shared build && pnpm --parallel --filter @llm-arena/server --filter @llm-arena/web dev",
+    "build": "pnpm -r build",
+    "test": "pnpm --filter @llm-arena/shared build && pnpm -r test",
+    "typecheck": "pnpm --filter @llm-arena/shared build && pnpm -r typecheck",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
