@@ -54,6 +54,7 @@ type RunRow = {
   execution_profile_id: string | null;
   runner_id: string;
   result_mode: "text" | "web";
+  model_ref: string | null;
   reasoning_effort: string | null;
   status: RunStatus;
   snapshot_json: string | null;
@@ -160,6 +161,9 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!runColumns.some((column) => column.name === "reasoning_effort")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN reasoning_effort TEXT");
+  }
+  if (!runColumns.some((column) => column.name === "model_ref")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN model_ref TEXT");
   }
 }
 
@@ -355,17 +359,24 @@ export function createStore(filename: string) {
       return all<ModelRow>("SELECT * FROM models ORDER BY created_at").map(mapModel);
     },
     createExecutionProfile(input: CreateExecutionProfile) {
-      const id = randomUUID();
-      const createdAt = now();
-      const previous = one<{ revision: number }>(
-        "SELECT revision FROM execution_profiles WHERE model_id = ? AND name = ? ORDER BY revision DESC LIMIT 1",
+      const parametersJson = JSON.stringify(input.parameters);
+      const previous = one<{ id: string; revision: number; parameters_json: string; gguf_sha256: string | null; calibrated: number }>(
+        "SELECT id, revision, parameters_json, gguf_sha256, calibrated FROM execution_profiles WHERE model_id = ? AND name = ? ORDER BY revision DESC LIMIT 1",
         input.modelId,
         input.name,
       );
+      if (previous
+        && previous.parameters_json === parametersJson
+        && previous.gguf_sha256 === input.ggufSha256
+        && (previous.calibrated === 1) === input.calibrated) {
+        return this.getExecutionProfile(previous.id)!;
+      }
+      const id = randomUUID();
+      const createdAt = now();
       const revision = (previous?.revision ?? 0) + 1;
       sqlite
         .prepare("INSERT INTO execution_profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, input.modelId, input.name, revision, JSON.stringify(input.parameters), input.ggufSha256, input.calibrated ? 1 : 0, createdAt);
+        .run(id, input.modelId, input.name, revision, parametersJson, input.ggufSha256, input.calibrated ? 1 : 0, createdAt);
       return { id, ...input, revision, createdAt };
     },
     getExecutionProfile(id: string) {
@@ -401,9 +412,12 @@ export function createStore(filename: string) {
     createRun(input: CreateRun) {
       const id = randomUUID();
       const createdAt = now();
+      const model = this.getModel(input.modelId);
+      if (!model) throw new Error("Model not found");
+      const modelRef = model.kind === "cloud" ? input.modelRef ?? model.modelRef : model.modelRef;
       sqlite
-        .prepare("INSERT INTO benchmark_runs (id, benchmark_revision_id, model_id, execution_profile_id, runner_id, result_mode, reasoning_effort, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
-        .run(id, input.benchmarkRevisionId, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.reasoningEffort ?? null, createdAt);
+        .prepare("INSERT INTO benchmark_runs (id, benchmark_revision_id, model_id, execution_profile_id, runner_id, result_mode, model_ref, reasoning_effort, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+        .run(id, input.benchmarkRevisionId, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, modelRef, input.reasoningEffort ?? null, createdAt);
       return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
     },
     getRun(id: string) {

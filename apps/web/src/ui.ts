@@ -45,6 +45,15 @@ export function defaultLocalProfile(modelId: string, context: number, nCpuMoe: n
   };
 }
 
+export function latestProfiles<T extends { modelId: string; name: string; revision: number }>(profiles: T[]) {
+  const latest = new Map<string, T>();
+  for (const profile of profiles) {
+    const key = `${profile.modelId}\0${profile.name}`;
+    if ((latest.get(key)?.revision ?? 0) < profile.revision) latest.set(key, profile);
+  }
+  return [...latest.values()];
+}
+
 export function runProgress(total: number, statuses: string[]) {
   const completed = statuses.filter((status) => status === "completed").length;
   return {

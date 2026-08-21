@@ -71,6 +71,7 @@ describe("run queue", () => {
       executionProfileId: null,
       runnerId: "claude",
       resultMode: "text",
+      modelRef: "claude-sonnet-4-5",
     });
     store.createRun({
       benchmarkRevisionId: benchmark.currentRevision.id,
@@ -80,7 +81,7 @@ describe("run queue", () => {
       resultMode: "text",
     });
 
-    expect(store.claimNextRun()?.id).toBe(first.id);
+    expect(store.claimNextRun()).toMatchObject({ id: first.id, model_ref: "claude-sonnet-4-5" });
     expect(store.listRuns().map((run) => run.status)).toEqual(["running", "pending"]);
   });
 });
@@ -111,6 +112,7 @@ describe("execution profiles and task results", () => {
     };
     const first = store.createExecutionProfile({ modelId: model.id as string, name: "Quality", parameters, calibrated: false, ggufSha256: null });
     const second = store.createExecutionProfile({ modelId: model.id as string, name: "Quality", parameters, calibrated: true, ggufSha256: null });
+    const duplicate = store.createExecutionProfile({ modelId: model.id as string, name: "Quality", parameters, calibrated: true, ggufSha256: null });
     const run = store.createRun({
       benchmarkRevisionId: benchmark.currentRevision.id,
       modelId: model.id as string,
@@ -123,6 +125,8 @@ describe("execution profiles and task results", () => {
     store.saveReview(taskRun.id, { correctness: 9, codeQuality: 8, uiQuality: 7, instructionFollowing: 10, comment: "Good" });
 
     expect([first.revision, second.revision]).toEqual([1, 2]);
+    expect(duplicate).toEqual(second);
+    expect(store.listExecutionProfiles(model.id)).toHaveLength(2);
     expect(store.getTaskRun(taskRun.id)?.review?.comment).toBe("Good");
     expect(JSON.parse(store.getTaskRun(taskRun.id)?.result_json ?? "{}").finalAnswer).toBe("Done");
   });

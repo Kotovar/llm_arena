@@ -39,10 +39,12 @@ describe("run configuration", () => {
       executionProfileId: null,
       runnerId: "codex-proxy",
       resultMode: "web",
+      modelRef: "gpt-5.6-terra",
       reasoningEffort: "high",
     });
 
     expect(parsed.resultMode).toBe("web");
+    expect(parsed.modelRef).toBe("gpt-5.6-terra");
     expect(parsed.reasoningEffort).toBe("high");
   });
 

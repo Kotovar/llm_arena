@@ -22,7 +22,7 @@ describe("benchmark engine", () => {
       script,
       `let input=""; for await (const chunk of process.stdin) input+=chunk;
 console.log(JSON.stringify({type:"thread.started",thread_id:"thread"}));
-console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"result:"+input}}));
+console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"result:"+process.argv.join(" ")+":"+input}}));
 console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_tokens:2}}));`,
     );
     const config = loadConfig("../../arena.config.yaml");
@@ -32,7 +32,7 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "answer", tags: [] });
     const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", modelRef: "gpt-selected" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("engine-test", 100));
 
     await engine.processNext();
@@ -40,7 +40,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(store.getRun(run.id)?.status).toBe("completed");
     const taskRun = store.listTaskRuns(run.id)[0];
     expect(taskRun?.status).toBe("completed");
-    expect(JSON.parse(taskRun?.result_json ?? "{}").finalAnswer).toBe("result:answer");
+    expect(JSON.parse(taskRun?.result_json ?? "{}").finalAnswer).toContain("-m gpt-selected");
+    expect(JSON.parse(taskRun?.snapshot_json ?? "{}").model.modelRef).toBe("gpt-selected");
     await engine.stop();
     store.close();
   });

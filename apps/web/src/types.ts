@@ -81,6 +81,7 @@ export type Run = {
   model_id: string;
   runner_id: string;
   result_mode: "text" | "web";
+  model_ref: string | null;
   reasoning_effort: string | null;
   status: string;
   snapshot_json: string | null;

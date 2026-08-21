@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, reviewSaveLabel, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
+import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, latestProfiles, reviewSaveLabel, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
 
 const runners = [
   { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"], envPassthrough: [] },
@@ -39,6 +39,16 @@ describe("интерфейс запуска", () => {
       name: "Основной",
       parameters: { context: 65_536, nGpuLayers: "all", nCpuMoe: 12, cacheTypeK: "q8_0", cacheTypeV: "q8_0" },
     });
+  });
+
+  it("оставляет для выбора только последнюю версию каждого профиля", () => {
+    const profiles = [
+      { id: "v1", modelId: "ornith", name: "Quality", revision: 1 },
+      { id: "v2", modelId: "ornith", name: "Quality", revision: 2 },
+      { id: "speed", modelId: "ornith", name: "Speed", revision: 1 },
+    ];
+
+    expect(latestProfiles(profiles)).toEqual([profiles[1], profiles[2]]);
   });
 
   it("считает понятный прогресс набора промптов", () => {

@@ -114,10 +114,11 @@ export class BenchmarkEngine {
     if (model.kind === "local-gguf" && definition.kind !== "omp" && definition.kind !== "llama-chat") {
       throw new Error(`${definition.kind} cannot run a local GGUF model`);
     }
+    const selectedModel = { ...model, modelRef: run.model_ref ?? model.modelRef };
 
     const runRoot = join(this.config.dataDir, "runs", run.id);
     mkdirSync(runRoot, { recursive: true });
-    this.store.setRunSnapshot(run.id, { benchmark, model, profile, resultMode: run.result_mode, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
+    this.store.setRunSnapshot(run.id, { benchmark, model: selectedModel, profile, resultMode: run.result_mode, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
     const backendStdout = join(runRoot, "backend.stdout.log");
     const backendStderr = join(runRoot, "backend.stderr.log");
     writeFileSync(backendStdout, "");
@@ -152,7 +153,7 @@ export class BenchmarkEngine {
         if (effectiveTask.kind === "coding" && !fixture) throw new Error(`Fixture ${effectiveTask.fixtureId} not found`);
         const source = fixture?.source ?? this.#emptyFixture();
         const prepared = prepareWorkspace(source, artifactRoot);
-        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture, model, profile, resultMode: run.result_mode, reasoningEffort: run.reasoning_effort, runner: definition });
+        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture, model: selectedModel, profile, resultMode: run.result_mode, reasoningEffort: run.reasoning_effort, runner: definition });
         this.store.startTaskRun(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: "running", position, name: task.name } });
         const stdoutPath = join(artifactRoot, "stdout.log");
@@ -171,7 +172,7 @@ export class BenchmarkEngine {
             definition,
             prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
             workspace: prepared.workspace,
-            modelRef: model.modelRef,
+            modelRef: selectedModel.modelRef,
             reasoningEffort: run.reasoning_effort,
             taskDataDir: artifactRoot,
             timeoutMs: this.config.defaults.taskTimeoutMs,
@@ -251,7 +252,7 @@ export class BenchmarkEngine {
         definition,
         prompt,
         workspace,
-        modelRef: model.modelRef,
+        modelRef: run.model_ref ?? model.modelRef,
         reasoningEffort: run.reasoning_effort,
         taskDataDir: followup.artifact_path,
         timeoutMs: this.config.defaults.taskTimeoutMs,
