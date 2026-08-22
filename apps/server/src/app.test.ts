@@ -12,6 +12,39 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("opens only the saved coding workspace in Zed", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-zed-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const coding = store.createTask({ name: "Code", kind: "coding", prompt: "Build", fixtureId: "web-app", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [coding.currentRevision.id] });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const artifactPath = join(directory, "result");
+    mkdirSync(join(artifactPath, "workspace"), { recursive: true });
+    const taskRun = store.createTaskRun(run.id, coding.currentRevision.id, 0, artifactPath, { task: coding.currentRevision });
+    const calls: string[] = [];
+    const app = buildApp({ store, config, openWorkspace: async (workspace) => { calls.push(workspace); } });
+
+    const response = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/open-in-zed`, payload: { path: "/tmp/attacker" } });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ workspace: join(artifactPath, "workspace") });
+    expect(calls).toEqual([join(artifactPath, "workspace")]);
+
+    const prompt = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const promptBenchmark = store.createBenchmark({ name: "Prompt set", taskRevisionIds: [prompt.currentRevision.id] });
+    const promptRun = store.createRun({ benchmarkRevisionId: promptBenchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const promptTaskRun = store.createTaskRun(promptRun.id, prompt.currentRevision.id, 0, join(directory, "prompt"), { task: prompt.currentRevision });
+    expect((await app.inject({ method: "POST", url: `/api/task-runs/${promptTaskRun.id}/open-in-zed` })).statusCode).toBe(400);
+
+    const missing = store.createTaskRun(run.id, coding.currentRevision.id, 1, join(directory, "missing"), { task: coding.currentRevision });
+    expect((await app.inject({ method: "POST", url: `/api/task-runs/${missing.id}/open-in-zed` })).statusCode).toBe(404);
+    await app.close();
+    store.close();
+  });
+
   it("discovers and safely connects a GGUF file from the persisted directory", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-local-api-"));
     directories.push(directory);

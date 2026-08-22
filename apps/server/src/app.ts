@@ -14,6 +14,7 @@ import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
 import { renderFishLauncher, writeActiveLauncher } from "./external-launcher.js";
+import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
@@ -65,8 +66,8 @@ function contained(root: string, requested: string): string {
   return candidate;
 }
 
-export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike }) {
-  const { store, config, engine, preview } = options;
+export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike; openWorkspace?: (workspace: string) => Promise<void> }) {
+  const { store, config, engine, preview, openWorkspace = openInZed } = options;
   const app = Fastify({ logger: false });
   const effectiveModelDirectory = () => store.getSetting("modelDirectory") ?? config.modelDirectory;
   const buildExternalLauncher = (modelId: string, profileName: string, port: number) => {
@@ -288,6 +289,20 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return createReadStream(path);
   });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => store.saveReview(request.params.id, parse(reviewSchema, request.body)));
+  app.post<{ Params: { id: string } }>("/api/task-runs/:id/open-in-zed", async (request, reply) => {
+    const run = store.getTaskRun(request.params.id);
+    if (!run) throw new Error("Task run not found");
+    const snapshot = JSON.parse(run.snapshot_json) as { task?: { kind?: string } };
+    if (snapshot.task?.kind !== "coding") throw new Error("Only coding results have a workspace");
+    const workspace = join(run.artifact_path, "workspace");
+    if (!existsSync(workspace) || !statSync(workspace).isDirectory()) throw new Error("Result workspace not found");
+    try {
+      await openWorkspace(workspace);
+      return reply.code(202).send({ workspace });
+    } catch (error) {
+      return reply.code(503).send({ error: `Не удалось открыть Zed: ${(error as Error).message}`, workspace });
+    }
+  });
   app.post<{ Params: { id: string } }>("/api/task-runs/:id/followups", async (request, reply) => {
     const { prompt } = parse(followupSchema, request.body);
     const followup = store.createFollowup(request.params.id, prompt);
