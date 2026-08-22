@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
+import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, initializeTaskSelection, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
 
 const runners = [
   { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"], envPassthrough: [] },
@@ -9,6 +9,12 @@ const runners = [
 ];
 
 describe("интерфейс запуска", () => {
+  it("инициализирует все промпты один раз и сохраняет явный выбор пользователя", () => {
+    expect(initializeTaskSelection(null, ["a", "b", "c"])).toEqual(["a", "b", "c"]);
+    expect(initializeTaskSelection([], ["a", "b", "c"])).toEqual([]);
+    expect(initializeTaskSelection(["b"], ["a", "b", "c"])).toEqual(["b"]);
+  });
+
   it("автоматически выбирает runner по модели и типу задачи", () => {
     expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp" }, ["prompt"], runners)?.id).toBe("llama-chat");
     expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp" }, ["coding"], runners)?.id).toBe("omp");

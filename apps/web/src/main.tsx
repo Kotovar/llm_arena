@@ -3,64 +3,15 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, RouterProvider, createRootRoute, createRoute, createRouter, useNavigate } from "@tanstack/react-router";
 import { api, apiText } from "./api.js";
+import { Launcher } from "./screens/launcher.js";
 import { ModelsPage } from "./screens/models.js";
 import { SettingsPage } from "./screens/settings.js";
 import { Empty, Page, Panel, Shell, Status, useData } from "./shell.js";
-import type { Benchmark, Fixture, Model, ModelCatalog, Profile, Run, Runner, Task, TaskRun } from "./types.js";
-import { chooseRunner, followupCountLabel, formatMeasuredMetric, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, runProgress, shouldFollowOutput } from "./ui.js";
+import type { Benchmark, Fixture, Model, Profile, Run, Runner, Task, TaskRun } from "./types.js";
+import { followupCountLabel, formatMeasuredMetric, reviewSaveLabel, runProgress, shouldFollowOutput } from "./ui.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2_000, retry: 1 } } });
-
-function Launcher() {
-  const tasks = useData<Task[]>("tasks", "/tasks");
-  const models = useData<Model[]>("models", "/models");
-  const profiles = useData<Profile[]>("profiles", "/profiles");
-  const runners = useData<Runner[]>("runners", "/runners");
-  const catalog = useData<ModelCatalog>("model-catalog", "/model-catalog");
-  const runs = useQuery({ queryKey: ["runs"], queryFn: () => api<Run[]>("/runs"), refetchInterval: 1_000 });
-  const navigate = useNavigate();
-  const [modelId, setModelId] = useState("");
-  const [scope, setScope] = useState("all");
-  const [resultMode, setResultMode] = useState<"text" | "web">("text");
-  const [runnerOverride, setRunnerOverride] = useState("");
-  const [cloudModelRef, setCloudModelRef] = useState("");
-  const [reasoningEffort, setReasoningEffort] = useState("");
-  const active = runs.data?.filter((run) => run.status === "running" || run.status === "pending") ?? [];
-  const selectedModelId = modelId || models.data?.[0]?.id || "";
-  const selectedModel = models.data?.find((model) => model.id === selectedModelId);
-  const selectedTasks = scope === "all" ? tasks.data ?? [] : tasks.data?.filter((task) => task.currentRevision.id === scope) ?? [];
-  const automaticRunner = selectedModel ? chooseRunner(selectedModel, [resultMode === "web" ? "coding" : "prompt"], runners.data ?? []) : undefined;
-  const selectedRunner = runners.data?.find((runner) => runner.id === runnerOverride) ?? automaticRunner;
-  const providerCatalog = selectedModel?.provider.toLowerCase().includes("anthropic") ? catalog.data?.claude : selectedModel?.provider.toLowerCase().includes("openai") ? catalog.data?.codex : undefined;
-  const effectiveModelRef = selectedModel?.kind === "cloud" ? cloudModelRef || selectedModel.modelRef : selectedModel?.modelRef ?? "";
-  const modelOption = providerCatalog?.models.find((option) => option.id === effectiveModelRef);
-  const reasoningOptions = reasoningEffortsForModel(selectedModel?.kind, modelOption?.efforts);
-  const effectiveEffort = reasoningEffort || modelOption?.defaultEffort || "";
-  const launch = useMutation({
-    mutationFn: async () => {
-      if (!selectedModel || !selectedRunner || !selectedTasks.length) throw new Error("Выберите модель и хотя бы один промпт");
-      const benchmark = await api<Benchmark>("/benchmarks", { method: "POST", body: JSON.stringify({
-        name: scope === "all" ? `Все промпты · ${new Date().toLocaleString("ru-RU")}` : selectedTasks[0]!.currentRevision.name,
-        taskRevisionIds: selectedTasks.map((task) => task.currentRevision.id),
-      }) });
-      const profile = latestProfiles(profiles.data ?? []).find((item) => item.modelId === selectedModel.id);
-      return api<Run>("/runs", { method: "POST", body: JSON.stringify({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: selectedModel.id, executionProfileId: profile?.id ?? null, runnerId: selectedRunner.id, resultMode, modelRef: selectedModel.kind === "cloud" ? effectiveModelRef : undefined, reasoningEffort: effectiveEffort || null }) });
-    },
-    onSuccess: (run) => navigate({ to: "/runs/$runId", params: { runId: run.id } }),
-  });
-  return <Page title="Запустить проверку модели" eyebrow="Новый запуск" intro="Выберите модель и промпты. Остальные параметры приложение подберёт автоматически.">
-    <section className="launch-card">
-      <div className="launch-step"><span>1</span><div className="launch-fields"><label>Подключение<select value={selectedModelId} onChange={(event) => { setModelId(event.target.value); setCloudModelRef(""); setRunnerOverride(""); setReasoningEffort(""); }} disabled={!models.data?.length}><option value="">Выберите модель</option>{models.data?.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>{selectedModel?.kind === "cloud" ? <label>Конкретная модель<select value={effectiveModelRef} onChange={(event) => { setCloudModelRef(event.target.value); setReasoningEffort(""); }}>{!providerCatalog?.models.some((option) => option.id === selectedModel.modelRef) ? <option value={selectedModel.modelRef}>{selectedModel.modelRef}</option> : null}{providerCatalog?.models.map((option) => <option key={option.id} value={option.id}>{modelOptionLabel(option)}</option>)}</select></label> : null}{reasoningOptions.length ? <label>Уровень обдумывания<select value={effectiveEffort} onChange={(event) => setReasoningEffort(event.target.value)}><option value="">По умолчанию</option>{reasoningOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select>{selectedModel?.kind === "local-gguf" ? <small>Работает, если chat template модели поддерживает reasoning effort.</small> : null}</label> : null}</div><Link to="/models">Подключить модель</Link></div>
-      <div className="launch-step"><span>2</span><label>Какие промпты запустить<select value={scope} onChange={(event) => { setScope(event.target.value); setRunnerOverride(""); }} disabled={!tasks.data?.length}><option value="all">Все подготовленные промпты ({tasks.data?.length ?? 0})</option>{tasks.data?.map((task) => <option key={task.id} value={task.currentRevision.id}>Только: {task.currentRevision.name}</option>)}</select></label><Link to="/tasks">Добавить промпт</Link></div>
-      <div className="launch-step"><span>3</span><fieldset className="result-mode"><legend>Что должна вернуть модель</legend><label><input type="radio" name="resultMode" value="text" checked={resultMode === "text"} onChange={() => { setResultMode("text"); setRunnerOverride(""); }} />Текстовый ответ</label><label><input type="radio" name="resultMode" value="web" checked={resultMode === "web"} onChange={() => { setResultMode("web"); setRunnerOverride(""); }} />Готовое web-приложение</label></fieldset><span className="launch-mode-note">{resultMode === "web" ? "Будут созданы файлы и Preview" : "Ответ модели без рабочей директории"}</span></div>
-      <details className="advanced"><summary>Дополнительные настройки</summary><label>Способ запуска<select value={runnerOverride} onChange={(event) => setRunnerOverride(event.target.value)}><option value="">Автоматически: {automaticRunner?.name ?? "не определён"}</option>{runners.data?.map((runner) => <option key={runner.id} value={runner.id}>{runner.name}</option>)}</select></label></details>
-      <div className="launch-footer"><div><strong>{selectedTasks.length} {selectedTasks.length === 1 ? "промпт" : "промптов"}</strong><small>{selectedRunner ? `через ${selectedRunner.name}` : "Добавьте модель и промпт"}</small></div><button className="primary launch-button" onClick={() => launch.mutate()} disabled={launch.isPending || !selectedModel || !selectedTasks.length || !selectedRunner}>{launch.isPending ? "Создаём запуск…" : "Запустить"}<span>→</span></button></div>
-      {launch.error ? <p className="error">{launch.error.message}</p> : null}
-    </section>
-    {active.length ? <Panel title="Сейчас выполняется" action={<Link to="/runs">Все результаты →</Link>}><div className="run-list">{active.map((run) => <RunRow key={run.id} run={run} models={models.data ?? []} />)}</div></Panel> : null}
-  </Page>;
-}
 
 function TasksPage() {
   const client = useQueryClient();

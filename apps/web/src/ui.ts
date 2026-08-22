@@ -27,6 +27,10 @@ export function chooseRunner(
   return matching.find((runner) => runner.default) ?? matching[0] ?? runners[0];
 }
 
+export function initializeTaskSelection(current: string[] | null, taskIds: string[]) {
+  return current ?? taskIds;
+}
+
 export function defaultLocalProfile(modelId: string) {
   return {
     modelId,

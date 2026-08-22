@@ -48,6 +48,18 @@ nav { display: grid; gap: 5px; } nav a { color: #a9bac6; padding: 9px 11px; bord
 .launch-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 22px 26px; }
 .launch-footer strong, .launch-footer small { display: block; }.launch-footer small { margin-top: 5px; color: var(--muted); }
 .launch-button { min-width: 190px; padding: 13px 18px; display: flex; justify-content: space-between; font-size: 16px; }
+.prompt-step { align-items: start; }
+.prompt-picker { min-width: 0; margin: 0; padding: 0; border: 0; grid-column: 2 / -1; }
+.prompt-picker legend { display: flex; justify-content: space-between; width: 100%; margin-bottom: 10px; color: #bfd0da; }
+.prompt-picker legend small { color: var(--muted); font-weight: 400; }
+.picker-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
+.picker-actions a { display: inline-flex; align-items: center; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; }
+.prompt-options { display: grid; gap: 7px; max-height: 310px; overflow: auto; padding-right: 3px; }
+.prompt-options > label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; padding: 11px 12px; border: 1px solid var(--line); border-radius: 7px; background: #0a1217; cursor: pointer; }
+.prompt-options > label.selected { border-color: #3f7894; background: #10232d; }
+.prompt-options input { width: auto; margin: 3px 0 0; }
+.prompt-options strong, .prompt-options small { display: block; }
+.prompt-options small { margin-top: 5px; overflow: hidden; color: var(--muted); font-weight: 400; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .progress-card { position: relative; max-width: 920px; padding: 22px 24px; margin-bottom: 18px; border: 1px solid #37647a; border-radius: 10px; background: linear-gradient(100deg, #10232d, #111a21); }
 .progress-copy { display: grid; grid-template-columns: auto 1fr auto; gap: 15px; align-items: center; }.progress-copy strong { font-size: 18px; }.progress-copy p { margin: 5px 0 0; color: var(--muted); }.progress-copy > span:last-child { color: var(--signal); font: 18px ui-monospace, monospace; }
 .progress-track { height: 5px; margin: 20px 0 16px; overflow: hidden; background: #263743; border-radius: 5px; }.progress-track i { display: block; height: 100%; background: var(--signal); transition: width .3s ease; }
