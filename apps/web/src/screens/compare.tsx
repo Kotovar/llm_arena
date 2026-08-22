@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Status, useData } from "../shell.js";
 import type { Model, Run, Runner, TaskRun } from "../types.js";
-import { betterResult, formatRelativeTime, formatReviewSummary, matchTaskRuns, reviewSummary, reviewTotal } from "../ui.js";
+import { betterResult, formatRelativeTime, formatReviewSummary, matchTaskRuns, reviewSummary, reviewTotal, runModelName } from "../ui.js";
 import { metric, usePreviewHeartbeat } from "./results.js";
 
 type TaskSnapshot = { task?: { name?: string }; fixture?: { preview?: unknown } };
@@ -36,7 +36,7 @@ export function ComparePage() {
   const leftRun = useQuery({ queryKey: ["compare", left], queryFn: () => api<Run>(`/runs/${left}`), enabled: Boolean(left) });
   const rightRun = useQuery({ queryKey: ["compare", right], queryFn: () => api<Run>(`/runs/${right}`), enabled: Boolean(right) });
   const rows = matchTaskRuns(leftRun.data?.taskRuns ?? [], rightRun.data?.taskRuns ?? []);
-  const label = (run: Run) => `${models.data?.find((model) => model.id === run.model_id)?.name ?? run.model_id.slice(0, 8)} · ${runners.data?.find((runner) => runner.id === run.runner_id)?.name ?? run.runner_id} · ${formatRelativeTime(run.created_at)}`;
+  const label = (run: Run) => `${runModelName(run, models.data ?? [])} · ${runners.data?.find((runner) => runner.id === run.runner_id)?.name ?? run.runner_id} · ${formatRelativeTime(run.created_at)}`;
   const runScore = (run?: Run) => formatReviewSummary(run ? reviewSummary(run.taskRuns?.map((task) => task.review) ?? [], run.taskRuns?.length ?? 0) : undefined);
 
   function startPreview(taskRun: TaskRun) {

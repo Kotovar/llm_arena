@@ -13,7 +13,7 @@ import {
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
-import { renderFishCommand, renderFishLauncher, renderOmpLayout, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
+import { activeExportPath, renderFishCommand, renderFishLauncher, renderOmpLayout, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -107,6 +107,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       layoutPath: writeExportFile(config.dataDir, "omp-local.kdl", launcher.layout),
     };
   };
+  const clearExternalLauncher = () => {
+    store.setSetting("externalModelId", "");
+    store.setSetting("externalProfileName", "");
+    for (const filename of ["active-model.fish", "active-omp.fish", "omp-local.kdl"]) {
+      rmSync(activeExportPath(config.dataDir, filename), { force: true });
+    }
+  };
   const refreshActiveLauncher = (modelId: string, profileName: string) => {
     if (store.getSetting("externalModelId") !== modelId || store.getSetting("externalProfileName") !== profileName) return;
     const port = Number(store.getSetting("externalPort") ?? 8080);
@@ -133,8 +140,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   }));
   app.get("/api/settings", async () => ({
     modelDirectory: effectiveModelDirectory(),
-    externalModelId: store.getSetting("externalModelId") ?? null,
-    externalProfileName: store.getSetting("externalProfileName") ?? null,
+    externalModelId: store.getSetting("externalModelId") || null,
+    externalProfileName: store.getSetting("externalProfileName") || null,
     externalPort: Number(store.getSetting("externalPort") ?? 8080),
   }));
   app.put("/api/settings/model-directory", async (request) => {
@@ -173,6 +180,14 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/models", async () => store.listModels());
   app.get("/api/model-catalog", async () => loadModelCatalog());
   app.post("/api/models", async (request, reply) => reply.code(201).send(store.createModel(parse(createModelSchema, request.body))));
+  app.delete<{ Params: { id: string } }>("/api/models/:id", async (request, reply) => {
+    const model = store.getModel(request.params.id);
+    if (!model) throw new Error("Model not found");
+    if (store.hasActiveRuns(model.id)) throw new Error("Stop the runs that use this model first");
+    store.archiveModel(model.id);
+    if (store.getSetting("externalModelId") === model.id) clearExternalLauncher();
+    return reply.code(204).send();
+  });
   app.post<{ Params: { id: string } }>("/api/models/:id/test", async (request) => {
     if (!store.getModel(request.params.id)) throw new Error("Model not found");
     const { runnerId } = parse(modelTestSchema, request.body);

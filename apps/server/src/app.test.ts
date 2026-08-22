@@ -12,6 +12,39 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("disconnects a model but keeps its history and frees the file", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-disconnect-"));
+    directories.push(directory);
+    const modelsRoot = join(directory, "models");
+    mkdirSync(modelsRoot);
+    writeFileSync(join(modelsRoot, "Local.gguf"), "gguf");
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+    store.setSetting("modelDirectory", modelsRoot);
+
+    const connected = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "Local.gguf", name: "Local", profileName: "Automatic", profile: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 } } });
+    const modelId = connected.json().model.id as string;
+
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId, executionProfileId: null, runnerId: "llama-chat", resultMode: "text" });
+    store.updateRunStatus(run.id, "running");
+
+    // Пока модель занята запуском, отключать нельзя.
+    const busy = await app.inject({ method: "DELETE", url: `/api/models/${modelId}` });
+    expect(busy.statusCode).toBe(400);
+    expect(busy.json().error).toMatch(/Stop the runs/u);
+
+    store.updateRunStatus(run.id, "completed");
+    expect((await app.inject({ method: "DELETE", url: `/api/models/${modelId}` })).statusCode).toBe(204);
+    expect((await app.inject({ method: "GET", url: "/api/models" })).json()).toEqual([]);
+    // История запуска остаётся, а файл снова можно подключить.
+    expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}` })).json().model_id).toBe(modelId);
+    expect((await app.inject({ method: "GET", url: "/api/local-model-files" })).json()[0].connectedModelId).toBeNull();
+    expect((await app.inject({ method: "DELETE", url: `/api/models/${modelId}` })).statusCode).toBe(204);
+  });
+
   it("opens only the saved coding workspace in Zed", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-zed-api-"));
     directories.push(directory);

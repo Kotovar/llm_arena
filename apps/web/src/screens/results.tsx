@@ -4,11 +4,11 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Status, useData } from "../shell.js";
 import type { Fixture, Followup, Model, Run, Runner, Task, TaskRun } from "../types.js";
-import { checkStatusLabel, followupCountLabel, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, promptCountLabel, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runListMeta, runListScore, runProgress, shouldFollowOutput } from "../ui.js";
+import { checkStatusLabel, followupCountLabel, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, promptCountLabel, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runListMeta, runListScore, runModelName, runProgress, shouldFollowOutput } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const terminal = run.status !== "pending" && run.status !== "running";
-  const modelName = models.find((model) => model.id === run.model_id)?.name ?? run.model_id.slice(0, 8);
+  const modelName = runModelName(run, models);
   const runnerName = runners.find((runner) => runner.id === run.runner_id)?.name;
   return <div className="run-row-wrap"><Link className="run-row" to="/runs/$runId" params={{ runId: run.id }}>
     <Status value={run.status} />
@@ -140,6 +140,7 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
   async function copyAnswer() {
     try { await navigator.clipboard.writeText(String(result?.finalAnswer ?? "")); setAnswerCopy("Скопировано"); }
     catch { setAnswerCopy("Не удалось скопировать"); }
+    window.setTimeout(() => setAnswerCopy(""), 2_500);
   }
   function sendFollowup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = event.currentTarget; const prompt = String(new FormData(form).get("prompt") ?? "").trim(); if (prompt) addFollowup.mutate(prompt, { onSuccess: () => form.reset() }); }
   const draftTotal = draft.correctness + draft.codeQuality + draft.uiQuality + draft.instructionFollowing;

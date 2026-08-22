@@ -164,6 +164,7 @@ dl { margin: 0; }dl div { display: grid; grid-template-columns: 130px 1fr; paddi
 .gpu-report span { color: var(--muted); font-size: 12px; }
 .model-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .model-toolbar small { color: var(--muted); }
+.model-disconnect { margin-left: auto; }
 .directory-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 14px; }
 .directory-form > small { grid-column: 1 / -1; margin: -6px 0 0; color: var(--muted); font-size: 12px; }
 .directory-form label { color: var(--muted); font-size: 12px; }

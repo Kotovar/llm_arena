@@ -342,13 +342,21 @@ export class BenchmarkEngine {
       mkdirSync(join(artifactRoot, "checks"), { recursive: true });
       writeFileSync(logPath, "");
       const cwd = check.command.cwd ? resolve(workspace, check.command.cwd) : workspace;
-      const child = this.supervisor.spawn({
-        argv: check.command.argv,
-        cwd,
-        timeoutMs: check.command.timeoutMs ?? this.config.defaults.checkTimeoutMs,
-        onStdout: (text) => appendFileSync(logPath, text),
-        onStderr: (text) => appendFileSync(logPath, text),
-      });
+      let child;
+      try {
+        child = this.supervisor.spawn({
+          argv: check.command.argv,
+          cwd,
+          timeoutMs: check.command.timeoutMs ?? this.config.defaults.checkTimeoutMs,
+          onStdout: (text) => appendFileSync(logPath, text),
+          onStderr: (text) => appendFileSync(logPath, text),
+        });
+      } catch (error) {
+        // Незапустившаяся проверка — провал проверки, а не потеря результата промпта.
+        appendFileSync(logPath, `${(error as Error).message}\n`);
+        results.push({ id: check.id, label: check.label, status: "fail", exitCode: null, durationMs: 0 });
+        continue;
+      }
       const cancel = () => void child.stop();
       signal.addEventListener("abort", cancel, { once: true });
       child.stdin.end();

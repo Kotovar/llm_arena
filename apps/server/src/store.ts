@@ -118,6 +118,7 @@ type ModelRow = {
   model_ref: string;
   path: string | null;
   alias: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -171,6 +172,10 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!runColumns.some((column) => column.name === "model_ref")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN model_ref TEXT");
+  }
+  const modelColumns = sqlite.prepare("PRAGMA table_info(models)").all() as Array<{ name: string }>;
+  if (!modelColumns.some((column) => column.name === "archived_at")) {
+    sqlite.exec("ALTER TABLE models ADD COLUMN archived_at TEXT");
   }
 }
 
@@ -363,7 +368,7 @@ export function createStore(filename: string) {
       const id = randomUUID();
       const createdAt = now();
       sqlite
-        .prepare("INSERT INTO models VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .prepare("INSERT INTO models (id, name, kind, provider, model_ref, path, alias, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(id, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, createdAt, createdAt);
       return mapModel(one<ModelRow>("SELECT * FROM models WHERE id = ?", id)!);
     },
@@ -372,7 +377,14 @@ export function createStore(filename: string) {
       return row ? mapModel(row) : undefined;
     },
     listModels() {
-      return all<ModelRow>("SELECT * FROM models ORDER BY created_at").map(mapModel);
+      return all<ModelRow>("SELECT * FROM models WHERE archived_at IS NULL ORDER BY created_at").map(mapModel);
+    },
+    archiveModel(id: string) {
+      const timestamp = now();
+      sqlite.prepare("UPDATE models SET archived_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, id);
+    },
+    hasActiveRuns(modelId: string) {
+      return Boolean(one<{ id: string }>("SELECT id FROM benchmark_runs WHERE model_id = ? AND status IN ('pending', 'running') LIMIT 1", modelId));
     },
     createExecutionProfile(input: CreateExecutionProfile) {
       const parametersJson = JSON.stringify(input.parameters);

@@ -49,6 +49,10 @@ export function ModelsPage() {
     mutationFn: ({ modelId, profileName }: { modelId: string; profileName: string }) => api<ExternalLauncher>("/external-launcher", { method: "PUT", body: JSON.stringify({ modelId, profileName, port: settings.data?.externalPort ?? 8080 }) }),
     onSuccess: async () => client.invalidateQueries({ queryKey: ["settings"] }),
   });
+  const disconnect = useMutation({
+    mutationFn: (modelId: string) => api(`/models/${modelId}`, { method: "DELETE" }),
+    onSuccess: async () => { await invalidateModels(); await client.invalidateQueries({ queryKey: ["settings"] }); },
+  });
   const testModel = useMutation({
     mutationFn: ({ modelId, runnerId }: { modelId: string; runnerId: string }) => api<{ ok: boolean; answer: string; durationMs: number }>(`/models/${modelId}/test`, { method: "POST", body: JSON.stringify({ runnerId }) }),
     onSuccess: (result, variables) => setDiagnostics((current) => ({ ...current, [variables.modelId]: { ok: true, message: `Работает · ${formatDuration(result.durationMs)} · ${result.answer.slice(0, 80)}` } })),
@@ -139,9 +143,10 @@ export function ModelsPage() {
             {report ? <div className="gpu-report"><strong>{report.gpu.name}</strong><span>VRAM: {report.gpu.usedMiB} MiB занято · {report.gpu.freeMiB} MiB свободно из {report.gpu.totalMiB} MiB</span></div> : null}
             {calibrate.error && calibrate.variables === profile.id ? <p className="error">{calibrate.error.message}</p> : null}
             {activate.error && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? <p className="error">{activate.error.message}</p> : null}
-            <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : "Проверить автоконфигурацию"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending}>{activate.isPending && activate.variables?.modelId === model.id ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button></div>
+            <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending && calibrate.variables === profile.id}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : "Проверить автоконфигурацию"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name}>{activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button></div>
           </section>; })}
-          <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button><small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small></div>
+          <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button><small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small><button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { if (window.confirm(`Отключить «${model.name}»? Результаты прошлых запусков останутся, файл модели не удаляется.`)) disconnect.mutate(model.id); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
+          {disconnect.error && disconnect.variables === model.id ? <p className="error">{disconnect.error.message}</p> : null}
         </div></details>;
       })}{!models.data?.length ? <Empty>Пока нет подключённых моделей.</Empty> : null}</div></Panel>
     </div>

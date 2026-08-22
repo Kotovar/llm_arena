@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, followupCountLabel, formatRelativeTime, promptCountLabel, resultChecks, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, followupCountLabel, formatRelativeTime, promptCountLabel, resultChecks, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -238,5 +238,24 @@ describe("проверки фикстуры", () => {
     expect(checkStatusLabel("pass")).toBe("пройдена");
     expect(checkStatusLabel("timeout")).toBe("таймаут");
     expect(checkStatusLabel("fail")).toBe("провалена");
+  });
+});
+
+describe("название модели в истории", () => {
+  const models = [{ id: "model-1", name: "Ornith 1.5" }];
+
+  it("берёт имя из списка подключённых", () => {
+    expect(runModelName({ model_id: "model-1", snapshot_json: null }, models)).toBe("Ornith 1.5");
+  });
+
+  it("после отключения модели берёт имя из снимка запуска", () => {
+    const run = { model_id: "model-2", snapshot_json: JSON.stringify({ model: { name: "Gemma 4 E4B" } }) };
+    expect(runModelName(run, models)).toBe("Gemma 4 E4B");
+  });
+
+  it("падает обратно на идентификатор, если снимка нет или он битый", () => {
+    expect(runModelName({ model_id: "0123456789abcdef", snapshot_json: null }, models)).toBe("01234567");
+    expect(runModelName({ model_id: "0123456789abcdef", snapshot_json: "{не json" }, models)).toBe("01234567");
+    expect(runModelName({ model_id: "0123456789abcdef", snapshot_json: JSON.stringify({ model: {} }) }, models)).toBe("01234567");
   });
 });

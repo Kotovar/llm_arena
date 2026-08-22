@@ -216,6 +216,18 @@ export function formatRelativeTime(iso: string, now = Date.now()) {
   return new Date(time).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }
 
+export function runModelName(run: { model_id: string; snapshot_json: string | null }, models: Array<{ id: string; name: string }>) {
+  const connected = models.find((model) => model.id === run.model_id)?.name;
+  if (connected) return connected;
+  try {
+    const snapshot = run.snapshot_json ? JSON.parse(run.snapshot_json) as { model?: { name?: unknown } } : undefined;
+    if (typeof snapshot?.model?.name === "string" && snapshot.model.name) return snapshot.model.name;
+  } catch {
+    // снимок запуска повреждён — покажем идентификатор
+  }
+  return run.model_id.slice(0, 8);
+}
+
 export function runListScore(run: { review_score?: number | null; reviewed_count?: number; task_count?: number }) {
   if (!run.reviewed_count) return "Не оценено";
   return `${run.review_score ?? 0}/${run.reviewed_count * 40}`;
