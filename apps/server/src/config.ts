@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { createModelSchema, fixtureManifestSchema, llamaProfileSchema, runnerDefinitionSchema } from "@llm-arena/shared";
 import { parse } from "yaml";
 import { z } from "zod";
@@ -7,6 +7,7 @@ import { z } from "zod";
 const configSchema = z.object({
   server: z.object({ host: z.literal("127.0.0.1"), port: z.number().int().positive() }),
   dataDir: z.string().min(1),
+  modelDirectory: z.string().min(1),
   llamaServer: z.object({ executable: z.string().min(1), startupTimeoutMs: z.number().int().positive() }),
   nvidiaSmi: z.string().min(1),
   defaults: z.object({
@@ -36,6 +37,7 @@ export function loadConfig(filename = "arena.config.yaml") {
     ...parsed,
     root,
     dataDir: resolve(root, parsed.dataDir),
+    modelDirectory: isAbsolute(parsed.modelDirectory) ? parsed.modelDirectory : resolve(root, parsed.modelDirectory),
     fixtures: parsed.fixtures.map((fixture) => ({ ...fixture, source: resolve(root, fixture.source) })),
   };
 }

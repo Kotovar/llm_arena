@@ -16,4 +16,8 @@ describe("host configuration", () => {
 
     expect(fixture?.source).toMatch(/\/fixtures\/node-smoke$/u);
   });
+
+  it("uses the configured absolute local model directory", () => {
+    expect(loadConfig("../../arena.config.yaml").modelDirectory).toBe("models");
+  });
 });

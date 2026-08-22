@@ -3,15 +3,18 @@ import { join, relative, resolve, sep } from "node:path";
 import {
   createBenchmarkSchema,
   createExecutionProfileSchema,
+  connectLocalModelSchema,
   createModelSchema,
   createRunSchema,
   createTaskSchema,
   reviewSchema,
+  modelDirectorySchema,
 } from "@llm-arena/shared";
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
 import { loadModelCatalog } from "./model-catalog.js";
+import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import type { ArenaStore } from "./store.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 
@@ -54,6 +57,7 @@ function contained(root: string, requested: string): string {
 export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike }) {
   const { store, config, engine, preview } = options;
   const app = Fastify({ logger: false });
+  const effectiveModelDirectory = () => store.getSetting("modelDirectory") ?? config.modelDirectory;
   const hasActiveFollowup = (runId: string) => store.listTaskRuns(runId).some((taskRun) =>
     taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running"));
 
@@ -73,6 +77,28 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     llamaServer: config.llamaServer.executable,
     nvidiaSmi: config.nvidiaSmi,
   }));
+  app.get("/api/settings", async () => ({ modelDirectory: effectiveModelDirectory() }));
+  app.put("/api/settings/model-directory", async (request) => {
+    const { modelDirectory } = parse(modelDirectorySchema, request.body);
+    const canonical = realpathSync(modelDirectory);
+    if (!statSync(canonical).isDirectory()) throw new Error("Model directory is not a directory");
+    readdirSync(canonical);
+    store.setSetting("modelDirectory", canonical);
+    return { modelDirectory: canonical };
+  });
+  app.get("/api/local-model-files", async () => {
+    const connected = new Map(store.listModels().flatMap((model) => model.kind === "local-gguf" && model.path ? [[model.path, model.id]] : []));
+    return listLocalModelFiles(effectiveModelDirectory(), connected);
+  });
+  app.post("/api/local-models", async (request, reply) => {
+    const input = parse(connectLocalModelSchema, request.body);
+    const path = resolveLocalModelFile(effectiveModelDirectory(), input.filename);
+    if (store.listModels().some((model) => model.path === path)) throw new Error("Model file is already connected");
+    const alias = modelAlias(input.filename);
+    const model = store.createModel({ name: input.name, kind: "local-gguf", provider: "llama.cpp", modelRef: alias, path, alias });
+    const profile = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters: input.profile, calibrated: false, ggufSha256: null });
+    return reply.code(201).send({ model, profile });
+  });
 
   app.get("/api/tasks", async () => store.listTasks());
   app.post("/api/tasks", async (request, reply) => reply.code(201).send(store.createTask(parse(createTaskSchema, request.body))));

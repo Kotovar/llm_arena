@@ -12,6 +12,57 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("discovers and safely connects a GGUF file from the persisted directory", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-local-api-"));
+    directories.push(directory);
+    const modelsRoot = join(directory, "models");
+    mkdirSync(modelsRoot);
+    writeFileSync(join(modelsRoot, "My Model.gguf"), "gguf");
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+    const parameters = {
+      context: "auto",
+      nGpuLayers: "auto",
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      batchSize: 1024,
+      ubatchSize: 512,
+      flashAttention: "auto",
+      cacheReuse: 256,
+      fit: true,
+      fitTargetMiB: 750,
+      fitContextMin: 4096,
+    };
+
+    const defaults = await app.inject({ method: "GET", url: "/api/settings" });
+    const updated = await app.inject({ method: "PUT", url: "/api/settings/model-directory", payload: { modelDirectory: modelsRoot } });
+    const listed = await app.inject({ method: "GET", url: "/api/local-model-files" });
+    const connected = await app.inject({
+      method: "POST",
+      url: "/api/local-models",
+      payload: { filename: "My Model.gguf", name: "My model", profile: parameters },
+    });
+
+    expect(defaults.json()).toEqual({ modelDirectory: "models" });
+    expect(updated.json()).toEqual({ modelDirectory: modelsRoot });
+    expect(listed.json()).toEqual([{ filename: "My Model.gguf", sizeBytes: 4, connectedModelId: null }]);
+    expect(connected.statusCode).toBe(201);
+    expect(connected.json().model).toMatchObject({ path: join(modelsRoot, "My Model.gguf"), alias: "my-model", modelRef: "my-model" });
+    expect(connected.json().profile).toMatchObject({ name: "Automatic", parameters });
+
+    const duplicate = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "My Model.gguf", name: "Duplicate", profile: parameters } });
+    const traversal = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "../My Model.gguf", name: "Unsafe", profile: parameters } });
+    const untrusted = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "My Model.gguf", name: "Unsafe", profile: parameters, path: "/tmp/attacker", alias: "attacker", argv: ["rm"] } });
+    const missingDirectory = await app.inject({ method: "PUT", url: "/api/settings/model-directory", payload: { modelDirectory: join(directory, "missing") } });
+    expect(duplicate.statusCode).toBe(400);
+    expect(traversal.statusCode).toBe(400);
+    expect(untrusted.statusCode).toBe(400);
+    expect(missingDirectory.statusCode).toBe(400);
+
+    await app.close();
+    store.close();
+  });
+
   it("creates and lists a versioned prompt task", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-api-"));
     directories.push(directory);

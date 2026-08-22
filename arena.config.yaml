@@ -2,6 +2,7 @@ server:
   host: 127.0.0.1
   port: 3210
 dataDir: .data
+modelDirectory: models
 llamaServer:
   executable: llama-server
   startupTimeoutMs: 900000
@@ -71,22 +72,3 @@ fixtures:
         argv: [node, server.mjs]
         timeoutMs: 120000
       readyPath: /
-initialModels:
-  - name: Ornith 1.5 35B A3B
-    kind: local-gguf
-    provider: llama.cpp
-    modelRef: ornith
-    path: modelsOrnith-1.5-35B-A3B-AD-Q4_K-IQ4_XS.gguf
-    alias: ornith
-    profiles:
-      - name: Quality
-        parameters:
-          context: 131072
-          nGpuLayers: all
-          nCpuMoe: 20
-          cacheTypeK: q8_0
-          cacheTypeV: q8_0
-          batchSize: 1024
-          ubatchSize: 512
-          flashAttention: true
-          cacheReuse: 256

@@ -16,6 +16,18 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
+describe("application settings", () => {
+  it("persists and updates the local model directory", () => {
+    const store = testStore();
+
+    expect(store.getSetting("modelDirectory")).toBeUndefined();
+    store.setSetting("modelDirectory", "/models/first");
+    store.setSetting("modelDirectory", "/models/second");
+
+    expect(store.getSetting("modelDirectory")).toBe("/models/second");
+  });
+});
+
 describe("task revisions", () => {
   it("preserves the previous prompt when a task is edited", () => {
     const store = testStore();
