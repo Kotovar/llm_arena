@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, updateTaskSelection } from "./ui.js";
-import type { TaskRun } from "./types.js";
+import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
+import type { Task, TaskRun } from "./types.js";
 
 const runners = [
   { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"], envPassthrough: [] },
@@ -18,6 +18,27 @@ describe("интерфейс запуска", () => {
       { label: "Результат", value: "Текстовый ответ" },
     ]);
     expect(launchSummary({ modelName: "Ornith", taskCount: 2, runnerName: "OMP", resultMode: "web" })[3]).toEqual({ label: "Результат", value: "Web-приложение" });
+  });
+
+  it("сохраняет метаданные coding-задания при изменении текста промпта", () => {
+    const revision: Task["currentRevision"] = {
+      id: "revision-1",
+      name: "Исправить форму",
+      kind: "coding",
+      prompt: "Старый текст",
+      fixtureId: "fixture-1",
+      revision: 2,
+      contentHash: "hash",
+      tags: ["ui"],
+    };
+
+    expect(taskUpdateBody(revision, "Новый текст")).toEqual({
+      name: "Исправить форму",
+      kind: "coding",
+      prompt: "Новый текст",
+      fixtureId: "fixture-1",
+      tags: ["ui"],
+    });
   });
 
   it("инициализирует все промпты один раз и сохраняет явный выбор пользователя", () => {

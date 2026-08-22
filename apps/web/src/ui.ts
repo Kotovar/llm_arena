@@ -46,6 +46,16 @@ export function launchSummary({ modelName, taskCount, runnerName, resultMode }: 
   ];
 }
 
+export function taskUpdateBody(revision: Task["currentRevision"], prompt: string) {
+  return {
+    name: revision.name,
+    kind: revision.kind,
+    prompt,
+    tags: revision.tags,
+    ...(revision.kind === "coding" ? { fixtureId: revision.fixtureId } : {}),
+  };
+}
+
 export function matchTaskRuns(left: TaskRun[], right: TaskRun[]) {
   const leftByRevision = new Map(left.map((taskRun) => [taskRun.task_revision_id, taskRun]));
   const rightByRevision = new Map(right.map((taskRun) => [taskRun.task_revision_id, taskRun]));

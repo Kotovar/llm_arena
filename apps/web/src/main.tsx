@@ -1,4 +1,4 @@
-import { StrictMode, type FormEvent } from "react";
+import { StrictMode, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
@@ -10,6 +10,7 @@ import { RunDetail, RunsPage } from "./screens/results.js";
 import { SettingsPage } from "./screens/settings.js";
 import { Empty, Page, Panel, Shell, useData } from "./shell.js";
 import type { Benchmark, Model, Profile, Run, Runner, Task } from "./types.js";
+import { taskUpdateBody } from "./ui.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2_000, retry: 1 } } });
@@ -17,8 +18,9 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2_
 function TasksPage() {
   const client = useQueryClient();
   const tasks = useData<Task[]>("tasks", "/tasks");
+  const [editing, setEditing] = useState<{ taskId: string; prompt: string } | null>(null);
   const create = useMutation({ mutationFn: (body: unknown) => api("/tasks", { method: "POST", body: JSON.stringify(body) }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
-  const update = useMutation({ mutationFn: ({ id, body }: { id: string; body: unknown }) => api(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
+  const update = useMutation({ mutationFn: ({ id, body }: { id: string; body: unknown }) => api(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) }), onSuccess: () => { setEditing(null); return client.invalidateQueries({ queryKey: ["tasks"] }); } });
   const remove = useMutation({ mutationFn: (id: string) => api(`/tasks/${id}`, { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -33,7 +35,14 @@ function TasksPage() {
       <label className="span-2">Метки через запятую<input name="tags" /></label>
       <button className="primary">Добавить</button>{create.error ? <p className="error">{create.error.message}</p> : null}
     </form></Panel>
-    <Panel title={`Промптов: ${tasks.data?.length ?? 0}`}><div className="stack">{tasks.data?.map((task) => <article className="item" key={task.id}><div><span className="mono">Версия {task.currentRevision.revision}</span><h3>{task.currentRevision.name}</h3><p>{task.currentRevision.prompt}</p></div><div className="item-actions"><button onClick={() => { const prompt = window.prompt("Новая версия промпта", task.currentRevision.prompt); if (prompt) update.mutate({ id: task.id, body: { name: task.currentRevision.name, kind: task.currentRevision.kind, prompt, tags: task.currentRevision.tags, ...(task.currentRevision.kind === "coding" ? { fixtureId: task.currentRevision.fixtureId } : {}) } }); }}>Изменить</button><button className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></article>)}{!tasks.data?.length ? <Empty>Промптов пока нет. Добавьте первый слева.</Empty> : null}</div></Panel></div>
+    <Panel title={`Промптов: ${tasks.data?.length ?? 0}`}><div className="stack">{tasks.data?.map((task) => <article className="item prompt-item" key={task.id}>
+      <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span><h3>{task.currentRevision.name}</h3><p>{task.currentRevision.prompt}</p></div><div className="item-actions"><button type="button" onClick={() => setEditing({ taskId: task.id, prompt: task.currentRevision.prompt })}>Редактировать</button><button type="button" className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></div>
+      {editing && editing.taskId === task.id ? <form className="prompt-editor" onSubmit={(event) => { event.preventDefault(); const prompt = editing.prompt.trim(); if (prompt) update.mutate({ id: task.id, body: taskUpdateBody(task.currentRevision, prompt) }); }}>
+        <label>Новая версия текста<textarea autoFocus rows={10} value={editing.prompt} onChange={(event) => setEditing((current) => current ? { ...current, prompt: event.currentTarget.value } : current)} required /></label>
+        <div className="prompt-editor-footer"><small>Запуски с предыдущей версией останутся без изменений.</small><div className="prompt-editor-actions"><button type="button" onClick={() => setEditing(null)} disabled={update.isPending}>Отмена</button><button className="primary" disabled={update.isPending || !editing.prompt.trim()}>{update.isPending ? "Сохраняем…" : "Сохранить версию"}</button></div></div>
+        {update.error ? <p className="error">{update.error.message}</p> : null}
+      </form> : null}
+    </article>)}{!tasks.data?.length ? <Empty>Промптов пока нет. Добавьте первый слева.</Empty> : null}</div></Panel></div>
   </Page>;
 }
 
