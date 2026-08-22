@@ -44,27 +44,36 @@ export class PreviewManager {
     if (!preview) throw new Error("This result has no trusted preview command");
     const directory = join(this.config.dataDir, "previews", taskRunId);
     const workspace = join(directory, "workspace");
+    // Копия воркспейса весит столько же, сколько результат: любой сбой ниже обязан её убрать.
+    const discard = () => rmSync(directory, { recursive: true, force: true });
     mkdirSync(workspace, { recursive: true });
-    const copy = spawnSync("cp", ["-a", "--reflink=auto", `${join(taskRun.artifact_path, "workspace")}/.`, workspace], { encoding: "utf8" });
-    if (copy.status !== 0) throw new Error(`Preview copy failed: ${copy.stderr}`);
-    const port = await allocatePort();
-    const url = `http://127.0.0.1:${port}${preview.readyPath}`;
-    const log = join(directory, "preview.log");
-    writeFileSync(log, "");
-    const process = this.supervisor.spawn({
-      argv: renderPreviewArgv(preview.command.argv, port),
-      cwd: preview.command.cwd ? resolve(workspace, preview.command.cwd) : workspace,
-      env: { PORT: String(port) },
-      ...(preview.command.timeoutMs ? { timeoutMs: preview.command.timeoutMs } : {}),
-      onStdout: (text) => appendFileSync(log, text),
-      onStderr: (text) => appendFileSync(log, text),
-    });
+    let process: OwnedProcess;
+    let url: string;
+    try {
+      const copy = spawnSync("cp", ["-a", "--reflink=auto", `${join(taskRun.artifact_path, "workspace")}/.`, workspace], { encoding: "utf8" });
+      if (copy.status !== 0) throw new Error(`Preview copy failed: ${copy.stderr}`);
+      const port = await allocatePort();
+      url = `http://127.0.0.1:${port}${preview.readyPath}`;
+      const log = join(directory, "preview.log");
+      writeFileSync(log, "");
+      process = this.supervisor.spawn({
+        argv: renderPreviewArgv(preview.command.argv, port),
+        cwd: preview.command.cwd ? resolve(workspace, preview.command.cwd) : workspace,
+        env: { PORT: String(port) },
+        ...(preview.command.timeoutMs ? { timeoutMs: preview.command.timeoutMs } : {}),
+        onStdout: (text) => appendFileSync(log, text),
+        onStderr: (text) => appendFileSync(log, text),
+      });
+    } catch (error) {
+      discard();
+      throw error;
+    }
     process.stdin.end();
     try {
       await waitReady(url, process);
     } catch (error) {
       await process.stop();
-      rmSync(directory, { recursive: true, force: true });
+      discard();
       throw error;
     }
     this.#active = { process, directory, taskRunId, url };
@@ -72,7 +81,8 @@ export class PreviewManager {
     return { taskRunId, url };
   }
 
-  // Аренда должна переживать фоновую вкладку: скрытая вкладка шлёт heartbeat не чаще раза в минуту.
+  // Скрытая вкладка шлёт heartbeat не чаще раза в минуту, поэтому аренда должна её переживать.
+  // Полностью усыплённую вкладку это не покрывает — тогда preview будет реапнут, и это осознанный компромисс.
   static readonly leaseMs = 120_000;
 
   heartbeat(): void {

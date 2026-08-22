@@ -89,16 +89,23 @@ export class LlamaCppServerManager {
     const slotSavePath = mkdtempSync(join(tmpdir(), "llm-arena-slots-"));
     const command = buildLlamaServerCommand(this.executable, model, profile, port, slotSavePath, reasoningEffort);
     const startedAt = performance.now();
-    const process = this.supervisor.spawn({ argv: command, onStdout: logs.stdout, onStderr: logs.stderr });
+    const cleanup = () => rmSync(slotSavePath, { recursive: true, force: true });
+    // spawn бросает синхронно, если бинаря нет: каталог слотов надо убрать и на этом пути.
+    let process: OwnedProcess;
+    try {
+      process = this.supervisor.spawn({ argv: command, onStdout: logs.stdout, onStderr: logs.stderr });
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
     const baseUrl = `http://127.0.0.1:${port}`;
     try {
       await waitForHealth(baseUrl, this.startupTimeoutMs, process);
     } catch (error) {
       await process.stop();
-      rmSync(slotSavePath, { recursive: true, force: true });
+      cleanup();
       throw error;
     }
-    const cleanup = () => rmSync(slotSavePath, { recursive: true, force: true });
     void process.completed.then(cleanup, cleanup);
     return {
       port,
