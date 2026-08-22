@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, updateTaskSelection } from "./ui.js";
+import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, updateTaskSelection } from "./ui.js";
 import type { TaskRun } from "./types.js";
 
 const runners = [
@@ -10,6 +10,16 @@ const runners = [
 ];
 
 describe("интерфейс запуска", () => {
+  it("описывает неполный и готовый выбор для запуска", () => {
+    expect(launchSummary({ modelName: undefined, taskCount: 0, runnerName: undefined, resultMode: "text" })).toEqual([
+      { label: "Модель", value: "Выберите модель" },
+      { label: "Промпты", value: "Выберите промпты" },
+      { label: "Runner", value: "Определится после выбора" },
+      { label: "Результат", value: "Текстовый ответ" },
+    ]);
+    expect(launchSummary({ modelName: "Ornith", taskCount: 2, runnerName: "OMP", resultMode: "web" })[3]).toEqual({ label: "Результат", value: "Web-приложение" });
+  });
+
   it("инициализирует все промпты один раз и сохраняет явный выбор пользователя", () => {
     expect(initializeTaskSelection(null, ["a", "b", "c"])).toEqual(["a", "b", "c"]);
     expect(initializeTaskSelection([], ["a", "b", "c"])).toEqual([]);

@@ -35,6 +35,17 @@ export function updateTaskSelection(current: string[] | null, taskId: string, ch
   return checked ? [...(current ?? []), taskId] : (current ?? []).filter((id) => id !== taskId);
 }
 
+export function launchSummary({ modelName, taskCount, runnerName, resultMode }: {
+  modelName: string | undefined; taskCount: number; runnerName: string | undefined; resultMode: "text" | "web";
+}) {
+  return [
+    { label: "Модель", value: modelName ?? "Выберите модель" },
+    { label: "Промпты", value: taskCount ? `${taskCount} выбрано` : "Выберите промпты" },
+    { label: "Runner", value: runnerName ?? "Определится после выбора" },
+    { label: "Результат", value: resultMode === "web" ? "Web-приложение" : "Текстовый ответ" },
+  ];
+}
+
 export function matchTaskRuns(left: TaskRun[], right: TaskRun[]) {
   const leftByRevision = new Map(left.map((taskRun) => [taskRun.task_revision_id, taskRun]));
   const rightByRevision = new Map(right.map((taskRun) => [taskRun.task_revision_id, taskRun]));
