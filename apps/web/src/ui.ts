@@ -111,6 +111,26 @@ export function reviewSaveLabel(isPending: boolean, isSuccess: boolean) {
   return isPending ? "Сохраняем…" : isSuccess ? "Сохранено" : "Сохранить";
 }
 
+export type ReviewScores = {
+  correctness: number;
+  code_quality: number;
+  ui_quality: number;
+  instruction_following: number;
+};
+
+export function reviewTotal(review: ReviewScores) {
+  return review.correctness + review.code_quality + review.ui_quality + review.instruction_following;
+}
+
+export function reviewSummary(reviews: Array<ReviewScores | undefined>, total: number) {
+  const saved = reviews.filter((review): review is ReviewScores => Boolean(review));
+  return { earned: saved.reduce((sum, review) => sum + reviewTotal(review), 0), possible: saved.length * 40, reviewed: saved.length, total };
+}
+
+export function formatReviewSummary(summary?: ReturnType<typeof reviewSummary>) {
+  return summary?.reviewed ? `${summary.earned}/${summary.possible} · оценено ${summary.reviewed} из ${summary.total}` : "Не оценено";
+}
+
 export function followupCountLabel(count: number) {
   return `Уточнений: ${count}`;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, initializeTaskSelection, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
+import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
 
 const runners = [
   { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"], envPassthrough: [] },
@@ -105,6 +105,14 @@ describe("интерфейс запуска", () => {
     expect(reviewSaveLabel(true, false)).toBe("Сохраняем…");
     expect(reviewSaveLabel(false, true)).toBe("Сохранено");
     expect(reviewSaveLabel(false, false)).toBe("Сохранить");
+  });
+
+  it("считает сохранённую оценку и покрытие запуска", () => {
+    const review = { correctness: 9, code_quality: 8, ui_quality: 7, instruction_following: 10 };
+    expect(reviewTotal(review)).toBe(34);
+    expect(reviewSummary([review], 2)).toEqual({ earned: 34, possible: 40, reviewed: 1, total: 2 });
+    expect(formatReviewSummary(undefined)).toBe("Не оценено");
+    expect(formatReviewSummary(reviewSummary([review], 2))).toBe("34/40 · оценено 1 из 2");
   });
 
   it("показывает количество дополнительных промптов", () => {

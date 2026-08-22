@@ -64,6 +64,12 @@ type RunRow = {
   created_at: string;
 };
 
+type RunSummaryRow = RunRow & {
+  review_score: number | null;
+  reviewed_count: number;
+  task_count: number;
+};
+
 type TaskRunRow = {
   id: string;
   benchmark_run_id: string;
@@ -450,7 +456,17 @@ export function createStore(filename: string) {
       sqlite.prepare("UPDATE benchmark_runs SET status = ?, error = ?, finished_at = COALESCE(?, finished_at) WHERE id = ?").run(status, error ?? null, finishedAt, id);
     },
     listRuns() {
-      return all<RunRow>("SELECT * FROM benchmark_runs ORDER BY sequence");
+      return all<RunSummaryRow>(`
+        SELECT benchmark_runs.*,
+               SUM(reviews.correctness + reviews.code_quality + reviews.ui_quality + reviews.instruction_following) AS review_score,
+               COUNT(reviews.task_run_id) AS reviewed_count,
+               COUNT(task_runs.id) AS task_count
+        FROM benchmark_runs
+        LEFT JOIN task_runs ON task_runs.benchmark_run_id = benchmark_runs.id
+        LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
+        GROUP BY benchmark_runs.sequence
+        ORDER BY benchmark_runs.sequence
+      `);
     },
     deleteRuns,
     createTaskRun(benchmarkRunId: string, taskRevisionId: string, position: number, artifactPath: string, snapshot: unknown) {

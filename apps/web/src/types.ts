@@ -94,6 +94,7 @@ export type Followup = {
 
 export type TaskRun = {
   id: string;
+  task_revision_id: string;
   position: number;
   status: string;
   snapshot_json: string;
@@ -123,5 +124,8 @@ export type Run = {
   started_at: string | null;
   finished_at: string | null;
   error: string | null;
+  review_score?: number | null;
+  reviewed_count?: number;
+  task_count?: number;
   taskRuns?: TaskRun[];
 };

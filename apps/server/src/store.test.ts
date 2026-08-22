@@ -67,6 +67,20 @@ describe("benchmark revisions", () => {
 });
 
 describe("run queue", () => {
+  it("summarizes only persisted human reviews", () => {
+    const store = testStore();
+    const first = store.createTask({ name: "First", kind: "prompt", prompt: "One", tags: [] });
+    const second = store.createTask({ name: "Second", kind: "prompt", prompt: "Two", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [first.currentRevision.id, second.currentRevision.id] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const firstRun = store.createTaskRun(run.id, first.currentRevision.id, 0, ".data/run/one", { task: first.currentRevision });
+    store.createTaskRun(run.id, second.currentRevision.id, 1, ".data/run/two", { task: second.currentRevision });
+    store.saveReview(firstRun.id, { correctness: 9, codeQuality: 8, uiQuality: 7, instructionFollowing: 10, comment: "Good" });
+
+    expect(store.listRuns()[0]).toMatchObject({ review_score: 34, reviewed_count: 1, task_count: 2 });
+  });
+
   it("claims pending runs in FIFO order", () => {
     const store = testStore();
     const task = store.createTask({ name: "Task", kind: "prompt", prompt: "Answer", tags: [] });
