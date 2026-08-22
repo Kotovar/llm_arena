@@ -109,7 +109,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     llamaServer: config.llamaServer.executable,
     nvidiaSmi: config.nvidiaSmi,
   }));
-  app.get("/api/settings", async () => ({ modelDirectory: effectiveModelDirectory() }));
+  app.get("/api/settings", async () => ({
+    modelDirectory: effectiveModelDirectory(),
+    externalModelId: store.getSetting("externalModelId") ?? null,
+    externalProfileName: store.getSetting("externalProfileName") ?? null,
+    externalPort: Number(store.getSetting("externalPort") ?? 8080),
+  }));
   app.put("/api/settings/model-directory", async (request) => {
     const { modelDirectory } = parse(modelDirectorySchema, request.body);
     const canonical = realpathSync(modelDirectory);
@@ -128,7 +133,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (store.listModels().some((model) => model.path === path)) throw new Error("Model file is already connected");
     const alias = modelAlias(input.filename);
     const model = store.createModel({ name: input.name, kind: "local-gguf", provider: "llama.cpp", modelRef: alias, path, alias });
-    const profile = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters: input.profile, calibrated: false, ggufSha256: null });
+    const profile = store.createExecutionProfile({ modelId: model.id, name: input.profileName, parameters: input.profile, calibrated: false, ggufSha256: null });
     return reply.code(201).send({ model, profile });
   });
 

@@ -35,13 +35,47 @@ export type Model = {
   alias: string | null;
 };
 
+export type LlamaParameters = {
+  context: number | "auto";
+  nGpuLayers: number | "all" | "auto";
+  nCpuMoe?: number;
+  cacheTypeK: string;
+  cacheTypeV: string;
+  batchSize: number;
+  ubatchSize: number;
+  flashAttention: boolean | "auto";
+  cacheReuse: number;
+  fit?: boolean;
+  fitTargetMiB?: number;
+  fitContextMin?: number;
+};
+
 export type Profile = {
   id: string;
   modelId: string;
   name: string;
   revision: number;
   calibrated: boolean;
-  parameters: Record<string, unknown>;
+  parameters: LlamaParameters;
+};
+
+export type LocalModelFile = { filename: string; sizeBytes: number; connectedModelId: string | null };
+export type AppSettings = {
+  modelDirectory: string;
+  externalModelId: string | null;
+  externalProfileName: string | null;
+  externalPort: number;
+};
+export type GpuInfo = { name: string; totalMiB: number; usedMiB: number; freeMiB: number };
+export type CalibrationResult = { profile: Profile; gpu: GpuInfo };
+export type ExternalLauncher = {
+  modelId: string;
+  profileName: string;
+  profile: Profile;
+  port: number;
+  argv: string[];
+  fish: string;
+  path?: string;
 };
 
 export type Runner = { id: string; name: string; kind: string; exec: string[]; default?: boolean };

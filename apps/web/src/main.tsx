@@ -1,51 +1,16 @@
-import { StrictMode, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { StrictMode, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter, useNavigate } from "@tanstack/react-router";
+import { Link, RouterProvider, createRootRoute, createRoute, createRouter, useNavigate } from "@tanstack/react-router";
 import { api, apiText } from "./api.js";
+import { ModelsPage } from "./screens/models.js";
+import { SettingsPage } from "./screens/settings.js";
+import { Empty, Page, Panel, Shell, Status, useData } from "./shell.js";
 import type { Benchmark, Fixture, Model, ModelCatalog, Profile, Run, Runner, Task, TaskRun } from "./types.js";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
+import { chooseRunner, followupCountLabel, formatMeasuredMetric, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, runProgress, shouldFollowOutput } from "./ui.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2_000, retry: 1 } } });
-
-function useData<T>(key: string, path = key) {
-  return useQuery({ queryKey: [key], queryFn: () => api<T>(path) });
-}
-
-function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="panel">
-      <header className="panel-head"><h2>{title}</h2>{action}</header>
-      {children}
-    </section>
-  );
-}
-
-function Empty({ children }: { children: ReactNode }) {
-  return <p className="empty">{children}</p>;
-}
-
-function Status({ value }: { value: string }) {
-  return <span className={`status status-${value}`}>{statusLabel(value)}</span>;
-}
-
-function Shell() {
-  const links = [
-    ["/", "Запуск"], ["/tasks", "Промпты"], ["/models", "Модели"],
-    ["/runs", "Результаты"], ["/compare", "Сравнение"], ["/settings", "Настройки"],
-  ] as const;
-  return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">A/B</span><div><strong>LLM Arena</strong><small>сравнение моделей</small></div></div>
-        <nav>{links.map(([to, label]) => <Link key={to} to={to} activeOptions={{ exact: to === "/" }}>{label}</Link>)}</nav>
-        <div className="host"><span className="pulse" />127.0.0.1</div>
-      </aside>
-      <main className="content"><Outlet /></main>
-    </div>
-  );
-}
 
 function Launcher() {
   const tasks = useData<Task[]>("tasks", "/tasks");
@@ -97,10 +62,6 @@ function Launcher() {
   </Page>;
 }
 
-function Page({ title, eyebrow, intro, children }: { title: string; eyebrow: string; intro?: string; children: ReactNode }) {
-  return <><header className="page-head"><span>{eyebrow}</span><h1>{title}</h1>{intro ? <p>{intro}</p> : null}</header>{children}</>;
-}
-
 function TasksPage() {
   const client = useQueryClient();
   const tasks = useData<Task[]>("tasks", "/tasks");
@@ -121,41 +82,6 @@ function TasksPage() {
       <button className="primary">Добавить</button>{create.error ? <p className="error">{create.error.message}</p> : null}
     </form></Panel>
     <Panel title={`Промптов: ${tasks.data?.length ?? 0}`}><div className="stack">{tasks.data?.map((task) => <article className="item" key={task.id}><div><span className="mono">Версия {task.currentRevision.revision}</span><h3>{task.currentRevision.name}</h3><p>{task.currentRevision.prompt}</p></div><div className="item-actions"><button onClick={() => { const prompt = window.prompt("Новая версия промпта", task.currentRevision.prompt); if (prompt) update.mutate({ id: task.id, body: { name: task.currentRevision.name, kind: task.currentRevision.kind, prompt, tags: task.currentRevision.tags, ...(task.currentRevision.kind === "coding" ? { fixtureId: task.currentRevision.fixtureId } : {}) } }); }}>Изменить</button><button className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></article>)}{!tasks.data?.length ? <Empty>Промптов пока нет. Добавьте первый слева.</Empty> : null}</div></Panel></div>
-  </Page>;
-}
-
-function ModelsPage() {
-  const client = useQueryClient();
-  const models = useData<Model[]>("models", "/models");
-  const profiles = useData<Profile[]>("profiles", "/profiles");
-  const runners = useData<Runner[]>("runners", "/runners");
-  const catalog = useData<ModelCatalog>("model-catalog", "/model-catalog");
-  const [kind, setKind] = useState<"cloud" | "local-gguf">("local-gguf");
-  const [cloudProvider, setCloudProvider] = useState<"anthropic" | "openai">("anthropic");
-  const [cloudModelRef, setCloudModelRef] = useState("");
-  const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; message: string }>>({});
-  const create = useMutation({ mutationFn: async (body: Record<string, unknown>) => {
-    const model = await api<Model>("/models", { method: "POST", body: JSON.stringify(body) });
-    if (body.kind === "local-gguf") await api("/profiles", { method: "POST", body: JSON.stringify(defaultLocalProfile(model.id)) });
-    return model;
-  }, onSuccess: () => { client.invalidateQueries({ queryKey: ["models"] }); client.invalidateQueries({ queryKey: ["profiles"] }); } });
-  const calibrate = useMutation({ mutationFn: (id: string) => api(`/profiles/${id}/calibrate`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["profiles"] }) });
-  const testModel = useMutation({
-    mutationFn: ({ modelId, runnerId }: { modelId: string; runnerId: string }) => api<{ ok: boolean; answer: string; durationMs: number }>(`/models/${modelId}/test`, { method: "POST", body: JSON.stringify({ runnerId }) }),
-    onSuccess: (result, variables) => setDiagnostics((current) => ({ ...current, [variables.modelId]: { ok: true, message: `Работает · ${formatDuration(result.durationMs)} · ${result.answer.slice(0, 80)}` } })),
-    onError: (error, variables) => setDiagnostics((current) => ({ ...current, [variables.modelId]: { ok: false, message: error.message } })),
-  });
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const data = new FormData(event.currentTarget);
-    create.mutate(kind === "local-gguf" ? { name: data.get("name"), kind, provider: "llama.cpp", modelRef: data.get("alias"), path: data.get("path"), alias: data.get("alias"), context: data.get("context"), nCpuMoe: data.get("nCpuMoe") } : { name: data.get("name"), kind, provider: cloudProvider, modelRef: cloudModelRef });
-    event.currentTarget.reset();
-    setCloudModelRef("");
-  }
-  const cloudOptions = cloudProvider === "anthropic" ? catalog.data?.claude.models ?? [] : catalog.data?.codex.models ?? [];
-  const visibleProfiles = latestProfiles(profiles.data ?? []);
-  return <Page title="Подключённые модели" eyebrow="Модели" intro="Добавьте GGUF-файл или облачную модель. После этого модель сразу появится на экране запуска.">
-    <div className="two-col"><Panel title="Подключить модель"><form onSubmit={submit} className="form-grid"><label>Тип<select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="local-gguf">Локальная GGUF</option><option value="cloud">Облачная CLI</option></select></label><label>Название<input name="name" required /></label>{kind === "local-gguf" ? <><label className="span-2">Путь к GGUF<input name="path" placeholder="/mnt/models/model.gguf" required /></label><label>Alias<input name="alias" required /></label><label>Контекст<input name="context" type="number" min="1024" defaultValue="65536" required /></label><label>MoE-слоёв на CPU<input name="nCpuMoe" type="number" min="0" defaultValue="0" required /><small>Экспертные веса первых N MoE-слоёв останутся в RAM. 0 — не переносить; увеличивайте при нехватке VRAM, учитывая возможное снижение скорости.</small></label></> : <><label>Провайдер<select value={cloudProvider} onChange={(event) => { setCloudProvider(event.target.value as typeof cloudProvider); setCloudModelRef(""); }}><option value="anthropic">Claude Code</option><option value="openai">Codex CLI</option></select></label><label>Модель<input list="cloud-models" value={cloudModelRef} onChange={(event) => setCloudModelRef(event.target.value)} placeholder={cloudProvider === "anthropic" ? "sonnet" : "gpt-5.6-sol"} required /><datalist id="cloud-models">{cloudOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</datalist><small>{cloudOptions.length ? `Доступно вариантов: ${cloudOptions.length}. Можно ввести полный ID вручную.` : "Введите полный ID модели вручную."}</small></label></>}<button className="primary">Подключить</button>{create.error ? <p className="error">{create.error.message}</p> : null}</form></Panel>
-    <Panel title={`Подключено: ${models.data?.length ?? 0}`}><div className="stack">{models.data?.map((model) => { const runner = chooseRunner(model, ["prompt"], runners.data ?? []); const checking = testModel.isPending && testModel.variables?.modelId === model.id; return <article className="item model" key={model.id}><div><span className="mono">{model.kind === "local-gguf" ? "Локальная" : "Облачная"} · {model.provider}</span><h3>{model.name}</h3><p>{model.path ?? model.modelRef}</p>{diagnostics[model.id] ? <small className={diagnostics[model.id]?.ok ? "success" : "error"}>{diagnostics[model.id]?.message}</small> : null}</div><div className="model-actions">{visibleProfiles.filter((profile) => profile.modelId === model.id).map((profile) => <div className="profile-current" key={profile.id}><span className="chip">{profile.name} · текущая версия {profile.revision}{model.kind === "local-gguf" ? <> · CPU MoE: {String(profile.parameters.nCpuMoe ?? 0)}</> : null}</span>{model.kind === "local-gguf" ? <><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending}>{calibrate.isPending && calibrate.variables === profile.id ? "Проверяем VRAM…" : "Проверить загрузку в VRAM"}</button><small className="vram-help">Несколько раз запускает llama.cpp и пытается безопасно перенести больше MoE-слоёв с CPU в VRAM. Новая версия сохраняется только при изменении параметров.</small></> : null}</div>)}<button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем…" : "Проверить модель"}</button><small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small></div></article>; })}</div></Panel></div>
   </Page>;
 }
 
@@ -296,11 +222,6 @@ function ComparePage() {
   const rows = useMemo(() => Array.from({ length: Math.max(leftRun.data?.taskRuns?.length ?? 0, rightRun.data?.taskRuns?.length ?? 0) }, (_, index) => [leftRun.data?.taskRuns?.[index], rightRun.data?.taskRuns?.[index]]), [leftRun.data, rightRun.data]);
   const label = (run: Run) => `${models.data?.find((model) => model.id === run.model_id)?.name ?? run.model_id.slice(0, 8)} · ${run.runner_id}`;
   return <Page title="Сравнение результатов" eyebrow="Сравнение" intro="Выберите два завершённых запуска. Несопоставимые метрики облачных CLI остаются без значения."><div className="compare-pickers"><select value={left} onChange={(event) => setLeft(event.target.value)}><option value="">Первый запуск</option>{completed.map((run) => <option key={run.id} value={run.id}>{label(run)}</option>)}</select><span>и</span><select value={right} onChange={(event) => setRight(event.target.value)}><option value="">Второй запуск</option>{completed.map((run) => <option key={run.id} value={run.id}>{label(run)}</option>)}</select></div>{rows.length ? <div className="compare-grid"><strong>Промпт</strong><strong>{leftRun.data ? label(leftRun.data) : "Первый"}</strong><strong>{rightRun.data ? label(rightRun.data) : "Второй"}</strong>{rows.flatMap(([a,b], index) => { const ar = a?.result_json ? JSON.parse(a.result_json) as Record<string,unknown> : undefined; const br = b?.result_json ? JSON.parse(b.result_json) as Record<string,unknown> : undefined; return [<span key={`t${index}`}>Промпт {index+1}</span>,<div key={`a${index}`}><Status value={a?.status ?? "missing"}/><b>{metric(ar,"totalDurationMs")}</b><small>Выход: {metric(ar,"outputTokens")}</small></div>,<div key={`b${index}`}><Status value={b?.status ?? "missing"}/><b>{metric(br,"totalDurationMs")}</b><small>Выход: {metric(br,"outputTokens")}</small></div>]; })}</div> : <Empty>Выберите два завершённых запуска.</Empty>}</Page>;
-}
-
-function SettingsPage() {
-  const diagnostics = useData<Record<string,string>>("diagnostics", "/diagnostics"); const runners = useData<Runner[]>("runners", "/runners"); const fixtures = useData<Fixture[]>("fixtures", "/fixtures");
-  return <Page title="Настройки приложения" eyebrow="Настройки" intro="Команды берутся только из доверенной конфигурации. Секреты и значения переменных окружения здесь не показываются."><div className="two-col"><Panel title="Система"><dl>{Object.entries(diagnostics.data ?? {}).map(([key,value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl></Panel><Panel title="Способы запуска"><div className="stack">{runners.data?.map((runner) => <article className="item" key={runner.id}><div><span className="mono">{runner.kind}</span><h3>{runner.name}</h3><code>{runner.exec.join(" ")}</code></div></article>)}</div></Panel></div><Panel title="Исходные проекты"><div className="chips">{fixtures.data?.map((fixture) => <span className="chip" key={fixture.id}>{fixture.name} · проверок: {fixture.checks.length}</span>)}</div></Panel></Page>;
 }
 
 const rootRoute = createRootRoute({ component: Shell });

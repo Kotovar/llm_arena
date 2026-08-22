@@ -86,6 +86,7 @@ export const modelDirectorySchema = z.object({
 export const connectLocalModelSchema = z.object({
   filename: z.string().trim().min(1),
   name: z.string().trim().min(1).max(160),
+  profileName: z.string().trim().min(1).max(160).default("Automatic"),
   profile: llamaProfileSchema,
 }).strict();
 

@@ -40,15 +40,15 @@ describe("REST API", () => {
     const connected = await app.inject({
       method: "POST",
       url: "/api/local-models",
-      payload: { filename: "My Model.gguf", name: "My model", profile: parameters },
+      payload: { filename: "My Model.gguf", name: "My model", profileName: "Manual", profile: parameters },
     });
 
-    expect(defaults.json()).toEqual({ modelDirectory: "models" });
+    expect(defaults.json()).toMatchObject({ modelDirectory: "models", externalModelId: null });
     expect(updated.json()).toEqual({ modelDirectory: modelsRoot });
     expect(listed.json()).toEqual([{ filename: "My Model.gguf", sizeBytes: 4, connectedModelId: null }]);
     expect(connected.statusCode).toBe(201);
     expect(connected.json().model).toMatchObject({ path: join(modelsRoot, "My Model.gguf"), alias: "my-model", modelRef: "my-model" });
-    expect(connected.json().profile).toMatchObject({ name: "Automatic", parameters });
+    expect(connected.json().profile).toMatchObject({ name: "Manual", parameters });
 
     const duplicate = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "My Model.gguf", name: "Duplicate", profile: parameters } });
     const traversal = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "../My Model.gguf", name: "Unsafe", profile: parameters } });
@@ -98,6 +98,11 @@ describe("REST API", () => {
     const launcherPath = join(config.dataDir, "exports", "active-model.fish");
     expect(readFileSync(launcherPath, "utf8")).toContain("'750'");
     expect(store.getSetting("externalModelId")).toBe(model.id);
+    expect((await app.inject({ method: "GET", url: "/api/settings" })).json()).toMatchObject({
+      externalModelId: model.id,
+      externalProfileName: "Automatic",
+      externalPort: 8080,
+    });
 
     const refreshed = await app.inject({
       method: "POST",
