@@ -163,6 +163,23 @@ export function formatReviewSummary(summary?: ReturnType<typeof reviewSummary>) 
   return summary?.reviewed ? `${summary.earned}/${summary.possible} · оценено ${summary.reviewed} из ${summary.total}` : "Не оценено";
 }
 
+export type ResultCheck = { id: string; label: string; status: string; durationMs?: number };
+
+export function resultChecks(result: Record<string, unknown> | undefined): ResultCheck[] {
+  const checks = result?.checks;
+  if (!Array.isArray(checks)) return [];
+  return checks.flatMap((check) => {
+    if (!check || typeof check !== "object") return [];
+    const item = check as Record<string, unknown>;
+    if (typeof item.id !== "string" || typeof item.label !== "string" || typeof item.status !== "string") return [];
+    return [{ id: item.id, label: item.label, status: item.status, ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}) }];
+  });
+}
+
+export function checkStatusLabel(status: string) {
+  return status === "pass" ? "пройдена" : status === "timeout" ? "таймаут" : "провалена";
+}
+
 export function betterResult(left?: { review?: ReviewScores }, right?: { review?: ReviewScores }) {
   const leftTotal = left?.review ? reviewTotal(left.review) : undefined;
   const rightTotal = right?.review ? reviewTotal(right.review) : undefined;

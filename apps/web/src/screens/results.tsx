@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Status, useData } from "../shell.js";
 import type { Fixture, Followup, Model, Run, Runner, Task, TaskRun } from "../types.js";
-import { followupCountLabel, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, promptCountLabel, reviewSaveLabel, reviewSummary, reviewTotal, runListMeta, runListScore, runProgress, shouldFollowOutput } from "../ui.js";
+import { checkStatusLabel, followupCountLabel, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, promptCountLabel, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runListMeta, runListScore, runProgress, shouldFollowOutput } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const terminal = run.status !== "pending" && run.status !== "running";
@@ -61,6 +61,12 @@ export function usePreviewHeartbeat(active: boolean) {
   }, [active]);
 }
 
+function ChecksStrip({ result }: { result: Record<string, unknown> | undefined }) {
+  const checks = resultChecks(result);
+  if (!checks.length) return null;
+  return <div className="checks">{checks.map((check) => <span key={check.id} className={`check-badge check-${check.status}`}>{check.label}: {checkStatusLabel(check.status)}{check.durationMs === undefined ? null : <small>{formatDuration(check.durationMs)}</small>}</span>)}</div>;
+}
+
 function ResultPreview({ url, onClose }: { url: string; onClose: () => void }) {
   const close = useMutation({ mutationFn: () => api("/preview", { method: "DELETE" }), onSuccess: onClose });
   usePreviewHeartbeat(true);
@@ -94,6 +100,7 @@ function FollowupResult({ followup, cancelPending, onCancel }: { followup: Follo
     {followup.error ? <p className="error">{followup.error}</p> : null}
     {active ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />{followup.status === "pending" ? "Уточнение ожидает запуска" : "Модель выполняет уточнение"}</strong><Elapsed since={followup.started_at} /><button className="danger" onClick={onCancel} disabled={cancelPending}>Остановить</button></div><pre>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre></div> : null}
     {result ? <MetricStrip result={result} /> : null}
+    <ChecksStrip result={result} />
     {answer ? <details className="answer-surface"><summary><span className="mono">Ответ на уточнение</span><strong>Показать ответ модели</strong></summary><pre className="answer">{answer}</pre></details> : null}
   </article>;
 }
@@ -139,6 +146,7 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
   return <article className="result-card"><header><div><span className="mono">Промпт {taskRun.position + 1} · {snapshot.task.kind === "coding" ? "работа с проектом" : "ответ"}</span><h3>{snapshot.task.name}</h3>{taskRun.review ? <div className="saved-score"><strong>{reviewTotal(taskRun.review)}/40</strong>{reviewCriteria.map(([key, label]) => <span key={key}>{label}: {key === "codeQuality" ? taskRun.review!.code_quality : key === "uiQuality" ? taskRun.review!.ui_quality : key === "instructionFollowing" ? taskRun.review!.instruction_following : taskRun.review!.correctness}</span>)}</div> : <span className="unrated">Не оценено</span>}</div><Status value={taskRun.status} /></header>{taskRun.error ? <p className="error">{taskRun.error}</p> : null}
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button className="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>Прервать</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
     {result ? <MetricStrip result={result} /> : null}
+    <ChecksStrip result={result} />
     {snapshot.fixture?.preview && taskRun.status === "completed" ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => onPreview(undefined)} /> : <section className="preview-cta"><div><span className="mono">Результат готов</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Preview-сервер один: запущенный preview другого промпта остановится." : "Откроем файлы этого прогона во встроенном preview-сервере."}</p></div><button className="primary" onClick={() => preview.mutate()} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
     {preview.error ? <p className="error">{preview.error.message}</p> : null}
     {result?.finalAnswer ? <details className="answer-surface" open><summary><span className="mono">Основной результат</span><strong>Ответ модели</strong></summary><pre className="answer">{String(result.finalAnswer)}</pre></details> : null}

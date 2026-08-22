@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, chooseRunner, defaultLocalProfile, followupCountLabel, formatRelativeTime, promptCountLabel, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, followupCountLabel, formatRelativeTime, promptCountLabel, resultChecks, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -214,5 +214,29 @@ describe("сравнение результатов", () => {
     expect(betterResult(review(7), review(7))).toBeUndefined();
     expect(betterResult(review(7), {})).toBeUndefined();
     expect(betterResult(undefined, review(7))).toBeUndefined();
+  });
+});
+
+describe("проверки фикстуры", () => {
+  it("читает только полные записи проверок", () => {
+    const result = { checks: [
+      { id: "preview-server", label: "Preview server", status: "pass", durationMs: 320 },
+      { id: "broken", label: "Нет статуса" },
+      "мусор",
+      null,
+    ] };
+    expect(resultChecks(result)).toEqual([{ id: "preview-server", label: "Preview server", status: "pass", durationMs: 320 }]);
+  });
+
+  it("не падает на результате без проверок", () => {
+    expect(resultChecks(undefined)).toEqual([]);
+    expect(resultChecks({})).toEqual([]);
+    expect(resultChecks({ checks: "нет" })).toEqual([]);
+  });
+
+  it("переводит статус проверки", () => {
+    expect(checkStatusLabel("pass")).toBe("пройдена");
+    expect(checkStatusLabel("timeout")).toBe("таймаут");
+    expect(checkStatusLabel("fail")).toBe("провалена");
   });
 });
