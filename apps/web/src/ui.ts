@@ -163,6 +163,52 @@ export function formatReviewSummary(summary?: ReturnType<typeof reviewSummary>) 
   return summary?.reviewed ? `${summary.earned}/${summary.possible} · оценено ${summary.reviewed} из ${summary.total}` : "Не оценено";
 }
 
+export function betterResult(left?: { review?: ReviewScores }, right?: { review?: ReviewScores }) {
+  const leftTotal = left?.review ? reviewTotal(left.review) : undefined;
+  const rightTotal = right?.review ? reviewTotal(right.review) : undefined;
+  if (leftTotal === undefined || rightTotal === undefined || leftTotal === rightTotal) return undefined;
+  return leftTotal > rightTotal ? "left" : "right";
+}
+
 export function followupCountLabel(count: number) {
   return `Уточнений: ${count}`;
+}
+
+const pluralRules = new Intl.PluralRules("ru-RU");
+
+export function plural(count: number, one: string, few: string, many: string) {
+  const rule = pluralRules.select(count);
+  return rule === "one" ? one : rule === "few" ? few : many;
+}
+
+export function promptCountLabel(count: number) {
+  return `${count} ${plural(count, "промпт", "промпта", "промптов")}`;
+}
+
+const relativeTime = new Intl.RelativeTimeFormat("ru-RU", { numeric: "auto" });
+
+export function formatRelativeTime(iso: string, now = Date.now()) {
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return "";
+  const minutes = Math.round((time - now) / 60_000);
+  if (Math.abs(minutes) < 60) return relativeTime.format(minutes, "minute");
+  const hours = Math.round(minutes / 60);
+  if (Math.abs(hours) < 24) return relativeTime.format(hours, "hour");
+  const days = Math.round(hours / 24);
+  if (Math.abs(days) < 7) return relativeTime.format(days, "day");
+  return new Date(time).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+}
+
+export function runListScore(run: { review_score?: number | null; reviewed_count?: number; task_count?: number }) {
+  if (!run.reviewed_count) return "Не оценено";
+  return `${run.review_score ?? 0}/${run.reviewed_count * 40}`;
+}
+
+export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string }, runnerName?: string) {
+  if (run.status === "failed" && run.error) return run.error;
+  return [
+    run.task_count ? promptCountLabel(run.task_count) : undefined,
+    runnerName ?? run.runner_id,
+    run.result_mode === "web" ? "web-приложение" : "текстовый ответ",
+  ].filter(Boolean).join(" · ");
 }

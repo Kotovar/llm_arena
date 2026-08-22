@@ -26,7 +26,7 @@ export function SettingsPage() {
     },
   });
   return <Page title="Настройки приложения" eyebrow="Настройки" intro="Здесь меняются только доверенные серверные пути. Команды запуска и пути отдельных моделей браузер не задаёт.">
-    <Panel title="Каталог локальных моделей"><form className="directory-form" onSubmit={(event) => { event.preventDefault(); saveDirectory.mutate(); }}><label>Папка с GGUF-файлами<input value={modelDirectory} onChange={(event) => { setModelDirectory(event.currentTarget.value); setDirectoryTouched(true); }} placeholder="models" required /><small>Укажите абсолютный путь к папке. Приложение покажет обычные GGUF-файлы только из её верхнего уровня.</small></label><button className="primary" disabled={saveDirectory.isPending || !directoryTouched}>{saveDirectory.isPending ? "Проверяем…" : "Сохранить путь"}</button></form>
+    <Panel title="Каталог локальных моделей"><form className="directory-form" onSubmit={(event) => { event.preventDefault(); saveDirectory.mutate(); }}><label>Папка с GGUF-файлами<input value={modelDirectory} onChange={(event) => { setModelDirectory(event.currentTarget.value); setDirectoryTouched(true); }} placeholder="models" required /></label><button className="primary" disabled={saveDirectory.isPending || !directoryTouched}>{saveDirectory.isPending ? "Проверяем…" : "Сохранить путь"}</button><small>Укажите абсолютный путь к папке. Приложение покажет обычные GGUF-файлы только из её верхнего уровня.</small></form>
       {saveDirectory.isSuccess ? <p className="success">Путь сохранён, список моделей обновлён.</p> : null}
       {saveDirectory.error ? <p className="error">{saveDirectory.error.message}</p> : null}
       {files.error ? <p className="error">Папка недоступна: {files.error.message}</p> : null}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
+import { betterResult, chooseRunner, defaultLocalProfile, followupCountLabel, formatRelativeTime, promptCountLabel, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -166,5 +166,53 @@ describe("интерфейс запуска", () => {
   it("показывает количество дополнительных промптов", () => {
     expect(followupCountLabel(0)).toBe("Уточнений: 0");
     expect(followupCountLabel(3)).toBe("Уточнений: 3");
+  });
+});
+
+describe("подписи списка запусков", () => {
+  it("склоняет промпты по русским правилам", () => {
+    expect(promptCountLabel(1)).toBe("1 промпт");
+    expect(promptCountLabel(2)).toBe("2 промпта");
+    expect(promptCountLabel(5)).toBe("5 промптов");
+    expect(promptCountLabel(11)).toBe("11 промптов");
+    expect(promptCountLabel(21)).toBe("21 промпт");
+    expect(promptCountLabel(0)).toBe("0 промптов");
+  });
+
+  it("показывает время запуска относительно текущего момента", () => {
+    const now = new Date("2026-08-22T12:00:00Z").getTime();
+    expect(formatRelativeTime("2026-08-22T11:55:00Z", now)).toBe("5 минут назад");
+    expect(formatRelativeTime("2026-08-22T09:00:00Z", now)).toBe("3 часа назад");
+    expect(formatRelativeTime("2026-08-20T12:00:00Z", now)).toBe("позавчера");
+    expect(formatRelativeTime("2026-07-01T12:00:00Z", now)).toBe("1 июля 2026 г.");
+    expect(formatRelativeTime("не дата", now)).toBe("");
+  });
+
+  it("вместо описания запуска показывает причину ошибки", () => {
+    const failed = { runner_id: "llama-chat", result_mode: "text" as const, task_count: 2, error: "llama-server не стартовал", status: "failed" };
+    expect(runListMeta(failed, "llama.cpp Chat")).toBe("llama-server не стартовал");
+    const completed = { ...failed, error: null, status: "completed" };
+    expect(runListMeta(completed, "llama.cpp Chat")).toBe("2 промпта · llama.cpp Chat · текстовый ответ");
+    expect(runListMeta({ ...completed, result_mode: "web" }, undefined)).toBe("2 промпта · llama-chat · web-приложение");
+  });
+
+  it("показывает оценку запуска только когда она есть", () => {
+    expect(runListScore({ reviewed_count: 0 })).toBe("Не оценено");
+    expect(runListScore({ review_score: 33, reviewed_count: 1, task_count: 2 })).toBe("33/40");
+  });
+});
+
+describe("сравнение результатов", () => {
+  const review = (correctness: number) => ({ review: { correctness, code_quality: 5, ui_quality: 5, instruction_following: 5, comment: "" } });
+
+  it("отмечает результат с большей суммой баллов", () => {
+    expect(betterResult(review(9), review(4))).toBe("left");
+    expect(betterResult(review(4), review(9))).toBe("right");
+  });
+
+  it("ничего не отмечает без обеих оценок или при равенстве", () => {
+    expect(betterResult(review(7), review(7))).toBeUndefined();
+    expect(betterResult(review(7), {})).toBeUndefined();
+    expect(betterResult(undefined, review(7))).toBeUndefined();
   });
 });

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Page, Panel, Status, useData } from "../shell.js";
 import type { Benchmark, Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
-import { chooseRunner, initializeTaskSelection, latestProfiles, launchSummary, modelOptionLabel, reasoningEffortsForModel, updateTaskSelection } from "../ui.js";
+import { chooseRunner, initializeTaskSelection, latestProfiles, launchSummary, modelOptionLabel, promptCountLabel, reasoningEffortsForModel, updateTaskSelection } from "../ui.js";
 
 export function Launcher() {
   const tasks = useData<Task[]>("tasks", "/tasks");
@@ -12,7 +12,7 @@ export function Launcher() {
   const profiles = useData<Profile[]>("profiles", "/profiles");
   const runners = useData<Runner[]>("runners", "/runners");
   const catalog = useData<ModelCatalog>("model-catalog", "/model-catalog");
-  const runs = useQuery({ queryKey: ["runs"], queryFn: () => api<Run[]>("/runs"), refetchInterval: 1_000 });
+  const runs = useQuery({ queryKey: ["runs"], queryFn: () => api<Run[]>("/runs"), refetchInterval: (query) => query.state.data?.some((run) => run.status === "running" || run.status === "pending") ? 1_000 : 10_000 });
   const navigate = useNavigate();
   const [modelId, setModelId] = useState("");
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[] | null>(null);
@@ -40,7 +40,7 @@ export function Launcher() {
     mutationFn: async () => {
       if (!selectedModel || !selectedRunner || !selectedTasks.length) throw new Error("Выберите модель и хотя бы один промпт");
       const benchmark = await api<Benchmark>("/benchmarks", { method: "POST", body: JSON.stringify({
-        name: selectedTasks.length === 1 ? selectedTasks[0]!.currentRevision.name : `${selectedTasks.length} промптов · ${new Date().toLocaleString("ru-RU")}`,
+        name: selectedTasks.length === 1 ? selectedTasks[0]!.currentRevision.name : `${promptCountLabel(selectedTasks.length)} · ${new Date().toLocaleString("ru-RU")}`,
         taskRevisionIds: selectedTasks.map((task) => task.currentRevision.id),
       }) });
       const profile = latestProfiles(profiles.data ?? []).find((item) => item.modelId === selectedModel.id);
@@ -57,7 +57,7 @@ export function Launcher() {
       <div className="launch-step prompt-step" data-ready={selectedTasks.length > 0}><span>2</span><fieldset className="prompt-picker"><legend><strong>Какие промпты запустить</strong><small>{selectedTasks.length} из {tasks.data?.length ?? 0}</small></legend><div className="picker-actions"><button type="button" onClick={() => setSelectedTaskIds(allTaskIds)}>Выбрать все</button><button type="button" onClick={() => setSelectedTaskIds([])}>Снять выбор</button><Link to="/tasks">Добавить промпт</Link></div><div className="prompt-options">{tasks.data?.map((task) => <label key={task.id} className={selected.has(task.currentRevision.id) ? "selected" : ""}><input type="checkbox" checked={selected.has(task.currentRevision.id)} onChange={(event) => { const checked = event.currentTarget.checked; setSelectedTaskIds((current) => updateTaskSelection(current, task.currentRevision.id, checked)); }} /><span><strong>{task.currentRevision.name}</strong><small>{task.currentRevision.prompt}</small></span></label>)}</div>{!tasks.data?.length ? <p className="empty">Сначала добавьте промпт.</p> : null}</fieldset></div>
       <div className="launch-step" data-ready={Boolean(selectedRunner)}><span>3</span><fieldset className="result-mode"><legend>Что должна вернуть модель</legend><label><input type="radio" name="resultMode" checked={resultMode === "text"} onChange={() => { setResultMode("text"); setRunnerOverride(""); }} />Текстовый ответ</label><label><input type="radio" name="resultMode" checked={resultMode === "web"} onChange={() => { setResultMode("web"); setRunnerOverride(""); }} />Готовое web-приложение</label></fieldset><span className="launch-mode-note">{resultMode === "web" ? "Будут созданы файлы и Preview" : "Ответ модели без рабочей директории"}</span></div>
       <details className="advanced"><summary>Дополнительные настройки</summary><label>Способ запуска<select value={runnerOverride} onChange={(event) => setRunnerOverride(event.currentTarget.value)}><option value="">Автоматически: {automaticRunner?.name ?? "не определён"}</option>{runners.data?.map((runner) => <option key={runner.id} value={runner.id}>{runner.name}</option>)}</select></label></details>
-      <div className="launch-footer"><dl className="launch-summary" aria-label="Параметры запуска">{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl><div className="launch-action"><div><strong>{selectedTasks.length ? `${selectedTasks.length} ${selectedTasks.length === 1 ? "промпт" : "промптов"}` : "Выберите хотя бы один промпт"}</strong><small>{selectedRunner ? `через ${selectedRunner.name}` : "Добавьте модель и промпт"}</small></div><button className="primary launch-button" onClick={() => launch.mutate()} disabled={launch.isPending || !selectedModel || !selectedTasks.length || !selectedRunner}>{launch.isPending ? "Создаём запуск…" : "Запустить"}<span>→</span></button></div></div>
+      <div className="launch-footer"><dl className="launch-summary" aria-label="Параметры запуска">{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl><div className="launch-action"><div><strong>{selectedTasks.length ? promptCountLabel(selectedTasks.length) : "Выберите хотя бы один промпт"}</strong><small>{selectedRunner ? `через ${selectedRunner.name}` : "Добавьте модель и промпт"}</small></div><button className="primary launch-button" onClick={() => launch.mutate()} disabled={launch.isPending || !selectedModel || !selectedTasks.length || !selectedRunner}>{launch.isPending ? "Создаём запуск…" : "Запустить"}<span>→</span></button></div></div>
       {launch.error ? <p className="error">{launch.error.message}</p> : null}
     </section>
     {active.length ? <Panel title="Сейчас выполняется" action={<Link to="/runs">Все результаты →</Link>}><div className="run-list">{active.map((run) => <Link className="run-row" key={run.id} to="/runs/$runId" params={{ runId: run.id }}><Status value={run.status} /><strong>{models.data?.find((model) => model.id === run.model_id)?.name ?? "Модель"}</strong><span>{run.runner_id}</span><time>{new Date(run.created_at).toLocaleString("ru-RU")}</time><span>→</span></Link>)}</div></Panel> : null}
