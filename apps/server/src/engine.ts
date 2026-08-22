@@ -6,7 +6,7 @@ import type { ArenaConfig } from "./config.js";
 import { LlamaCppServerManager } from "./llama-server.js";
 import { allocatePort } from "./port.js";
 import { renderPreviewArgv, waitReady } from "./preview.js";
-import { ProcessSupervisor } from "./process-supervisor.js";
+import { type OwnedProcess, ProcessSupervisor } from "./process-supervisor.js";
 import { buildScreenshotArgv } from "./screenshot.js";
 import { createRedactor } from "./redact.js";
 import { createRunner } from "./runners/index.js";
@@ -347,26 +347,24 @@ export class BenchmarkEngine {
     const target = join(artifactRoot, "preview.png");
     const profileDir = join(artifactRoot, "browser-profile");
     const append = (text: string) => appendFileSync(logPath, text);
-    const port = await allocatePort();
-    let server;
+    let server: OwnedProcess | undefined;
     try {
+      // Уточнение снимает поверх исходного снимка: без удаления неудача сойдёт за успех по старому файлу.
+      rmSync(target, { force: true });
+      const port = await allocatePort();
+      const url = `http://127.0.0.1:${port}${preview.readyPath}`;
       server = this.supervisor.spawn({
         argv: renderPreviewArgv(preview.command.argv, port),
         cwd: preview.command.cwd ? resolve(workspace, preview.command.cwd) : workspace,
         env: { PORT: String(port) },
-        timeoutMs: 120_000,
+        timeoutMs: preview.command.timeoutMs ?? 120_000,
         onStdout: append,
         onStderr: append,
       });
-    } catch (error) {
-      append(`${(error as Error).message}\n`);
-      return false;
-    }
-    try {
       server.stdin.end();
-      await waitReady(`http://127.0.0.1:${port}${preview.readyPath}`, server, 60_000);
+      await waitReady(url, server, 60_000);
       const browser = this.supervisor.spawn({
-        argv: buildScreenshotArgv(this.config.browser, `http://127.0.0.1:${port}${preview.readyPath}`, target, profileDir),
+        argv: buildScreenshotArgv(this.config.browser, url, target, profileDir),
         cwd: workspace,
         // Снимок необязателен, поэтому ждём его заметно меньше, чем проверку.
         timeoutMs: 120_000,
@@ -380,7 +378,7 @@ export class BenchmarkEngine {
       append(`${(error as Error).message}\n`);
       return false;
     } finally {
-      await server.stop();
+      await server?.stop();
       rmSync(profileDir, { recursive: true, force: true });
     }
   }

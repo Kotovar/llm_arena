@@ -134,6 +134,15 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
       expect(JSON.parse(taskRun.result_json!).previewImage).toBe(true);
       expect(existsSync(join(taskRun.artifact_path, "preview.png"))).toBe(true);
     }
+
+    // Без браузера результат обязан сохраниться целиком, просто без снимка.
+    config.browser = join(root, "missing-browser");
+    const withoutBrowser = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    await engine.processNext();
+    const withoutBrowserTaskRun = store.listTaskRuns(withoutBrowser.id)[0]!;
+    expect(withoutBrowserTaskRun.status).toBe("completed");
+    expect(JSON.parse(withoutBrowserTaskRun.result_json!).previewImage).toBe(false);
+    expect(JSON.parse(withoutBrowserTaskRun.result_json!).finalAnswer).toContain("Создай реальные файлы");
     const preview = new PreviewManager(store, config, new ProcessSupervisor("web-preview-test", 100));
     const started = await preview.start(taskRun.id);
     expect(await fetch(started.url).then((response) => response.text())).toBe("<h1>Готовое приложение</h1>");
@@ -188,9 +197,16 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     await engine.processNext();
     const taskRun = store.listTaskRuns(run.id)[0]!;
     const original = taskRun.result_json;
+    // Уточнение переписывает тот же workspace, поэтому снимок исходного прогона устарел:
+    // неудачный снимок уточнения не должен выдаваться за успех по старому файлу.
+    writeFileSync(join(taskRun.artifact_path, "preview.png"), "устаревший снимок");
+    config.browser = join(root, "missing-browser");
     store.createFollowup(taskRun.id, "Исправь заголовок");
 
     expect(await engine.processNext()).toBe(true);
+
+    expect(JSON.parse(store.listFollowups(taskRun.id)[0]!.result_json ?? "{}").previewImage).toBe(false);
+    expect(existsSync(join(taskRun.artifact_path, "preview.png"))).toBe(false);
 
     expect(readFileSync(join(taskRun.artifact_path, "workspace", "index.html"), "utf8")).toBe("<h1>Исправлено</h1>");
     expect(store.getTaskRun(taskRun.id)?.result_json).toBe(original);
