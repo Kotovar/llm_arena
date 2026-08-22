@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { activeLauncherPath, renderFishLauncher, writeActiveLauncher } from "./external-launcher.js";
+import { activeLauncherPath, renderFishCommand, renderFishLauncher, writeActiveLauncher } from "./external-launcher.js";
 
 const directories: string[] = [];
 
@@ -11,6 +11,12 @@ afterEach(() => {
 });
 
 describe("external local-model launcher", () => {
+  it("renders a pasteable command without replacing the current shell", () => {
+    const rendered = renderFishCommand(["/bin/llama-server", "-m", "/models/My model.gguf"]);
+
+    expect(rendered).toBe("'/bin/llama-server' '-m' '/models/My model.gguf'");
+  });
+
   it("renders every argument as shell-safe fish text", () => {
     const rendered = renderFishLauncher(["/bin/llama-server", "-m", "/models/My model.gguf", "--label", "it's\\safe"]);
 

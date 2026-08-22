@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Status, useData } from "../shell.js";
-import type { Fixture, Model, Run, Task, TaskRun } from "../types.js";
+import type { Fixture, Followup, Model, Run, Task, TaskRun } from "../types.js";
 import { followupCountLabel, formatMeasuredMetric, formatReviewSummary, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput } from "../ui.js";
 
 function RunRow({ run, models, onDelete }: { run: Run; models: Model[]; onDelete?: (run: Run) => void }) {
@@ -28,14 +28,22 @@ export function metric(result: Record<string, unknown> | undefined, name: string
   return formatMeasuredMetric(name, metrics?.[name]);
 }
 
-function resultAnswer(json: string | null) {
-  if (!json) return "";
+function parseResult(json: string | null): Record<string, unknown> | undefined {
+  if (!json) return undefined;
   try {
-    const result = JSON.parse(json) as { finalAnswer?: unknown };
-    return typeof result.finalAnswer === "string" ? result.finalAnswer : "";
+    return JSON.parse(json) as Record<string, unknown>;
   } catch {
-    return "";
+    return undefined;
   }
+}
+
+function resultAnswer(json: string | null) {
+  const answer = parseResult(json)?.finalAnswer;
+  return typeof answer === "string" ? answer : "";
+}
+
+function MetricStrip({ result }: { result: Record<string, unknown> | undefined }) {
+  return <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Сумма новых входных токенов во всех обращениях агента к модели"><span>Новый вход</span><strong>{metric(result, "inputTokens")}</strong></div><div title="Токены контекста, повторно использованные из кеша"><span>Из кеша</span><strong>{metric(result, "cachedInputTokens")}</strong></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div><div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong></div></div>;
 }
 
 function ResultPreview({ url, onClose }: { url: string; onClose: () => void }) {
@@ -63,6 +71,19 @@ function initialReview(taskRun: TaskRun): ReviewDraft {
     instructionFollowing: taskRun.review.instruction_following,
     comment: taskRun.review.comment,
   } : { correctness: 5, codeQuality: 5, uiQuality: 5, instructionFollowing: 5, comment: "" };
+}
+
+function FollowupResult({ followup, cancelPending, onCancel }: { followup: Followup; cancelPending: boolean; onCancel: () => void }) {
+  const active = followup.status === "pending" || followup.status === "running";
+  const result = parseResult(followup.result_json);
+  const answer = resultAnswer(followup.result_json);
+  const liveLogs = useQuery({ queryKey: ["followup-logs", followup.id], queryFn: () => apiText(`/followups/${followup.id}/logs?stream=display`), enabled: followup.status === "running", refetchInterval: 1_000 });
+  return <article className="followup-item"><header><span className="mono">Уточнение {followup.position}</span><Status value={followup.status} /></header><p>{followup.prompt}</p>
+    {followup.error ? <p className="error">{followup.error}</p> : null}
+    {active ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />{followup.status === "pending" ? "Уточнение ожидает запуска" : "Модель выполняет уточнение"}</strong><Elapsed since={followup.started_at} /><button className="danger" onClick={onCancel} disabled={cancelPending}>Остановить</button></div><pre>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre></div> : null}
+    {result ? <MetricStrip result={result} /> : null}
+    {answer ? <details className="answer-surface"><summary><span className="mono">Ответ на уточнение</span><strong>Показать ответ модели</strong></summary><pre className="answer">{answer}</pre></details> : null}
+  </article>;
 }
 
 function TaskResult({ taskRun, runId }: { taskRun: TaskRun; runId: string }) {
@@ -102,14 +123,14 @@ function TaskResult({ taskRun, runId }: { taskRun: TaskRun; runId: string }) {
   const draftTotal = draft.correctness + draft.codeQuality + draft.uiQuality + draft.instructionFollowing;
   return <article className="result-card"><header><div><span className="mono">Промпт {taskRun.position + 1} · {snapshot.task.kind === "coding" ? "работа с проектом" : "ответ"}</span><h3>{snapshot.task.name}</h3>{taskRun.review ? <div className="saved-score"><strong>{reviewTotal(taskRun.review)}/40</strong>{reviewCriteria.map(([key, label]) => <span key={key}>{label}: {key === "codeQuality" ? taskRun.review!.code_quality : key === "uiQuality" ? taskRun.review!.ui_quality : key === "instructionFollowing" ? taskRun.review!.instruction_following : taskRun.review!.correctness}</span>)}</div> : <span className="unrated">Не оценено</span>}</div><Status value={taskRun.status} /></header>{taskRun.error ? <p className="error">{taskRun.error}</p> : null}
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button className="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>Прервать</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
-    <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Сумма новых входных токенов во всех обращениях агента к модели"><span>Новый вход</span><strong>{metric(result, "inputTokens")}</strong></div><div title="Токены контекста, повторно использованные из кеша"><span>Из кеша</span><strong>{metric(result, "cachedInputTokens")}</strong></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div><div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong></div></div>
+    <MetricStrip result={result} />
     {snapshot.fixture?.preview && taskRun.status === "completed" ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => setPreviewUrl(undefined)} /> : <section className="preview-cta"><div><span className="mono">Результат готов</span><strong>Запустить web-приложение</strong><p>Откроем файлы этого прогона во встроенном preview-сервере.</p></div><button className="primary" onClick={() => preview.mutate()} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
-    {result?.finalAnswer ? <section className="answer-surface"><header><div><span className="mono">Основной результат</span><strong>Ответ модели</strong></div><div><span className={answerCopy === "Скопировано" ? "success" : ""}>{answerCopy}</span><button onClick={() => void copyAnswer()}>Копировать ответ</button></div></header><pre className="answer">{String(result.finalAnswer)}</pre></section> : null}
+    {result?.finalAnswer ? <details className="answer-surface" open><summary><span className="mono">Основной результат</span><strong>Ответ модели</strong></summary><div className="answer-toolbar"><span className={answerCopy === "Скопировано" ? "success" : ""}>{answerCopy}</span><button onClick={() => void copyAnswer()}>Копировать ответ</button></div><pre className="answer">{String(result.finalAnswer)}</pre></details> : null}
     <div className="actions">{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть в Zed"}</button> : null}<button onClick={() => void apiText(`/task-runs/${taskRun.id}/diff`).then(setArtifact)}>Изменения</button><a href={`/api/task-runs/${taskRun.id}/logs`} target="_blank" rel="noreferrer">Сырые логи ↗</a><a href={`/api/task-runs/${taskRun.id}/logs?stream=stderr`} target="_blank" rel="noreferrer">Ошибки ↗</a></div>
     {zedMessage ? <p className="success ide-message">{zedMessage}</p> : null}
     {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{(zed.error as Error & { data?: { workspace?: string } }).data?.workspace ? <><code>{(zed.error as Error & { data?: { workspace?: string } }).data!.workspace}</code><button onClick={() => void navigator.clipboard.writeText((zed.error as Error & { data?: { workspace?: string } }).data!.workspace!)}>Скопировать путь</button></> : null}</div> : null}
     {artifact !== undefined ? <pre className="artifact">{artifact || "Нет данных"}</pre> : null}
-    {taskRun.status === "completed" ? <section className="followups"><header><strong>Дополнительные промпты</strong><span className="chip">{followupCountLabel(followups.length)}</span></header>{followups.length ? <div className="followup-list">{followups.map((item) => <article className="followup-item" key={item.id}><header><span className="mono">Уточнение {item.position}</span><Status value={item.status} /></header><p>{item.prompt}</p>{item.error ? <p className="error">{item.error}</p> : null}{resultAnswer(item.result_json) ? <pre className="answer">{resultAnswer(item.result_json)}</pre> : null}{item.status === "pending" || item.status === "running" ? <button className="danger" onClick={() => cancelFollowup.mutate(item.id)} disabled={cancelFollowup.isPending}>Остановить уточнение</button> : null}</article>)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" disabled={Boolean(activeFollowup) || addFollowup.isPending}>{activeFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></section> : null}
+    {taskRun.status === "completed" ? <section className="followups"><header><strong>Дополнительные промпты</strong><span className="chip">{followupCountLabel(followups.length)}</span></header>{followups.length ? <div className="followup-list">{followups.map((item) => <FollowupResult key={item.id} followup={item} cancelPending={cancelFollowup.isPending} onCancel={() => cancelFollowup.mutate(item.id)} />)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" disabled={Boolean(activeFollowup) || addFollowup.isPending}>{activeFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></section> : null}
     <form className="review" onSubmit={rate}><div className="review-heading"><div><span className="mono">Моя оценка</span><strong>Оцените результат по четырём критериям</strong></div><output>{draftTotal}/40</output></div>{reviewCriteria.map(([key, label]) => <label className="score-control" key={key}><span>{label}<output>{draft[key]}/10</output></span><input type="range" min="1" max="10" value={draft[key]} onChange={(event) => updateScore(key, Number(event.currentTarget.value))} /></label>)}<label className="comment">Комментарий<input value={draft.comment} onChange={(event) => { setDraft((current) => ({ ...current, comment: event.currentTarget.value })); setSaved(false); review.reset(); }} /></label><button className={saved ? "saved" : ""} disabled={review.isPending}>{reviewSaveLabel(review.isPending, saved)}</button>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form>
   </article>;
 }

@@ -4,8 +4,10 @@ import { join } from "node:path";
 
 export const quoteFishArg = (value: string) => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
 
+export const renderFishCommand = (argv: string[]): string => argv.map(quoteFishArg).join(" ");
+
 export function renderFishLauncher(argv: string[]): string {
-  return `#!/usr/bin/env fish\nexec ${argv.map(quoteFishArg).join(" ")}\n`;
+  return `#!/usr/bin/env fish\nexec ${renderFishCommand(argv)}\n`;
 }
 
 export function activeLauncherPath(dataDir: string): string {

@@ -74,6 +74,7 @@ export type ExternalLauncher = {
   profile: Profile;
   port: number;
   argv: string[];
+  command: string;
   fish: string;
   path?: string;
 };
@@ -90,6 +91,7 @@ export type Followup = {
   status: string;
   result_json: string | null;
   error: string | null;
+  started_at: string | null;
 };
 
 export type TaskRun = {

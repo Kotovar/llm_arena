@@ -125,8 +125,11 @@ describe("REST API", () => {
 
     expect(preview.statusCode).toBe(200);
     expect(preview.json().argv).toContain("/models/My model.gguf");
+    expect(preview.json().command).toContain("'/models/My model.gguf'");
+    expect(preview.json().command).not.toContain("exec ");
     expect(preview.json().fish).toContain("'/models/My model.gguf'");
     expect(activated.json()).toMatchObject({ modelId: model.id, profileName: "Automatic", port: 8080 });
+    expect(activated.json().command).not.toContain("exec ");
     expect(unsafe.statusCode).toBe(400);
     const launcherPath = join(config.dataDir, "exports", "active-model.fish");
     expect(readFileSync(launcherPath, "utf8")).toContain("'750'");
@@ -304,9 +307,14 @@ describe("REST API", () => {
 
     const queued = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/followups`, payload: { prompt: "Исправь заголовок" } });
     const loaded = await app.inject({ method: "GET", url: `/api/runs/${run.id}` });
+    const claimed = store.claimNextFollowup()!;
+    mkdirSync(claimed.artifact_path, { recursive: true });
+    writeFileSync(join(claimed.artifact_path, "display.log"), "follow-up is running");
+    const liveOutput = await app.inject({ method: "GET", url: `/api/followups/${claimed.id}/logs?stream=display` });
 
     expect(queued.statusCode).toBe(202);
     expect(loaded.json().taskRuns[0].followups).toMatchObject([{ prompt: "Исправь заголовок", status: "pending" }]);
+    expect(liveOutput.body).toBe("follow-up is running");
     expect(wakes).toBe(1);
     await app.close();
     store.close();

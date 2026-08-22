@@ -13,7 +13,7 @@ import {
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
-import { renderFishLauncher, writeActiveLauncher } from "./external-launcher.js";
+import { renderFishCommand, renderFishLauncher, writeActiveLauncher } from "./external-launcher.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -84,7 +84,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       port,
       join(config.dataDir, "external-slots"),
     );
-    return { modelId, profileName, profile, port, argv, fish: renderFishLauncher(argv) };
+    return { modelId, profileName, profile, port, argv, command: renderFishCommand(argv), fish: renderFishLauncher(argv) };
   };
   const refreshActiveLauncher = (modelId: string, profileName: string) => {
     if (store.getSetting("externalModelId") !== modelId || store.getSetting("externalProfileName") !== profileName) return;
@@ -170,7 +170,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     store.setSetting("externalModelId", selection.modelId);
     store.setSetting("externalProfileName", selection.profileName);
     store.setSetting("externalPort", String(selection.port));
-    return { ...selection, path, argv: launcher.argv, fish: launcher.fish };
+    return { ...launcher, path };
   });
   app.get<{ Querystring: { modelId?: string } }>("/api/profiles", async (request) => store.listExecutionProfiles(request.query.modelId));
   app.post("/api/profiles", async (request, reply) => {
@@ -308,6 +308,14 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const followup = store.createFollowup(request.params.id, prompt);
     engine?.wake();
     return reply.code(202).send(followup);
+  });
+  app.get<{ Params: { id: string }; Querystring: { stream?: "stdout" | "stderr" | "display" } }>("/api/followups/:id/logs", async (request, reply) => {
+    const followup = store.getFollowup(request.params.id);
+    if (!followup) throw new Error("Additional prompt not found");
+    const filename = request.query.stream === "stderr" ? "stderr.log" : request.query.stream === "display" ? "display.log" : "stdout.log";
+    const path = join(followup.artifact_path, filename);
+    reply.type("text/plain");
+    return existsSync(path) ? createReadStream(path) : "";
   });
   app.post<{ Params: { id: string } }>("/api/followups/:id/cancel", async (request, reply) => {
     const followup = store.getFollowup(request.params.id);

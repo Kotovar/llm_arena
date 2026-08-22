@@ -98,7 +98,7 @@ export function ModelsPage() {
     try {
       const result = await api<ExternalLauncher>(`/models/${modelId}/external-launcher?profileName=${encodeURIComponent(profileName)}&port=${settings.data?.externalPort ?? 8080}`);
       setLaunchers((current) => ({ ...current, [key]: result }));
-      await navigator.clipboard.writeText(result.fish);
+      await navigator.clipboard.writeText(result.command);
       setCopyState((current) => ({ ...current, [key]: "Команда скопирована" }));
     } catch (error) {
       setCopyState((current) => ({ ...current, [key]: error instanceof Error ? error.message : "Не удалось скопировать" }));
@@ -153,22 +153,20 @@ export function ModelsPage() {
         const runner = chooseRunner(model, ["prompt"], runners.data ?? []);
         const checking = testModel.isPending && testModel.variables?.modelId === model.id;
         const modelProfiles = visibleProfiles.filter((profile) => profile.modelId === model.id);
-        return <article className="model-card" key={model.id}><header><div><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><h3>{model.name}</h3><p>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</p></div>{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для OMP</span> : null}</header>
+        return <details className="model-card" key={model.id}><summary className="model-card-summary"><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Профиль экспортирован</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
           {diagnostics[model.id] ? <p className={diagnostics[model.id]?.ok ? "success" : "error"}>{diagnostics[model.id]?.message}</p> : null}
           {modelProfiles.map((profile) => { const key = `${model.id}:${profile.name}`; const report = hardware[profile.id]; const preview = launchers[key]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
-            <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">OMP active</span> : null}</div>
+            <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Экспортирован</span> : null}</div>
             <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div></dl>
             {report ? <div className="gpu-report"><strong>{report.gpu.name}</strong><span>VRAM: {report.gpu.usedMiB} MiB занято · {report.gpu.freeMiB} MiB свободно из {report.gpu.totalMiB} MiB</span></div> : null}
             {calibrate.error && calibrate.variables === profile.id ? <p className="error">{calibrate.error.message}</p> : null}
-            {preview ? <pre className="command-preview">{preview.fish}</pre> : null}
+            {preview ? <pre className="command-preview">{preview.command}</pre> : null}
             {copyState[key] ? <small className={copyState[key]?.includes("скопирована") ? "success" : ""}>{copyState[key]}</small> : null}
-            <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : "Проверить автоконфигурацию"}</button><button onClick={() => launcher.mutate({ modelId: model.id, profileName: profile.name })} disabled={launcher.isPending}>Показать профиль</button><button onClick={() => void copyCommand(model.id, profile.name)}>Скопировать команду</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending}>{activate.isPending && activate.variables?.modelId === model.id ? "Активируем…" : "Использовать с OMP"}</button></div>
+            <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : "Проверить автоконфигурацию"}</button><button onClick={() => launcher.mutate({ modelId: model.id, profileName: profile.name })} disabled={launcher.isPending}>Показать команду</button><button onClick={() => void copyCommand(model.id, profile.name)}>Скопировать команду</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending}>{activate.isPending && activate.variables?.modelId === model.id ? "Экспортируем…" : "Экспортировать профиль"}</button></div>
           </section>; })}
           <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button><small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small></div>
-        </article>;
+        </div></details>;
       })}{!models.data?.length ? <Empty>Пока нет подключённых моделей.</Empty> : null}</div></Panel>
     </div>
   </Page>;
 }
-
-
