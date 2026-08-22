@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .data/
+.worktrees/
 coverage/
 *.log
 arena.config.local.yaml
