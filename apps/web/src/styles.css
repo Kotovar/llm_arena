@@ -73,7 +73,7 @@ a { color: var(--signal); text-decoration: none; }
 .stack { min-width: 0; display: grid; gap: 10px; }.roomy { margin-top: 18px; gap: 18px; }.item { min-width: 0; display: flex; justify-content: space-between; gap: 20px; padding: 15px; border: 1px solid var(--line); background: #0a1921; border-radius: 9px; }.item > div { min-width: 0; }.item h3 { margin: 5px 0; font-size: 15px; }.item p { margin: 0; overflow-wrap: anywhere; color: var(--muted); white-space: pre-wrap; line-height: 1.4; }.item code { color: var(--muted); font-size: 11px; }.model { align-items: center; }.model-actions { display: grid; justify-items: end; gap: 8px; }.chip, .chips { display: inline-flex; flex-wrap: wrap; gap: 8px; }.chip { color: #b8d0db; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; font: 11px ui-monospace, monospace; }
 .profile-current { display: grid; justify-items: end; gap: 7px; max-width: 430px; }.vram-help { max-width: 430px; color: var(--muted); line-height: 1.45; text-align: right; }
 .item-actions { display: flex; align-items: stretch; gap: 7px; flex-direction: column; }
-.prompt-item { display: grid; gap: 14px; }
+.prompt-item { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .prompt-item-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px; align-items: start; }
 .prompt-editor-footer { display: flex; justify-content: space-between; gap: 20px; }
 .prompt-editor { display: grid; gap: 12px; padding: 14px; border: 1px solid #31566a; border-radius: 7px; background: #071016; }
