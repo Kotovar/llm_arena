@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
+import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, updateTaskSelection } from "./ui.js";
 import type { TaskRun } from "./types.js";
 
 const runners = [
@@ -14,6 +14,11 @@ describe("интерфейс запуска", () => {
     expect(initializeTaskSelection(null, ["a", "b", "c"])).toEqual(["a", "b", "c"]);
     expect(initializeTaskSelection([], ["a", "b", "c"])).toEqual([]);
     expect(initializeTaskSelection(["b"], ["a", "b", "c"])).toEqual(["b"]);
+  });
+
+  it("снимает и возвращает отдельный промпт без обращения к React event", () => {
+    expect(updateTaskSelection(["a", "b"], "a", false)).toEqual(["b"]);
+    expect(updateTaskSelection(["b"], "a", true)).toEqual(["b", "a"]);
   });
 
   it("автоматически выбирает runner по модели и типу задачи", () => {

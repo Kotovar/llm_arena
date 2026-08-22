@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { activeLauncherPath, renderFishCommand, renderFishLauncher, writeActiveLauncher } from "./external-launcher.js";
+import { activeExportPath, activeLauncherPath, renderFishCommand, renderFishLauncher, renderOmpLayout, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 
 const directories: string[] = [];
 
@@ -32,6 +32,25 @@ describe("external local-model launcher", () => {
 
     expect(path).toBe(activeLauncherPath(dataDir));
     expect(readFileSync(path, "utf8")).toBe(rendered);
+    expect(statSync(path).mode & 0o111).not.toBe(0);
+  });
+
+  it("renders a Zellij layout that waits for the selected server and starts OMP", () => {
+    const rendered = renderOmpLayout("/arena/.data", 8181, "my-model-profile-1");
+
+    expect(rendered).toContain('command="/arena/.data/exports/active-model.fish"');
+    expect(rendered).toContain("http://127.0.0.1:8181/v1/models");
+    expect(rendered).toContain('\\\"id\\\":\\\"my-model-profile-1\\\"');
+    expect(rendered).toContain("exec '/arena/.data/exports/active-omp.fish'");
+  });
+
+  it("writes additional export files with the requested permissions", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "llm-arena-launcher-"));
+    directories.push(dataDir);
+
+    const path = writeExportFile(dataDir, "active-omp.fish", "#!/usr/bin/env fish\n", true);
+
+    expect(path).toBe(activeExportPath(dataDir, "active-omp.fish"));
     expect(statSync(path).mode & 0o111).not.toBe(0);
   });
 

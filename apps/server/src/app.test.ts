@@ -116,7 +116,7 @@ describe("REST API", () => {
       fitTargetMiB: 750,
       fitContextMin: 4096,
     };
-    store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, calibrated: false, ggufSha256: null });
+    const profile = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, calibrated: false, ggufSha256: null });
     const app = buildApp({ store, config });
 
     const preview = await app.inject({ method: "GET", url: `/api/models/${model.id}/external-launcher?profileName=Automatic&port=8080` });
@@ -132,7 +132,15 @@ describe("REST API", () => {
     expect(activated.json().command).not.toContain("exec ");
     expect(unsafe.statusCode).toBe(400);
     const launcherPath = join(config.dataDir, "exports", "active-model.fish");
+    const ompPath = join(config.dataDir, "exports", "active-omp.fish");
+    const layoutPath = join(config.dataDir, "exports", "omp-local.kdl");
     expect(readFileSync(launcherPath, "utf8")).toContain("'750'");
+    const externalAlias = `my-model-${profile.id.slice(0, 8)}`;
+    expect(readFileSync(launcherPath, "utf8")).toContain(`'-a' '${externalAlias}'`);
+    expect(readFileSync(ompPath, "utf8")).toContain(`'--model' 'llama.cpp/${externalAlias}'`);
+    expect(readFileSync(layoutPath, "utf8")).toContain("http://127.0.0.1:8080/v1/models");
+    expect(existsSync(join(config.dataDir, "external-slots"))).toBe(true);
+    expect(activated.json()).toMatchObject({ path: launcherPath, ompPath, layoutPath });
     expect(store.getSetting("externalModelId")).toBe(model.id);
     expect((await app.inject({ method: "GET", url: "/api/settings" })).json()).toMatchObject({
       externalModelId: model.id,

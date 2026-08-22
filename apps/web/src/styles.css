@@ -128,7 +128,6 @@ dl { margin: 0; }dl div { display: grid; grid-template-columns: 130px 1fr; paddi
 .gpu-report span { color: var(--muted); font-size: 12px; }
 .model-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .model-toolbar small { color: var(--muted); }
-.command-preview { max-height: 180px; margin: 0; padding: 11px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid #294757; background: #050b0f; color: #a9dff7; font-size: 11px; }
 .directory-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 14px; }
 .directory-form label { color: var(--muted); font-size: 12px; }
 .directory-form input { display: block; width: 100%; margin-top: 7px; padding: 11px; }

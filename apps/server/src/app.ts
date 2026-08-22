@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
   createBenchmarkSchema,
@@ -13,7 +13,7 @@ import {
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
-import { renderFishCommand, renderFishLauncher, writeActiveLauncher } from "./external-launcher.js";
+import { renderFishCommand, renderFishLauncher, renderOmpLayout, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -77,19 +77,40 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       .filter((item) => item.name === profileName)
       .sort((left, right) => right.revision - left.revision)[0];
     if (!profile) throw new Error("Execution profile not found");
+    const externalAlias = `${model.alias}-${profile.id.slice(0, 8)}`;
     const argv = buildLlamaServerCommand(
       config.llamaServer.executable,
-      { path: model.path, alias: model.alias },
+      { path: model.path, alias: externalAlias },
       profile.parameters,
       port,
       join(config.dataDir, "external-slots"),
     );
-    return { modelId, profileName, profile, port, argv, command: renderFishCommand(argv), fish: renderFishLauncher(argv) };
+    const omp = config.runners.find((runner) => runner.kind === "omp");
+    if (!omp) throw new Error("OMP runner is not configured");
+    return {
+      modelId,
+      profileName,
+      profile,
+      port,
+      argv,
+      command: renderFishCommand(argv),
+      fish: renderFishLauncher(argv),
+      ompFish: renderFishLauncher([...omp.exec, "--model", `llama.cpp/${externalAlias}`]),
+      layout: renderOmpLayout(config.dataDir, port, externalAlias),
+    };
+  };
+  const exportExternalLauncher = (launcher: ReturnType<typeof buildExternalLauncher>) => {
+    mkdirSync(join(config.dataDir, "external-slots"), { recursive: true });
+    return {
+      path: writeActiveLauncher(config.dataDir, launcher.fish),
+      ompPath: writeExportFile(config.dataDir, "active-omp.fish", launcher.ompFish, true),
+      layoutPath: writeExportFile(config.dataDir, "omp-local.kdl", launcher.layout),
+    };
   };
   const refreshActiveLauncher = (modelId: string, profileName: string) => {
     if (store.getSetting("externalModelId") !== modelId || store.getSetting("externalProfileName") !== profileName) return;
     const port = Number(store.getSetting("externalPort") ?? 8080);
-    writeActiveLauncher(config.dataDir, buildExternalLauncher(modelId, profileName, port).fish);
+    exportExternalLauncher(buildExternalLauncher(modelId, profileName, port));
   };
   const hasActiveFollowup = (runId: string) => store.listTaskRuns(runId).some((taskRun) =>
     taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running"));
@@ -166,11 +187,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.put("/api/external-launcher", async (request) => {
     const selection = parse(externalLauncherActivationSchema, request.body);
     const launcher = buildExternalLauncher(selection.modelId, selection.profileName, selection.port);
-    const path = writeActiveLauncher(config.dataDir, launcher.fish);
+    const paths = exportExternalLauncher(launcher);
     store.setSetting("externalModelId", selection.modelId);
     store.setSetting("externalProfileName", selection.profileName);
     store.setSetting("externalPort", String(selection.port));
-    return { ...launcher, path };
+    return { ...launcher, ...paths };
   });
   app.get<{ Querystring: { modelId?: string } }>("/api/profiles", async (request) => store.listExecutionProfiles(request.query.modelId));
   app.post("/api/profiles", async (request, reply) => {

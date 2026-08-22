@@ -31,6 +31,10 @@ export function initializeTaskSelection(current: string[] | null, taskIds: strin
   return current ?? taskIds;
 }
 
+export function updateTaskSelection(current: string[] | null, taskId: string, checked: boolean) {
+  return checked ? [...(current ?? []), taskId] : (current ?? []).filter((id) => id !== taskId);
+}
+
 export function matchTaskRuns(left: TaskRun[], right: TaskRun[]) {
   const leftByRevision = new Map(left.map((taskRun) => [taskRun.task_revision_id, taskRun]));
   const rightByRevision = new Map(right.map((taskRun) => [taskRun.task_revision_id, taskRun]));

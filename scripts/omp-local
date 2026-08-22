@@ -1,0 +1,27 @@
+#!/usr/bin/env fish
+
+set -l script_path (realpath (status filename))
+set -l arena_root (path resolve (path dirname "$script_path")/..)
+set -l exports "$arena_root/.data/exports"
+
+if not test -x "$exports/active-model.fish"; or not test -x "$exports/active-omp.fish"; or not test -f "$exports/omp-local.kdl"
+    echo "omp-local: сначала выберите модель и нажмите «Использовать с omp-local» в LLM Arena." >&2
+    exit 1
+end
+
+if not command -q zellij
+    echo "omp-local: команда zellij не найдена." >&2
+    exit 1
+end
+
+set -l session_file "$exports/omp-local.session"
+if test -f "$session_file"
+    set -l previous_session (string trim < "$session_file")
+    if string match -rq '^omp-local-[0-9]+-[0-9]+$' -- "$previous_session"
+        zellij delete-session --force "$previous_session" >/dev/null 2>&1
+    end
+end
+
+set -l session_name "omp-local-"(date +%s)"-"$fish_pid
+printf '%s\n' "$session_name" > "$session_file"
+exec zellij --session "$session_name" --new-session-with-layout "$exports/omp-local.kdl"
