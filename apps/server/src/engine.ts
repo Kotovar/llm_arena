@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { FixtureManifest, LlamaProfile } from "@llm-arena/shared";
@@ -10,10 +9,22 @@ import { createRedactor } from "./redact.js";
 import { createRunner } from "./runners/index.js";
 import { createLiveOutput } from "./runners/live-output.js";
 import type { ArenaStore } from "./store.js";
-import { startGpuSampler } from "./system-metrics.js";
+import { readGpuInfo, startGpuSampler, type GpuInfo } from "./system-metrics.js";
 import { buildTaskPrompt } from "./task-prompt.js";
 
 type RunEvent = { type: string; runId: string; taskRunId?: string; data?: unknown };
+
+type EngineRuntime = {
+  createLlamaManager: () => {
+    start(
+      model: { path: string; alias: string },
+      profile: LlamaProfile,
+      logs: { stdout(text: string): void; stderr(text: string): void },
+    ): Promise<{ baseUrl: string; stop(): Promise<void> }>;
+  };
+  fetch: (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number }>;
+  readGpuInfo: (executable: string) => GpuInfo;
+};
 
 export class BenchmarkEngine {
   readonly #controllers = new Map<string, AbortController>();
@@ -27,6 +38,11 @@ export class BenchmarkEngine {
     private readonly store: ArenaStore,
     private readonly config: ArenaConfig,
     private readonly supervisor: ProcessSupervisor,
+    private readonly runtime: EngineRuntime = {
+      createLlamaManager: () => new LlamaCppServerManager(config.llamaServer.executable, config.llamaServer.startupTimeoutMs, supervisor),
+      fetch: globalThis.fetch,
+      readGpuInfo,
+    },
   ) {}
 
   subscribe(runId: string, listener: (event: RunEvent) => void): () => void {
@@ -363,58 +379,42 @@ export class BenchmarkEngine {
     if (!profile) throw new Error("Execution profile not found");
     const model = this.store.getModel(profile.modelId);
     if (!model || model.kind !== "local-gguf" || !model.path || !model.alias) throw new Error("Calibration requires a local GGUF model");
-    const safeMaximum = profile.parameters.nCpuMoe;
-    if (safeMaximum === undefined) throw new Error("Dense-model GPU-layer calibration is not implemented in this MVP; use a manual profile");
     this.#calibrating = true;
     const directory = join(this.config.dataDir, "calibrations", `${profile.id}-${Date.now()}`);
     mkdirSync(directory, { recursive: true });
     const log = join(directory, "calibration.log");
     writeFileSync(log, "");
-    const manager = new LlamaCppServerManager(this.config.llamaServer.executable, this.config.llamaServer.startupTimeoutMs, this.supervisor);
-    const probe = async (nCpuMoe: number): Promise<boolean> => {
-      let server: Awaited<ReturnType<LlamaCppServerManager["start"]>> | undefined;
-      try {
-        appendFileSync(log, `\nprobe nCpuMoe=${nCpuMoe}\n`);
-        server = await manager.start(
-          { path: model.path!, alias: model.alias! },
-          { ...profile.parameters, nCpuMoe },
-          { stdout: (text) => appendFileSync(log, text), stderr: (text) => appendFileSync(log, text) },
-        );
-        const warmup = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: model.alias, messages: [{ role: "user", content: "Reply OK" }], max_tokens: 8, temperature: 0 }),
-        });
-        if (!warmup.ok) return false;
-        const sample = spawnSync(this.config.nvidiaSmi, ["--query-gpu=memory.free", "--format=csv,noheader,nounits"], { encoding: "utf8" });
-        const freeMiB = Number(sample.stdout.trim().split("\n")[0]);
-        appendFileSync(log, `freeMiB=${freeMiB}\n`);
-        return sample.status === 0 && freeMiB >= this.config.defaults.vramReserveMiB;
-      } catch (error) {
-        appendFileSync(log, `${(error as Error).message}\n`);
-        return false;
-      } finally {
-        await server?.stop();
-      }
-    };
+    const manager = this.runtime.createLlamaManager();
+    let server: Awaited<ReturnType<typeof manager.start>> | undefined;
     try {
-      if (!(await probe(safeMaximum))) throw new Error("The current safe nCpuMoe profile failed; increase CPU offload or lower context manually");
-      let low = 0;
-      let high = safeMaximum;
-      while (low < high) {
-        const middle = Math.floor((low + high) / 2);
-        if (await probe(middle)) high = middle;
-        else low = middle + 1;
-      }
-      if (!(await probe(low))) throw new Error("Final calibration validation failed");
-      return this.store.createExecutionProfile({
+      server = await manager.start(
+        { path: model.path, alias: model.alias },
+        profile.parameters,
+        { stdout: (text) => appendFileSync(log, text), stderr: (text) => appendFileSync(log, text) },
+      );
+      const warmup = await this.runtime.fetch(`${server.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: model.alias, messages: [{ role: "user", content: "Reply OK" }], max_tokens: 8, temperature: 0 }),
+      });
+      if (!warmup.ok) throw new Error(`Automatic profile warmup failed (${warmup.status})`);
+      const gpu = this.runtime.readGpuInfo(this.config.nvidiaSmi);
+      appendFileSync(log, `gpu=${gpu.name} usedMiB=${gpu.usedMiB} freeMiB=${gpu.freeMiB}\n`);
+      const reserveMiB = profile.parameters.fitTargetMiB ?? this.config.defaults.vramReserveMiB;
+      if (gpu.freeMiB < reserveMiB) throw new Error(`Configured VRAM reserve was not preserved (${gpu.freeMiB}/${reserveMiB} MiB)`);
+      const calibrated = this.store.createExecutionProfile({
         modelId: profile.modelId,
         name: profile.name,
-        parameters: { ...profile.parameters, nCpuMoe: low },
+        parameters: profile.parameters,
         ggufSha256: profile.ggufSha256,
         calibrated: true,
       });
+      return { profile: calibrated, gpu };
+    } catch (error) {
+      appendFileSync(log, `${(error as Error).message}\n`);
+      throw error;
     } finally {
+      await server?.stop();
       this.#calibrating = false;
       this.wake();
     }

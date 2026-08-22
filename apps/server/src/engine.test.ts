@@ -14,6 +14,57 @@ afterEach(() => {
 });
 
 describe("benchmark engine", () => {
+  it("verifies an automatic profile with one warmup and records observed GPU memory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-calibration-"));
+    directories.push(root);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    const store = createStore(join(root, "arena.sqlite"));
+    const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(root, "model.gguf"), alias: "local" });
+    const profile = store.createExecutionProfile({
+      modelId: model.id,
+      name: "Automatic",
+      parameters: {
+        context: "auto",
+        nGpuLayers: "auto",
+        cacheTypeK: "q8_0",
+        cacheTypeV: "q8_0",
+        batchSize: 1024,
+        ubatchSize: 512,
+        flashAttention: "auto",
+        cacheReuse: 256,
+        fit: true,
+        fitTargetMiB: 750,
+        fitContextMin: 4096,
+      },
+      calibrated: false,
+      ggufSha256: null,
+    });
+    let starts = 0;
+    let stops = 0;
+    let warmups = 0;
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("calibration-test", 100), {
+      createLlamaManager: () => ({
+        async start() {
+          starts += 1;
+          return { baseUrl: "http://127.0.0.1:1234", async stop() { stops += 1; } };
+        },
+      }),
+      fetch: async () => { warmups += 1; return { ok: true, status: 200 }; },
+      readGpuInfo: () => ({ name: "NVIDIA GeForce RTX 5080", totalMiB: 16303, usedMiB: 1450, freeMiB: 14853 }),
+    });
+
+    const result = await engine.calibrate(profile.id);
+
+    expect(result).toMatchObject({
+      profile: { name: "Automatic", calibrated: true, revision: 2 },
+      gpu: { name: "NVIDIA GeForce RTX 5080", freeMiB: 14853 },
+    });
+    expect({ starts, stops, warmups }).toEqual({ starts: 1, stops: 1, warmups: 1 });
+    await engine.stop();
+    store.close();
+  });
+
   it("runs a queued prompt task and persists the normalized result", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-engine-"));
     directories.push(root);

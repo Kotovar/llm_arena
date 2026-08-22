@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -58,6 +58,54 @@ describe("REST API", () => {
     expect(traversal.statusCode).toBe(400);
     expect(untrusted.statusCode).toBe(400);
     expect(missingDirectory.statusCode).toBe(400);
+
+    await app.close();
+    store.close();
+  });
+
+  it("previews, activates, and refreshes the server-owned external launcher", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-external-api-"));
+    directories.push(directory);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const store = createStore(join(directory, "arena.sqlite"));
+    const model = store.createModel({ name: "My model", kind: "local-gguf", provider: "llama.cpp", modelRef: "my-model", path: "/models/My model.gguf", alias: "my-model" });
+    const parameters = {
+      context: "auto" as const,
+      nGpuLayers: "auto" as const,
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      batchSize: 1024,
+      ubatchSize: 512,
+      flashAttention: "auto" as const,
+      cacheReuse: 256,
+      fit: true,
+      fitTargetMiB: 750,
+      fitContextMin: 4096,
+    };
+    store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, calibrated: false, ggufSha256: null });
+    const app = buildApp({ store, config });
+
+    const preview = await app.inject({ method: "GET", url: `/api/models/${model.id}/external-launcher?profileName=Automatic&port=8080` });
+    const activated = await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId: model.id, profileName: "Automatic", port: 8080 } });
+    const unsafe = await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId: model.id, profileName: "Automatic", port: 8080, argv: ["rm"], executable: "/tmp/tool", outputPath: "/tmp/file" } });
+
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().argv).toContain("/models/My model.gguf");
+    expect(preview.json().fish).toContain("'/models/My model.gguf'");
+    expect(activated.json()).toMatchObject({ modelId: model.id, profileName: "Automatic", port: 8080 });
+    expect(unsafe.statusCode).toBe(400);
+    const launcherPath = join(config.dataDir, "exports", "active-model.fish");
+    expect(readFileSync(launcherPath, "utf8")).toContain("'750'");
+    expect(store.getSetting("externalModelId")).toBe(model.id);
+
+    const refreshed = await app.inject({
+      method: "POST",
+      url: "/api/profiles",
+      payload: { modelId: model.id, name: "Automatic", parameters: { ...parameters, fitTargetMiB: 900 }, calibrated: false, ggufSha256: null },
+    });
+    expect(refreshed.statusCode).toBe(201);
+    expect(readFileSync(launcherPath, "utf8")).toContain("'900'");
 
     await app.close();
     store.close();

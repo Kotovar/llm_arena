@@ -13,6 +13,8 @@ import {
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
+import { renderFishLauncher, writeActiveLauncher } from "./external-launcher.js";
+import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import type { ArenaStore } from "./store.js";
@@ -38,6 +40,15 @@ function parse<T>(schema: ZodType<T>, value: unknown): T {
 
 const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict();
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
+const externalLauncherQuerySchema = z.object({
+  profileName: z.string().trim().min(1),
+  port: z.coerce.number().int().min(1).max(65535).default(8080),
+}).strict();
+const externalLauncherActivationSchema = z.object({
+  modelId: z.string().uuid(),
+  profileName: z.string().trim().min(1),
+  port: z.number().int().min(1).max(65535).default(8080),
+}).strict();
 
 function filesUnder(root: string, directory = root): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -58,6 +69,27 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   const { store, config, engine, preview } = options;
   const app = Fastify({ logger: false });
   const effectiveModelDirectory = () => store.getSetting("modelDirectory") ?? config.modelDirectory;
+  const buildExternalLauncher = (modelId: string, profileName: string, port: number) => {
+    const model = store.getModel(modelId);
+    if (!model || model.kind !== "local-gguf" || !model.path || !model.alias) throw new Error("Local model not found");
+    const profile = store.listExecutionProfiles(modelId)
+      .filter((item) => item.name === profileName)
+      .sort((left, right) => right.revision - left.revision)[0];
+    if (!profile) throw new Error("Execution profile not found");
+    const argv = buildLlamaServerCommand(
+      config.llamaServer.executable,
+      { path: model.path, alias: model.alias },
+      profile.parameters,
+      port,
+      join(config.dataDir, "external-slots"),
+    );
+    return { modelId, profileName, profile, port, argv, fish: renderFishLauncher(argv) };
+  };
+  const refreshActiveLauncher = (modelId: string, profileName: string) => {
+    if (store.getSetting("externalModelId") !== modelId || store.getSetting("externalProfileName") !== profileName) return;
+    const port = Number(store.getSetting("externalPort") ?? 8080);
+    writeActiveLauncher(config.dataDir, buildExternalLauncher(modelId, profileName, port).fish);
+  };
   const hasActiveFollowup = (runId: string) => store.listTaskRuns(runId).some((taskRun) =>
     taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running"));
 
@@ -121,8 +153,25 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!engine) throw new Error("Model test engine is unavailable");
     return engine.testModel(request.params.id, runnerId);
   });
+  app.get<{ Params: { id: string } }>("/api/models/:id/external-launcher", async (request) => {
+    const query = parse(externalLauncherQuerySchema, request.query);
+    return buildExternalLauncher(request.params.id, query.profileName, query.port);
+  });
+  app.put("/api/external-launcher", async (request) => {
+    const selection = parse(externalLauncherActivationSchema, request.body);
+    const launcher = buildExternalLauncher(selection.modelId, selection.profileName, selection.port);
+    const path = writeActiveLauncher(config.dataDir, launcher.fish);
+    store.setSetting("externalModelId", selection.modelId);
+    store.setSetting("externalProfileName", selection.profileName);
+    store.setSetting("externalPort", String(selection.port));
+    return { ...selection, path, argv: launcher.argv, fish: launcher.fish };
+  });
   app.get<{ Querystring: { modelId?: string } }>("/api/profiles", async (request) => store.listExecutionProfiles(request.query.modelId));
-  app.post("/api/profiles", async (request, reply) => reply.code(201).send(store.createExecutionProfile(parse(createExecutionProfileSchema, request.body))));
+  app.post("/api/profiles", async (request, reply) => {
+    const profile = store.createExecutionProfile(parse(createExecutionProfileSchema, request.body));
+    refreshActiveLauncher(profile.modelId, profile.name);
+    return reply.code(201).send(profile);
+  });
   app.post<{ Params: { id: string } }>("/api/profiles/:id/calibrate", async (request) => {
     if (!engine) throw new Error("Calibration engine is unavailable");
     return engine.calibrate(request.params.id);

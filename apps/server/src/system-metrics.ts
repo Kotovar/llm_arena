@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { writeFileSync, appendFileSync } from "node:fs";
 import type { ProcessSupervisor } from "./process-supervisor.js";
 
@@ -11,6 +12,30 @@ export type GpuSample = {
   temperatureC: number;
   powerW: number;
 };
+
+export type GpuInfo = {
+  name: string;
+  totalMiB: number;
+  usedMiB: number;
+  freeMiB: number;
+};
+
+export function parseGpuInfo(line: string): GpuInfo | undefined {
+  const [name, ...rawMemory] = line.split(",").map((value) => value.trim());
+  const memory = rawMemory.map(Number);
+  if (!name || memory.length !== 3 || memory.some((value) => !Number.isFinite(value))) return undefined;
+  return { name, totalMiB: memory[0]!, usedMiB: memory[1]!, freeMiB: memory[2]! };
+}
+
+export function readGpuInfo(executable: string): GpuInfo {
+  const result = spawnSync(executable, [
+    "--query-gpu=name,memory.total,memory.used,memory.free",
+    "--format=csv,noheader,nounits",
+  ], { encoding: "utf8" });
+  const gpu = parseGpuInfo(result.stdout.trim().split("\n")[0] ?? "");
+  if (result.status !== 0 || !gpu) throw new Error("Unable to read NVIDIA GPU information");
+  return gpu;
+}
 
 export function parseGpuSample(line: string): GpuSample | undefined {
   const values = line.split(",").map((value) => Number(value.trim()));
