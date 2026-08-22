@@ -73,9 +73,16 @@ The command builder omits `-c` for automatic context, emits `--fit on --fit-targ
 
 Each local model card contains a `For external launch` section showing the selected profile, its effective Arena-controlled parameters, and the complete shell-escaped fish command. The external port defaults to `8080` and is validated as a positive TCP port.
 
-The section provides `Copy command` and `Use for omp-ornith`. The latter stores the selected model ID, profile name, and port as active and atomically regenerates `<dataDir>/exports/active-model.fish` from the latest version of that profile. The generated script contains a direct `exec llama-server` argv and runs without the Arena server or browser.
+The section provides `Copy command` and `Use with OMP`. The latter stores the selected model ID, profile name, and port as active and atomically regenerates `<dataDir>/exports/active-model.fish` from the latest version of that profile. The generated script contains a direct `exec llama-server` argv and runs without the Arena server or browser.
 
-The existing `/home/kotovar/.local/bin/ornith-server` needs one change to execute the stable generated launcher. The UI shows the exact one-line replacement. After that, choosing a different active model/profile or saving a new profile version regenerates the same file. The UI always identifies the active external model and shows the generated command.
+The external integration uses model-neutral names:
+
+- `local-model-server` executes the stable generated launcher;
+- `omp-local` starts the Zellij session;
+- `omp-local.kdl` contains the server and OMP panes;
+- the Zellij session is named `omp-local`.
+
+The current `omp-ornith`, `ornith-server`, and `omp-ornith.kdl` files need a one-time migration to those names. A compatibility `omp-ornith` wrapper may forward to `omp-local`, but no generated UI copy or persistent setting refers to a specific model. The UI shows the exact one-line server wrapper. After setup, choosing a different active model/profile or saving a new profile version regenerates the same launcher. The UI always identifies the active external model and shows the generated command.
 
 Automatic exports retain `--fit on`, the VRAM target, and minimum context rather than freezing one observed layer split. This lets `omp-ornith` safely re-fit to the same machine's current free VRAM at every start. Manual exports contain the exact saved values.
 
