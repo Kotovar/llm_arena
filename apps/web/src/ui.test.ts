@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
+import { chooseRunner, defaultLocalProfile, followupCountLabel, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel } from "./ui.js";
+import type { TaskRun } from "./types.js";
 
 const runners = [
   { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"], envPassthrough: [] },
@@ -113,6 +114,17 @@ describe("интерфейс запуска", () => {
     expect(reviewSummary([review], 2)).toEqual({ earned: 34, possible: 40, reviewed: 1, total: 2 });
     expect(formatReviewSummary(undefined)).toBe("Не оценено");
     expect(formatReviewSummary(reviewSummary([review], 2))).toBe("34/40 · оценено 1 из 2");
+  });
+
+  it("сопоставляет результаты по версии промпта, а не позиции", () => {
+    expect(matchTaskRuns(
+      [{ id: "l1", task_revision_id: "a" }, { id: "l2", task_revision_id: "b" }] as TaskRun[],
+      [{ id: "r1", task_revision_id: "b" }, { id: "r2", task_revision_id: "c" }] as TaskRun[],
+    )).toMatchObject([
+      { revisionId: "a", left: { id: "l1" } },
+      { revisionId: "b", left: { id: "l2" }, right: { id: "r1" } },
+      { revisionId: "c", right: { id: "r2" } },
+    ]);
   });
 
   it("показывает количество дополнительных промптов", () => {

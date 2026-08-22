@@ -1,15 +1,15 @@
-import { StrictMode, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { StrictMode, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, RouterProvider, createRootRoute, createRoute, createRouter, useNavigate } from "@tanstack/react-router";
-import { api, apiText } from "./api.js";
+import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from "@tanstack/react-query";
+import { RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { api } from "./api.js";
 import { Launcher } from "./screens/launcher.js";
+import { ComparePage } from "./screens/compare.js";
 import { ModelsPage } from "./screens/models.js";
-import { RunDetail, RunsPage, metric } from "./screens/results.js";
+import { RunDetail, RunsPage } from "./screens/results.js";
 import { SettingsPage } from "./screens/settings.js";
-import { Empty, Page, Panel, Shell, Status, useData } from "./shell.js";
-import type { Benchmark, Fixture, Model, Profile, Run, Runner, Task, TaskRun } from "./types.js";
-import { followupCountLabel, formatMeasuredMetric, reviewSaveLabel, runProgress, shouldFollowOutput } from "./ui.js";
+import { Empty, Page, Panel, Shell, useData } from "./shell.js";
+import type { Benchmark, Model, Profile, Run, Runner, Task } from "./types.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2_000, retry: 1 } } });
@@ -52,17 +52,6 @@ function BenchmarksPage() {
     <Panel title="Создать набор"><form onSubmit={submit} className="benchmark-form"><label>Название<input name="name" required /></label><fieldset><legend>Промпты</legend>{tasks.data?.map((task) => <label className="check" key={task.id}><input type="checkbox" name="tasks" value={task.currentRevision.id} />{task.currentRevision.name}<small>версия {task.currentRevision.revision}</small></label>)}</fieldset><button className="primary">Сохранить</button></form></Panel>
     <div className="stack roomy">{benchmarks.data?.map((benchmark) => <Panel key={benchmark.id} title={benchmark.currentRevision.name} action={<span className="mono">версия {benchmark.currentRevision.revision} · промптов: {benchmark.currentRevision.tasks.length}</span>}><ol className="task-list">{benchmark.currentRevision.tasks.map((task) => <li key={task.id}>{task.name}</li>)}</ol><form className="runbar" onSubmit={(event) => enqueue(event, benchmark)}><select name="modelId" required>{models.data?.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select><select name="resultMode" required><option value="text">Текстовый ответ</option><option value="web">Web-приложение</option></select><select name="runnerId" required>{runners.data?.map((runner) => <option key={runner.id} value={runner.id}>{runner.name}</option>)}</select><button className="primary">Запустить</button></form></Panel>)}</div>
   </Page>;
-}
-
-function ComparePage() {
-  const runs = useData<Run[]>("runs", "/runs"); const models = useData<Model[]>("models", "/models");
-  const completed = runs.data?.filter((run) => run.status === "completed") ?? [];
-  const [left, setLeft] = useState(""); const [right, setRight] = useState("");
-  const leftRun = useQuery({ queryKey: ["compare", left], queryFn: () => api<Run>(`/runs/${left}`), enabled: Boolean(left) });
-  const rightRun = useQuery({ queryKey: ["compare", right], queryFn: () => api<Run>(`/runs/${right}`), enabled: Boolean(right) });
-  const rows = useMemo(() => Array.from({ length: Math.max(leftRun.data?.taskRuns?.length ?? 0, rightRun.data?.taskRuns?.length ?? 0) }, (_, index) => [leftRun.data?.taskRuns?.[index], rightRun.data?.taskRuns?.[index]]), [leftRun.data, rightRun.data]);
-  const label = (run: Run) => `${models.data?.find((model) => model.id === run.model_id)?.name ?? run.model_id.slice(0, 8)} · ${run.runner_id}`;
-  return <Page title="Сравнение результатов" eyebrow="Сравнение" intro="Выберите два завершённых запуска. Несопоставимые метрики облачных CLI остаются без значения."><div className="compare-pickers"><select value={left} onChange={(event) => setLeft(event.target.value)}><option value="">Первый запуск</option>{completed.map((run) => <option key={run.id} value={run.id}>{label(run)}</option>)}</select><span>и</span><select value={right} onChange={(event) => setRight(event.target.value)}><option value="">Второй запуск</option>{completed.map((run) => <option key={run.id} value={run.id}>{label(run)}</option>)}</select></div>{rows.length ? <div className="compare-grid"><strong>Промпт</strong><strong>{leftRun.data ? label(leftRun.data) : "Первый"}</strong><strong>{rightRun.data ? label(rightRun.data) : "Второй"}</strong>{rows.flatMap(([a,b], index) => { const ar = a?.result_json ? JSON.parse(a.result_json) as Record<string,unknown> : undefined; const br = b?.result_json ? JSON.parse(b.result_json) as Record<string,unknown> : undefined; return [<span key={`t${index}`}>Промпт {index+1}</span>,<div key={`a${index}`}><Status value={a?.status ?? "missing"}/><b>{metric(ar,"totalDurationMs")}</b><small>Выход: {metric(ar,"outputTokens")}</small></div>,<div key={`b${index}`}><Status value={b?.status ?? "missing"}/><b>{metric(br,"totalDurationMs")}</b><small>Выход: {metric(br,"outputTokens")}</small></div>]; })}</div> : <Empty>Выберите два завершённых запуска.</Empty>}</Page>;
 }
 
 const rootRoute = createRootRoute({ component: Shell });

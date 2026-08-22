@@ -1,4 +1,4 @@
-import type { Model, Runner, Task } from "./types.js";
+import type { Model, Runner, Task, TaskRun } from "./types.js";
 
 const statusLabels: Record<string, string> = {
   pending: "В очереди",
@@ -29,6 +29,13 @@ export function chooseRunner(
 
 export function initializeTaskSelection(current: string[] | null, taskIds: string[]) {
   return current ?? taskIds;
+}
+
+export function matchTaskRuns(left: TaskRun[], right: TaskRun[]) {
+  const leftByRevision = new Map(left.map((taskRun) => [taskRun.task_revision_id, taskRun]));
+  const rightByRevision = new Map(right.map((taskRun) => [taskRun.task_revision_id, taskRun]));
+  const revisionIds = [...leftByRevision.keys(), ...[...rightByRevision.keys()].filter((id) => !leftByRevision.has(id))];
+  return revisionIds.map((revisionId) => ({ revisionId, left: leftByRevision.get(revisionId), right: rightByRevision.get(revisionId) }));
 }
 
 export function defaultLocalProfile(modelId: string) {
