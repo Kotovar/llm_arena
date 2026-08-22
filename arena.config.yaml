@@ -40,12 +40,18 @@ fixtures:
     instructions: |
       Работай в текущей директории как coding-agent. Создай реальные файлы готового web-приложения, а не вставляй реализацию только в итоговый ответ.
       Приложение должно запускаться встроенным статическим preview-сервером: сохрани точку входа в index.html и используй браузерные HTML, CSS и JavaScript без обязательной установки зависимостей.
-      Не удаляй server.mjs. После реализации проверь синтаксис созданных JavaScript-файлов. В итоговом ответе кратко перечисли сделанное.
+      Не удаляй server.mjs и check-assets.mjs. Каждый файл, на который ссылается index.html, должен реально существовать рядом: приложение открывают без интернета, поэтому внешние CDN не подойдут.
+      После реализации проверь синтаксис созданных JavaScript-файлов. В итоговом ответе кратко перечисли сделанное.
     checks:
       - id: preview-server
         label: Preview server
         command:
           argv: [node, --check, server.mjs]
+          timeoutMs: 60000
+      - id: app-files
+        label: App files
+        command:
+          argv: [node, check-assets.mjs]
           timeoutMs: 60000
     preview:
       command:
