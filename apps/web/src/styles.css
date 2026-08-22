@@ -116,7 +116,7 @@ dl { margin: 0; }dl div { display: grid; grid-template-columns: 130px 1fr; paddi
 .profile-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
 .profile-summary div { display: block; min-width: 0; padding: 9px; border: 0; background: #0c171d; }
 .profile-summary dt { font-size: 10px; }
-.profile-summary dd { margin-top: 5px; font-size: 11px; overflow-wrap: anywhere; }
+.profile-summary dd { margin-top: 5px; font-size: 11px; word-break: normal; overflow-wrap: normal; }
 .gpu-report { display: flex; justify-content: space-between; gap: 12px; padding: 11px 12px; border-left: 3px solid var(--good); background: rgba(117, 211, 164, .07); }
 .gpu-report span { color: var(--muted); font-size: 12px; }
 .model-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
