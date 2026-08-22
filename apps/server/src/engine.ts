@@ -1,10 +1,13 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { FixtureManifest, LlamaProfile } from "@llm-arena/shared";
 import { finalizeWorkspace, prepareWorkspace } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { LlamaCppServerManager } from "./llama-server.js";
+import { allocatePort } from "./port.js";
+import { renderPreviewArgv, waitReady } from "./preview.js";
 import { ProcessSupervisor } from "./process-supervisor.js";
+import { buildScreenshotArgv } from "./screenshot.js";
 import { createRedactor } from "./redact.js";
 import { createRunner } from "./runners/index.js";
 import { createLiveOutput } from "./runners/live-output.js";
@@ -205,7 +208,8 @@ export class BenchmarkEngine {
           const artifacts = effectiveTask.kind === "coding" ? finalizeWorkspace(prepared) : undefined;
           const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, signal) : [];
           const status = result.exitCode === 0 ? "completed" : "failed";
-          const saved = { ...result, artifacts, checks };
+          const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, signal);
+          const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
           this.store.saveTaskRunResult(taskRun.id, saved, status, status === "failed" ? `Runner exited ${result.exitCode}` : undefined);
         } catch (error) {
@@ -288,7 +292,8 @@ export class BenchmarkEngine {
         : undefined;
       const checks = snapshot.fixture ? await this.#runChecks(snapshot.fixture, workspace, followup.artifact_path, signal) : [];
       const status = result.exitCode === 0 ? "completed" : "failed";
-      const saved = { ...result, artifacts, checks };
+      const previewImage = status === "completed" && await this.#capturePreview(snapshot.fixture, workspace, taskRun.artifact_path, signal);
+      const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
       writeFileSync(join(followup.artifact_path, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
       this.store.saveFollowupResult(followup.id, saved, status, status === "failed" ? `Runner exited ${result.exitCode}` : undefined);
     } finally {
@@ -332,6 +337,52 @@ export class BenchmarkEngine {
         this.#emit({ type: "task.stderr", runId: input.runId, taskRunId: input.taskRunId, data: safe });
       },
     });
+  }
+
+  // Поднимает результат на свободном порту и снимает превью браузером. Любой сбой — просто нет картинки.
+  async #capturePreview(fixture: FixtureManifest | undefined, workspace: string, artifactRoot: string, signal: AbortSignal): Promise<boolean> {
+    const preview = fixture?.preview;
+    if (!preview || signal.aborted) return false;
+    const logPath = join(artifactRoot, "preview-shot.log");
+    const target = join(artifactRoot, "preview.png");
+    const profileDir = join(artifactRoot, "browser-profile");
+    const append = (text: string) => appendFileSync(logPath, text);
+    const port = await allocatePort();
+    let server;
+    try {
+      server = this.supervisor.spawn({
+        argv: renderPreviewArgv(preview.command.argv, port),
+        cwd: preview.command.cwd ? resolve(workspace, preview.command.cwd) : workspace,
+        env: { PORT: String(port) },
+        timeoutMs: 120_000,
+        onStdout: append,
+        onStderr: append,
+      });
+    } catch (error) {
+      append(`${(error as Error).message}\n`);
+      return false;
+    }
+    try {
+      server.stdin.end();
+      await waitReady(`http://127.0.0.1:${port}${preview.readyPath}`, server, 60_000);
+      const browser = this.supervisor.spawn({
+        argv: buildScreenshotArgv(this.config.browser, `http://127.0.0.1:${port}${preview.readyPath}`, target, profileDir),
+        cwd: workspace,
+        // Снимок необязателен, поэтому ждём его заметно меньше, чем проверку.
+        timeoutMs: 120_000,
+        onStdout: append,
+        onStderr: append,
+      });
+      browser.stdin.end();
+      await browser.completed;
+      return existsSync(target);
+    } catch (error) {
+      append(`${(error as Error).message}\n`);
+      return false;
+    } finally {
+      await server.stop();
+      rmSync(profileDir, { recursive: true, force: true });
+    }
   }
 
   async #runChecks(fixture: FixtureManifest, workspace: string, artifactRoot: string, signal: AbortSignal) {

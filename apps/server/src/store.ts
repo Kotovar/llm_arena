@@ -379,12 +379,24 @@ export function createStore(filename: string) {
     listModels() {
       return all<ModelRow>("SELECT * FROM models WHERE archived_at IS NULL ORDER BY created_at").map(mapModel);
     },
+    getActiveModel(id: string) {
+      const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NULL", id);
+      return row ? mapModel(row) : undefined;
+    },
     archiveModel(id: string) {
       const timestamp = now();
       sqlite.prepare("UPDATE models SET archived_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, id);
     },
     hasActiveRuns(modelId: string) {
-      return Boolean(one<{ id: string }>("SELECT id FROM benchmark_runs WHERE model_id = ? AND status IN ('pending', 'running') LIMIT 1", modelId));
+      const run = one<{ id: string }>("SELECT id FROM benchmark_runs WHERE model_id = ? AND status IN ('pending', 'running') LIMIT 1", modelId);
+      if (run) return true;
+      return Boolean(one<{ id: string }>(`
+        SELECT task_run_followups.id FROM task_run_followups
+        JOIN task_runs ON task_runs.id = task_run_followups.task_run_id
+        JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
+        WHERE benchmark_runs.model_id = ? AND task_run_followups.status IN ('pending', 'running')
+        LIMIT 1
+      `, modelId));
     },
     createExecutionProfile(input: CreateExecutionProfile) {
       const parametersJson = JSON.stringify(input.parameters);

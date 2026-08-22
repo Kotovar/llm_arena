@@ -20,7 +20,7 @@ export function ModelsPage() {
   const [nameTouched, setNameTouched] = useState(false);
   const [cloudProvider, setCloudProvider] = useState<"anthropic" | "openai">("anthropic");
   const [cloudModelRef, setCloudModelRef] = useState("");
-  const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; message: string }>>({});
+  const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; title: string; detail: string }>>({});
   const [hardware, setHardware] = useState<Record<string, CalibrationResult>>( {});
 
   const invalidateModels = async () => {
@@ -55,8 +55,8 @@ export function ModelsPage() {
   });
   const testModel = useMutation({
     mutationFn: ({ modelId, runnerId }: { modelId: string; runnerId: string }) => api<{ ok: boolean; answer: string; durationMs: number }>(`/models/${modelId}/test`, { method: "POST", body: JSON.stringify({ runnerId }) }),
-    onSuccess: (result, variables) => setDiagnostics((current) => ({ ...current, [variables.modelId]: { ok: true, message: `Работает · ${formatDuration(result.durationMs)} · ${result.answer.slice(0, 80)}` } })),
-    onError: (error, variables) => setDiagnostics((current) => ({ ...current, [variables.modelId]: { ok: false, message: error.message } })),
+    onSuccess: (result, variables) => setDiagnostics((current) => ({ ...current, [variables.modelId]: { ok: true, title: `Отвечает · ${formatDuration(result.durationMs)}`, detail: result.answer.slice(0, 200) } })),
+    onError: (error, variables) => setDiagnostics((current) => ({ ...current, [variables.modelId]: { ok: false, title: "Не отвечает", detail: error.message } })),
   });
 
   function submitLocal(event: FormEvent<HTMLFormElement>) {
@@ -136,7 +136,6 @@ export function ModelsPage() {
         const checking = testModel.isPending && testModel.variables?.modelId === model.id;
         const modelProfiles = visibleProfiles.filter((profile) => profile.modelId === model.id);
         return <details className="model-card" key={model.id}><summary className="model-card-summary"><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
-          {diagnostics[model.id] ? <p className={diagnostics[model.id]?.ok ? "success" : "error"}>{diagnostics[model.id]?.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для omp-local</span> : null}</div>
             <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div></dl>
@@ -145,7 +144,8 @@ export function ModelsPage() {
             {activate.error && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? <p className="error">{activate.error.message}</p> : null}
             <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending && calibrate.variables === profile.id}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : "Проверить автоконфигурацию"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name}>{activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button></div>
           </section>; })}
-          <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button><small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small><button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { if (window.confirm(`Отключить «${model.name}»? Результаты прошлых запусков останутся, файл модели не удаляется.`)) disconnect.mutate(model.id); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
+          <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button>{checking ? <span className="check-badge"><span className="spinner" />Ждём ответ модели…</span> : diagnostics[model.id] ? <span className={diagnostics[model.id]?.ok ? "check-badge check-pass" : "check-badge check-fail"}>{diagnostics[model.id]?.ok ? "✓" : "✕"} {diagnostics[model.id]?.title}</span> : <small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small>}<button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { if (window.confirm(`Отключить «${model.name}»? Результаты прошлых запусков останутся, файл модели не удаляется.`)) disconnect.mutate(model.id); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
+          {diagnostics[model.id]?.detail ? <p className="model-check-detail">{diagnostics[model.id]?.detail}</p> : null}
           {disconnect.error && disconnect.variables === model.id ? <p className="error">{disconnect.error.message}</p> : null}
         </div></details>;
       })}{!models.data?.length ? <Empty>Пока нет подключённых моделей.</Empty> : null}</div></Panel>

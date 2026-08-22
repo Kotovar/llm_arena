@@ -7,6 +7,8 @@ llamaServer:
   executable: llama-server
   startupTimeoutMs: 900000
 nvidiaSmi: nvidia-smi
+# Браузер для снимка готового web-приложения. Если его нет, снимок просто не делается.
+browser: google-chrome-stable
 defaults:
   taskTimeoutMs: 1800000
   checkTimeoutMs: 600000
@@ -21,21 +23,13 @@ runners:
     name: OMP
     kind: omp
     exec: [omp]
-  - id: claude
-    name: Claude Code
-    kind: claude-code
-    exec: [claude]
   - id: claude-proxy
-    name: Claude Code (proxy)
+    name: Claude Code
     kind: claude-code
     default: true
     exec: [fish, -lc, "claudep $argv", "--"]
-  - id: codex
-    name: Codex CLI
-    kind: codex
-    exec: [codex]
   - id: codex-proxy
-    name: Codex CLI (proxy)
+    name: Codex CLI
     kind: codex
     default: true
     exec: [fish, -lc, "codexp $argv", "--"]

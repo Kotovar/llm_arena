@@ -71,7 +71,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   const app = Fastify({ logger: false });
   const effectiveModelDirectory = () => store.getSetting("modelDirectory") ?? config.modelDirectory;
   const buildExternalLauncher = (modelId: string, profileName: string, port: number) => {
-    const model = store.getModel(modelId);
+    const model = store.getActiveModel(modelId);
     if (!model || model.kind !== "local-gguf" || !model.path || !model.alias) throw new Error("Local model not found");
     const profile = store.listExecutionProfiles(modelId)
       .filter((item) => item.name === profileName)
@@ -189,7 +189,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return reply.code(204).send();
   });
   app.post<{ Params: { id: string } }>("/api/models/:id/test", async (request) => {
-    if (!store.getModel(request.params.id)) throw new Error("Model not found");
+    if (!store.getActiveModel(request.params.id)) throw new Error("Model not found");
     const { runnerId } = parse(modelTestSchema, request.body);
     if (!config.runners.some((runner) => runner.id === runnerId)) throw new Error("Runner is not configured");
     if (!engine) throw new Error("Model test engine is unavailable");
@@ -216,12 +216,16 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   app.post<{ Params: { id: string } }>("/api/profiles/:id/calibrate", async (request) => {
     if (!engine) throw new Error("Calibration engine is unavailable");
+    const profile = store.getExecutionProfile(request.params.id);
+    if (!profile || !store.getActiveModel(profile.modelId)) throw new Error("Model not found");
     return engine.calibrate(request.params.id);
   });
 
   app.get("/api/runs", async () => store.listRuns());
   app.post("/api/runs", async (request, reply) => {
-    const run = store.createRun(parse(createRunSchema, request.body));
+    const input = parse(createRunSchema, request.body);
+    if (!store.getActiveModel(input.modelId)) throw new Error("Model not found");
+    const run = store.createRun(input);
     engine?.wake();
     return reply.code(202).send(run);
   });
@@ -313,6 +317,14 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const path = join(run.artifact_path, filename);
     reply.type("text/plain");
     return existsSync(path) ? createReadStream(path) : "";
+  });
+  app.get<{ Params: { id: string } }>("/api/task-runs/:id/preview-image", async (request, reply) => {
+    const run = store.getTaskRun(request.params.id);
+    if (!run) throw new Error("Task run not found");
+    const path = join(run.artifact_path, "preview.png");
+    if (!existsSync(path)) throw new Error("Preview image not found");
+    reply.type("image/png");
+    return createReadStream(path);
   });
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>("/api/task-runs/:id/files", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);

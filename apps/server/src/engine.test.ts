@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -128,6 +129,11 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(JSON.parse(taskRun.snapshot_json).task).toMatchObject({ kind: "coding", fixtureId: "web-app" });
     expect(readFileSync(join(taskRun.artifact_path, "workspace", "index.html"), "utf8")).toBe("<h1>Готовое приложение</h1>");
     expect(JSON.parse(taskRun.result_json!).finalAnswer).toContain("Создай реальные файлы");
+    // Снимок делается настоящим браузером, поэтому проверяем его только там, где браузер есть.
+    if (spawnSync(config.browser, ["--version"]).status === 0) {
+      expect(JSON.parse(taskRun.result_json!).previewImage).toBe(true);
+      expect(existsSync(join(taskRun.artifact_path, "preview.png"))).toBe(true);
+    }
     const preview = new PreviewManager(store, config, new ProcessSupervisor("web-preview-test", 100));
     const started = await preview.start(taskRun.id);
     expect(await fetch(started.url).then((response) => response.text())).toBe("<h1>Готовое приложение</h1>");

@@ -10,6 +10,7 @@ const configSchema = z.object({
   modelDirectory: z.string().min(1),
   llamaServer: z.object({ executable: z.string().min(1), startupTimeoutMs: z.number().int().positive() }),
   nvidiaSmi: z.string().min(1),
+  browser: z.string().min(1).default("google-chrome-stable"),
   defaults: z.object({
     taskTimeoutMs: z.number().int().positive(),
     checkTimeoutMs: z.number().int().positive(),

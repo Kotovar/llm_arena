@@ -11,8 +11,8 @@ export function renderPreviewArgv(argv: readonly string[], port: number): string
   return argv.map((argument) => argument.replaceAll("{port}", String(port)));
 }
 
-async function waitReady(url: string, process: OwnedProcess): Promise<void> {
-  const deadline = performance.now() + 120_000;
+export async function waitReady(url: string, process: OwnedProcess, timeoutMs = 120_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     const status = await Promise.race([
       fetch(url).then((response) => (response.ok ? "ready" : "loading")).catch(() => "loading"),
@@ -22,7 +22,7 @@ async function waitReady(url: string, process: OwnedProcess): Promise<void> {
     if (status === "exited") throw new Error("Preview process exited before readiness");
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
-  throw new Error("Preview readiness timeout");
+  throw new Error(`Preview readiness timeout after ${timeoutMs} ms`);
 }
 
 export class PreviewManager {

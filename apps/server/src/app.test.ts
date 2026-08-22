@@ -43,6 +43,40 @@ describe("REST API", () => {
     expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}` })).json().model_id).toBe(modelId);
     expect((await app.inject({ method: "GET", url: "/api/local-model-files" })).json()[0].connectedModelId).toBeNull();
     expect((await app.inject({ method: "DELETE", url: `/api/models/${modelId}` })).statusCode).toBe(204);
+    // Отключённую модель больше нельзя запустить, проверить или снова повесить на omp-local.
+    const rerun = await app.inject({ method: "POST", url: "/api/runs", payload: { benchmarkRevisionId: benchmark.currentRevision.id, modelId, executionProfileId: null, runnerId: "llama-chat", resultMode: "text" } });
+    expect(rerun.statusCode).toBe(404);
+    expect((await app.inject({ method: "POST", url: `/api/models/${modelId}/test`, payload: { runnerId: "llama-chat" } })).statusCode).toBe(404);
+  });
+
+  it("frees omp-local when its model is disconnected", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-omp-release-"));
+    directories.push(directory);
+    const modelsRoot = join(directory, "models");
+    mkdirSync(modelsRoot);
+    writeFileSync(join(modelsRoot, "Local.gguf"), "gguf");
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const app = buildApp({ store, config });
+    store.setSetting("modelDirectory", modelsRoot);
+
+    const connected = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "Local.gguf", name: "Local", profileName: "Automatic", profile: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 } } });
+    const modelId = connected.json().model.id as string;
+
+    expect((await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId, profileName: "Automatic", port: 8080 } })).statusCode).toBe(200);
+    expect(existsSync(join(directory, "exports", "active-model.fish"))).toBe(true);
+
+    expect((await app.inject({ method: "DELETE", url: `/api/models/${modelId}` })).statusCode).toBe(204);
+
+    expect((await app.inject({ method: "GET", url: "/api/settings" })).json().externalModelId).toBeNull();
+    for (const filename of ["active-model.fish", "active-omp.fish", "omp-local.kdl"]) {
+      expect(existsSync(join(directory, "exports", filename))).toBe(false);
+    }
+    // Повторная активация той же модели не должна воскрешать экспорт.
+    const reactivate = await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId, profileName: "Automatic", port: 8080 } });
+    expect(reactivate.statusCode).toBe(404);
+    expect(existsSync(join(directory, "exports", "active-model.fish"))).toBe(false);
   });
 
   it("opens only the saved coding workspace in Zed", async () => {
