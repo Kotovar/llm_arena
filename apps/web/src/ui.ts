@@ -27,20 +27,22 @@ export function chooseRunner(
   return matching.find((runner) => runner.default) ?? matching[0] ?? runners[0];
 }
 
-export function defaultLocalProfile(modelId: string, context: number, nCpuMoe: number) {
+export function defaultLocalProfile(modelId: string) {
   return {
     modelId,
-    name: "Основной",
+    name: "Automatic",
     parameters: {
-      context,
-      nGpuLayers: "all" as const,
-      nCpuMoe,
+      context: "auto" as const,
+      nGpuLayers: "auto" as const,
       cacheTypeK: "q8_0",
       cacheTypeV: "q8_0",
       batchSize: 1024,
       ubatchSize: 512,
-      flashAttention: true,
+      flashAttention: "auto" as const,
       cacheReuse: 256,
+      fit: true,
+      fitTargetMiB: 750,
+      fitContextMin: 4096,
     },
   };
 }

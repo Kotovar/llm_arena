@@ -136,7 +136,7 @@ function ModelsPage() {
   const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; message: string }>>({});
   const create = useMutation({ mutationFn: async (body: Record<string, unknown>) => {
     const model = await api<Model>("/models", { method: "POST", body: JSON.stringify(body) });
-    if (body.kind === "local-gguf") await api("/profiles", { method: "POST", body: JSON.stringify(defaultLocalProfile(model.id, Number(body.context), Number(body.nCpuMoe))) });
+    if (body.kind === "local-gguf") await api("/profiles", { method: "POST", body: JSON.stringify(defaultLocalProfile(model.id)) });
     return model;
   }, onSuccess: () => { client.invalidateQueries({ queryKey: ["models"] }); client.invalidateQueries({ queryKey: ["profiles"] }); } });
   const calibrate = useMutation({ mutationFn: (id: string) => api(`/profiles/${id}/calibrate`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["profiles"] }) });

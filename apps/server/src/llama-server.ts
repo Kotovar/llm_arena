@@ -21,16 +21,16 @@ export function buildLlamaServerCommand(
     model.path,
     "-a",
     model.alias,
-    "-fit",
-    "off",
+    "--fit",
+    profile.fit ? "on" : "off",
     "-ngl",
     String(profile.nGpuLayers),
   ];
+  if (profile.fit) command.push("--fit-target", String(profile.fitTargetMiB), "--fit-ctx", String(profile.fitContextMin));
   if (profile.nCpuMoe !== undefined) command.push("--n-cpu-moe", String(profile.nCpuMoe));
   if (reasoningEffort) command.push("--reasoning-effort", reasoningEffort);
+  if (profile.context !== "auto") command.push("-c", String(profile.context));
   command.push(
-    "-c",
-    String(profile.context),
     "-ctk",
     profile.cacheTypeK,
     "-ctv",
@@ -40,7 +40,7 @@ export function buildLlamaServerCommand(
     "-ub",
     String(profile.ubatchSize),
     "-fa",
-    profile.flashAttention ? "on" : "off",
+    profile.flashAttention === "auto" ? "auto" : profile.flashAttention ? "on" : "off",
     "--jinja",
     "-np",
     "1",

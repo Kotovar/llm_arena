@@ -59,17 +59,24 @@ export const createModelSchema = z
   });
 
 export const llamaProfileSchema = z.object({
-  context: z.number().int().positive(),
-  nGpuLayers: z.union([z.literal("all"), z.number().int().nonnegative()]),
+  context: z.union([z.literal("auto"), z.number().int().positive()]),
+  nGpuLayers: z.union([z.literal("auto"), z.literal("all"), z.number().int().nonnegative()]),
   nCpuMoe: z.number().int().nonnegative().optional(),
   cacheTypeK: z.string().min(1),
   cacheTypeV: z.string().min(1),
   batchSize: z.number().int().positive(),
   ubatchSize: z.number().int().positive(),
-  flashAttention: z.boolean(),
+  flashAttention: z.union([z.literal("auto"), z.boolean()]),
   cacheReuse: z.number().int().nonnegative(),
+  fit: z.boolean().optional(),
+  fitTargetMiB: z.number().int().positive().optional(),
+  fitContextMin: z.number().int().positive().optional(),
   temperature: z.number().min(0).max(2).optional(),
   seed: z.number().int().optional(),
+}).superRefine((value, context) => {
+  if (value.fit && (!value.fitTargetMiB || !value.fitContextMin)) {
+    context.addIssue({ code: "custom", message: "Automatic fit requires target VRAM and minimum context" });
+  }
 });
 
 export const createExecutionProfileSchema = z.object({

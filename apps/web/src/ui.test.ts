@@ -34,10 +34,19 @@ describe("интерфейс запуска", () => {
   });
 
   it("создаёт безопасный базовый профиль для подключённой GGUF-модели", () => {
-    expect(defaultLocalProfile("2d2b5de7-7469-48a7-b625-2ff4509fa8a7", 65_536, 12)).toMatchObject({
+    expect(defaultLocalProfile("2d2b5de7-7469-48a7-b625-2ff4509fa8a7")).toMatchObject({
       modelId: "2d2b5de7-7469-48a7-b625-2ff4509fa8a7",
-      name: "Основной",
-      parameters: { context: 65_536, nGpuLayers: "all", nCpuMoe: 12, cacheTypeK: "q8_0", cacheTypeV: "q8_0" },
+      name: "Automatic",
+      parameters: {
+        context: "auto",
+        nGpuLayers: "auto",
+        cacheTypeK: "q8_0",
+        cacheTypeV: "q8_0",
+        flashAttention: "auto",
+        fit: true,
+        fitTargetMiB: 750,
+        fitContextMin: 4096,
+      },
     });
   });
 

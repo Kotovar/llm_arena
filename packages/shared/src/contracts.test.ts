@@ -1,5 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { createRunSchema, createTaskSchema, measuredSchema, reviewSchema, runnerDefinitionSchema } from "./index.js";
+import { createRunSchema, createTaskSchema, llamaProfileSchema, measuredSchema, reviewSchema, runnerDefinitionSchema } from "./index.js";
+
+describe("llama.cpp profile", () => {
+  it("accepts a complete automatic fitting profile", () => {
+    expect(llamaProfileSchema.parse({
+      context: "auto",
+      nGpuLayers: "auto",
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      batchSize: 1024,
+      ubatchSize: 512,
+      flashAttention: "auto",
+      cacheReuse: 256,
+      fit: true,
+      fitTargetMiB: 750,
+      fitContextMin: 4096,
+    })).toMatchObject({ fit: true, context: "auto" });
+  });
+
+  it("rejects automatic fitting without its VRAM and context limits", () => {
+    expect(llamaProfileSchema.safeParse({
+      context: "auto",
+      nGpuLayers: "auto",
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      batchSize: 1024,
+      ubatchSize: 512,
+      flashAttention: "auto",
+      cacheReuse: 256,
+      fit: true,
+    }).success).toBe(false);
+  });
+});
 
 describe("task input", () => {
   it("rejects a coding task without a trusted fixture", () => {
