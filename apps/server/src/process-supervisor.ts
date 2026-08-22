@@ -43,6 +43,9 @@ export class ProcessSupervisor {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    // Без слушателя событие "error" от spawn валит весь серверный процесс.
+    child.on("error", (error) => options.onStderr?.(`${error.message}\n`));
+    if (!child.pid) throw new Error(`Cannot start ${executable}: the file is missing or not executable`);
     const owned = new OwnedProcess(child, this.graceMs, options.timeoutMs, () => this.#active.delete(owned));
     this.#active.add(owned);
     child.stdout.on("data", (chunk: Buffer) => options.onStdout?.(chunk.toString("utf8")));
@@ -74,9 +77,9 @@ export class OwnedProcess {
     this.pid = child.pid;
     this.stdin = child.stdin;
     const startedAt = performance.now();
-    this.completed = new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (exitCode, signal) => {
+    this.completed = new Promise((resolve) => {
+      const settle = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+        if (this.#settled) return;
         this.#settled = true;
         if (this.#timeout) clearTimeout(this.#timeout);
         onExit();
@@ -87,7 +90,9 @@ export class OwnedProcess {
           cancelled: this.#cancelled,
           timedOut: this.#timedOut,
         });
-      });
+      };
+      child.once("error", () => settle(null, null));
+      child.once("close", settle);
     });
     if (timeoutMs) {
       this.#timeout = setTimeout(() => {

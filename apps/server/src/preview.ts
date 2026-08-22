@@ -72,10 +72,13 @@ export class PreviewManager {
     return { taskRunId, url };
   }
 
+  // Аренда должна переживать фоновую вкладку: скрытая вкладка шлёт heartbeat не чаще раза в минуту.
+  static readonly leaseMs = 120_000;
+
   heartbeat(): void {
     if (!this.#active) return;
     if (this.#lease) clearTimeout(this.#lease);
-    this.#lease = setTimeout(() => void this.stop(), 45_000);
+    this.#lease = setTimeout(() => void this.stop(), PreviewManager.leaseMs);
   }
 
   async stop(): Promise<void> {
