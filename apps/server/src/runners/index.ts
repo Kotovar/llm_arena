@@ -1,5 +1,5 @@
 import type { NormalizedRunResult, RunnerDefinition, RunnerKind } from "@llm-arena/shared";
-import { ProcessSupervisor } from "../process-supervisor.js";
+import { type OwnedProcess, ProcessSupervisor } from "../process-supervisor.js";
 import { buildClaudeCommand, buildCodexCommand, buildOmpCommand } from "./commands.js";
 import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput } from "./parsers.js";
 
@@ -47,26 +47,39 @@ class CliRunner implements ModelRunner {
     if (input.signal.aborted) throw new Error("Run cancelled before process start");
     let stdout = "";
     let stderr = "";
-    const child = this.supervisor.spawn({
+    let idleTimer: NodeJS.Timeout | undefined;
+    let inactive = false;
+    let child: OwnedProcess | undefined;
+    const resetIdleTimer = () => {
+      if (inactive) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        inactive = true;
+        void child?.stop();
+      }, input.timeoutMs);
+    };
+    child = this.supervisor.spawn({
       argv: this.command(input),
       cwd: input.workspace,
       env: { ...childEnv(input.definition), ...this.extraEnv?.(input) },
-      timeoutMs: input.timeoutMs,
       onStdout: (text) => {
+        resetIdleTimer();
         stdout += text;
         input.onStdout(text);
       },
       onStderr: (text) => {
+        resetIdleTimer();
         stderr += text;
         input.onStderr(text);
       },
     });
-    const cancel = () => void child.stop();
+    resetIdleTimer();
+    const cancel = () => void child?.stop();
     input.signal.addEventListener("abort", cancel, { once: true });
     child.stdin.end(this.promptOnStdin ? input.prompt : undefined);
     try {
       const processResult = await child.completed;
-      if (processResult.timedOut) throw new Error(`Runner timed out after ${input.timeoutMs} ms`);
+      if (inactive) throw new Error(`Runner inactive for ${input.timeoutMs} ms`);
       if (processResult.cancelled || input.signal.aborted) throw new Error("Runner cancelled");
       const parsed = this.parser(stdout, processResult.durationMs, 0);
       return { ...parsed, exitCode: processResult.exitCode };
@@ -74,6 +87,7 @@ class CliRunner implements ModelRunner {
       const detail = stderr.trim();
       throw new Error(detail ? `${(error as Error).message}: ${detail}` : (error as Error).message);
     } finally {
+      if (idleTimer) clearTimeout(idleTimer);
       input.signal.removeEventListener("abort", cancel);
     }
   }

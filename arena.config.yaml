@@ -10,6 +10,7 @@ nvidiaSmi: nvidia-smi
 # Браузер для снимка готового web-приложения. Если его нет, снимок просто не делается.
 browser: google-chrome-stable
 defaults:
+  # Для CLI-agent это максимальная пауза без stdout/stderr, а не общий лимит времени работы.
   taskTimeoutMs: 1800000
   checkTimeoutMs: 600000
   processGraceMs: 10000

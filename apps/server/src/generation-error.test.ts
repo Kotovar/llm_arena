@@ -20,4 +20,20 @@ describe("generation error diagnostics", () => {
     expect(details?.details).toHaveLength(280);
     expect(details?.rawSize).toBeGreaterThan(20_000);
   });
+
+  it("separates a stalled runner from a model-generation failure", () => {
+    expect(describeGenerationError("Runner inactive for 1800000 ms")).toMatchObject({
+      code: "runner_inactive",
+      message: "Генерация остановлена: runner перестал передавать данные.",
+      details: "Нет новых данных от runner в течение 30 мин.",
+    });
+  });
+
+  it("labels legacy wall-clock limits without claiming that the model failed", () => {
+    expect(describeGenerationError("Runner timed out after 1800000 ms")).toMatchObject({
+      code: "task_time_limit_exceeded",
+      message: "Превышен лимит времени задачи.",
+      details: "Runner был остановлен через 30 мин.",
+    });
+  });
 });

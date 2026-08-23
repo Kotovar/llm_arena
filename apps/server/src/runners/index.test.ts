@@ -40,4 +40,56 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_t
     expect(result.finalAnswer).toBe("Fix it");
     expect(result.sessionId).toBe("fake-thread");
   });
+
+  it("keeps an active runner alive past the configured idle timeout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
+    directories.push(root);
+    const script = join(root, "streaming-codex.mjs");
+    writeFileSync(
+      script,
+      `for await (const _ of process.stdin) {}
+console.log(JSON.stringify({type:"thread.started",thread_id:"streaming-thread"}));
+const heartbeat = setInterval(() => console.log(JSON.stringify({type:"item.updated"})), 10);
+setTimeout(() => {
+  clearInterval(heartbeat);
+  console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Finished"}}));
+  console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_tokens:1}}));
+}, 250);`,
+    );
+    const runner = createRunner("codex", new ProcessSupervisor("runner-test", 100));
+
+    const result = await runner.run({
+      definition: { id: "fake", name: "Fake", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
+      prompt: "Keep going",
+      workspace: root,
+      modelRef: "test-model",
+      taskDataDir: root,
+      timeoutMs: 100,
+      signal: new AbortController().signal,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+    });
+
+    expect(result.finalAnswer).toBe("Finished");
+  });
+
+  it("stops a silent runner after the configured idle timeout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
+    directories.push(root);
+    const script = join(root, "silent-codex.mjs");
+    writeFileSync(script, "for await (const _ of process.stdin) {} setInterval(() => {}, 1_000);");
+    const runner = createRunner("codex", new ProcessSupervisor("runner-test", 100));
+
+    await expect(runner.run({
+      definition: { id: "fake", name: "Fake", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
+      prompt: "Wait",
+      workspace: root,
+      modelRef: "test-model",
+      taskDataDir: root,
+      timeoutMs: 30,
+      signal: new AbortController().signal,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+    })).rejects.toThrow("Runner inactive for 30 ms");
+  });
 });
