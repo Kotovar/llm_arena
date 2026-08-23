@@ -1,12 +1,17 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanupOrphanPreviewRoots, removePreviewDirectory, renderPreviewArgv } from "./preview.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { finalizeWorkspace, prepareWorkspace } from "./artifacts.js";
+import { loadConfig } from "./config.js";
+import { type OwnedProcess, ProcessSupervisor } from "./process-supervisor.js";
+import { cleanupOrphanPreviewRoots, PreviewManager, removePreviewDirectory, renderPreviewArgv } from "./preview.js";
 import { buildScreenshotArgv } from "./screenshot.js";
+import { createStore } from "./store.js";
 
 const directories: string[] = [];
 afterEach(() => {
+  vi.unstubAllGlobals();
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -49,6 +54,61 @@ describe("preview command", () => {
     expect(existsSync(orphan)).toBe(false);
     expect(existsSync(valid)).toBe(true);
     expect(existsSync(inUse)).toBe(true);
+  });
+
+  it("discards a stale startup instead of replacing a newer preview", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-preview-race-"));
+    directories.push(directory);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const store = createStore(join(directory, "arena.sqlite"));
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const task = store.createTask({ name: "Web", kind: "coding", prompt: "Build", fixtureId: "web", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const source = join(directory, "fixture");
+    mkdirSync(source);
+    writeFileSync(join(source, "index.html"), "preview");
+    const artifactPath = join(directory, "result");
+    const artifacts = finalizeWorkspace(prepareWorkspace(source, artifactPath));
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, artifactPath, {
+      task: task.currentRevision,
+      fixture: { id: "web", name: "Web", source, checks: [], preview: { command: { argv: ["preview", "{port}"] }, readyPath: "/" } },
+    });
+    store.saveTaskRunResult(taskRun.id, { artifacts });
+
+    const processes: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+    const supervisor = {
+      spawn: () => {
+        const process = { stdin: { end: vi.fn() }, completed: new Promise(() => {}), stop: vi.fn().mockResolvedValue(undefined) };
+        processes.push(process);
+        return process as unknown as OwnedProcess;
+      },
+    } as unknown as ProcessSupervisor;
+    let firstReady!: (response: Response) => void;
+    let resolveFirstFetchStarted!: () => void;
+    const firstFetch = new Promise<Response>((resolve) => { firstReady = resolve; });
+    const firstFetchBegan = new Promise<void>((resolve) => { resolveFirstFetchStarted = resolve; });
+    let fetches = 0;
+    vi.stubGlobal("fetch", vi.fn(() => {
+      fetches += 1;
+      if (fetches === 1) { resolveFirstFetchStarted(); return firstFetch; }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    }));
+    const preview = new PreviewManager(store, config, supervisor);
+
+    const first = preview.start(taskRun.id, artifacts.resultSha).then(() => undefined, (error) => error as Error);
+    await firstFetchBegan;
+    const second = preview.start(taskRun.id, artifacts.resultSha);
+    firstReady(new Response(null, { status: 200 }));
+
+    await expect(first).resolves.toMatchObject({ message: "Preview start superseded" });
+    await second;
+    expect(processes[0]!.stop).toHaveBeenCalledOnce();
+    expect(processes[1]!.stop).not.toHaveBeenCalled();
+    await preview.stop();
+    expect(processes[1]!.stop).toHaveBeenCalledOnce();
+    store.close();
   });
 });
 

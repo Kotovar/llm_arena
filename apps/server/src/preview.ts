@@ -81,6 +81,8 @@ export async function waitReady(url: string, process: OwnedProcess, timeoutMs = 
 export class PreviewManager {
   #active: { process: OwnedProcess; directory: string; taskRunId: string; resultSha: string; url: string } | undefined;
   #lease: NodeJS.Timeout | undefined;
+  #generation = 0;
+  #startTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly store: ArenaStore,
@@ -89,7 +91,20 @@ export class PreviewManager {
   ) {}
 
   async start(taskRunId: string, resultSha: string) {
-    await this.stop();
+    const generation = ++this.#generation;
+    const previous = this.#startTail;
+    let release!: () => void;
+    this.#startTail = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await this.#start(taskRunId, resultSha, generation);
+    } finally {
+      release();
+    }
+  }
+
+  async #start(taskRunId: string, resultSha: string, generation: number) {
+    await this.#stopActive();
     const taskRun = this.store.getTaskRun(taskRunId);
     if (!taskRun) throw new Error("Task run not found");
     const version = resolveCompletedResultVersion(taskRun, resultSha);
@@ -129,6 +144,11 @@ export class PreviewManager {
       discard();
       throw error;
     }
+    if (generation !== this.#generation) {
+      await process.stop();
+      discard();
+      throw new Error("Preview start superseded");
+    }
     this.#active = { process, directory, taskRunId, resultSha: version.resultSha, url };
     this.heartbeat();
     return { taskRunId, resultSha: version.resultSha, url };
@@ -145,6 +165,11 @@ export class PreviewManager {
   }
 
   async stop(): Promise<void> {
+    this.#generation += 1;
+    await this.#stopActive();
+  }
+
+  async #stopActive(): Promise<void> {
     if (this.#lease) clearTimeout(this.#lease);
     this.#lease = undefined;
     const active = this.#active;
