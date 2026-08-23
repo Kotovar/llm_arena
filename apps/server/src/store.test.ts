@@ -173,4 +173,22 @@ describe("execution profiles and task results", () => {
     expect(JSON.parse(store.getTaskRun(taskRun.id)?.result_json ?? "{}").finalAnswer).toBe("Original");
     expect(store.listFollowups(taskRun.id)).toMatchObject([{ prompt: "Уточни ответ", status: "completed" }]);
   });
+
+  it("persists the chosen completed follow-up without allowing another task run", () => {
+    const store = testStore();
+    const task = store.createTask({ name: "Task", kind: "prompt", prompt: "Answer", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-test" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/task", { task: task.currentRevision });
+    store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original" });
+    const followup = store.createFollowup(taskRun.id, "Уточни ответ");
+    store.claimNextFollowup();
+    store.saveFollowupResult(followup.id, { finalAnswer: "Updated" });
+
+    store.selectFollowupVersion(taskRun.id, followup.id);
+
+    expect(store.getTaskRun(taskRun.id)).toMatchObject({ selected_followup_id: followup.id });
+    expect(() => store.selectFollowupVersion(taskRun.id, "other-task-followup")).toThrow("Completed follow-up not found");
+  });
 });

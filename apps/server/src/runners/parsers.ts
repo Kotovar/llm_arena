@@ -61,6 +61,10 @@ export function parseOmpOutput(output: string, totalMs: number, startupMs: numbe
   const messages = Array.isArray(end?.messages) ? (end.messages as Json[]) : [];
   const assistants = messages.filter((message) => message.role === "assistant");
   const last = assistants.at(-1);
+  const terminalError = [end?.errorMessage, last?.errorMessage].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (terminalError || last?.stopReason === "error") throw new Error(terminalError ?? "OMP agent ended with an error");
   const usage = assistants.reduce<{ input: number; cached: number; output: number; durationMs: number }>(
     (sum, message) => {
       const item = message.usage as Json | undefined;

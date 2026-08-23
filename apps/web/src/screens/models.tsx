@@ -53,6 +53,10 @@ export function ModelsPage() {
     mutationFn: (modelId: string) => api(`/models/${modelId}`, { method: "DELETE" }),
     onSuccess: async () => { await invalidateModels(); await client.invalidateQueries({ queryKey: ["settings"] }); },
   });
+  const rename = useMutation({
+    mutationFn: ({ modelId, name }: { modelId: string; name: string }) => api(`/models/${modelId}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+    onSuccess: invalidateModels,
+  });
   const testModel = useMutation({
     mutationFn: ({ modelId, runnerId }: { modelId: string; runnerId: string }) => api<{ ok: boolean; answer: string; durationMs: number }>(`/models/${modelId}/test`, { method: "POST", body: JSON.stringify({ runnerId }) }),
     onSuccess: (result, variables) => setDiagnostics((current) => ({ ...current, [variables.modelId]: { ok: true, title: `Отвечает · ${formatDuration(result.durationMs)}`, detail: result.answer.slice(0, 200) } })),
@@ -85,6 +89,11 @@ export function ModelsPage() {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     createCloud.mutate({ name: data.get("name"), kind: "cloud", provider: cloudProvider, modelRef: cloudModelRef });
+  }
+
+  function submitRename(event: FormEvent<HTMLFormElement>, modelId: string) {
+    event.preventDefault();
+    rename.mutate({ modelId, name: String(new FormData(event.currentTarget).get("name") ?? "") });
   }
 
   const cloudOptions = cloudProvider === "anthropic" ? catalog.data?.claude.models ?? [] : catalog.data?.codex.models ?? [];
@@ -136,6 +145,8 @@ export function ModelsPage() {
         const checking = testModel.isPending && testModel.variables?.modelId === model.id;
         const modelProfiles = visibleProfiles.filter((profile) => profile.modelId === model.id);
         return <details className="model-card" key={model.id}><summary className="model-card-summary"><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
+          <form className="model-rename" onSubmit={(event) => submitRename(event, model.id)}><label>Название в результатах<input name="name" defaultValue={model.name} required /></label><button className="primary" disabled={rename.isPending && rename.variables?.modelId === model.id}>{rename.isPending && rename.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить название"}</button></form>
+          {rename.error && rename.variables?.modelId === model.id ? <p className="error">{rename.error.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для omp-local</span> : null}</div>
             <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div></dl>

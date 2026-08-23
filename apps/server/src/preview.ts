@@ -1,10 +1,11 @@
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import type { FixtureManifest } from "@llm-arena/shared";
+import { materializeWorkspaceVersion } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { allocatePort } from "./port.js";
 import { type OwnedProcess, ProcessSupervisor } from "./process-supervisor.js";
+import { resolveCompletedResultVersion } from "./result-versions.js";
 import type { ArenaStore } from "./store.js";
 
 export function renderPreviewArgv(argv: readonly string[], port: number): string[] {
@@ -26,7 +27,7 @@ export async function waitReady(url: string, process: OwnedProcess, timeoutMs = 
 }
 
 export class PreviewManager {
-  #active: { process: OwnedProcess; directory: string; taskRunId: string; url: string } | undefined;
+  #active: { process: OwnedProcess; directory: string; taskRunId: string; resultSha: string; url: string } | undefined;
   #lease: NodeJS.Timeout | undefined;
 
   constructor(
@@ -35,23 +36,23 @@ export class PreviewManager {
     private readonly supervisor: ProcessSupervisor,
   ) {}
 
-  async start(taskRunId: string) {
+  async start(taskRunId: string, resultSha: string) {
     await this.stop();
     const taskRun = this.store.getTaskRun(taskRunId);
     if (!taskRun) throw new Error("Task run not found");
+    const version = resolveCompletedResultVersion(taskRun, resultSha);
     const snapshot = JSON.parse(taskRun.snapshot_json) as { fixture?: FixtureManifest };
     const preview = snapshot.fixture?.preview;
     if (!preview) throw new Error("This result has no trusted preview command");
-    const directory = join(this.config.dataDir, "previews", taskRunId);
+    const directory = join(this.config.dataDir, "previews", taskRunId, version.resultSha);
     const workspace = join(directory, "workspace");
-    // Копия воркспейса весит столько же, сколько результат: любой сбой ниже обязан её убрать.
+    // Материализованный commit живёт ровно столько же, сколько preview-процесс.
     const discard = () => rmSync(directory, { recursive: true, force: true });
-    mkdirSync(workspace, { recursive: true });
+    mkdirSync(directory, { recursive: true });
     let process: OwnedProcess;
     let url: string;
     try {
-      const copy = spawnSync("cp", ["-a", "--reflink=auto", `${join(taskRun.artifact_path, "workspace")}/.`, workspace], { encoding: "utf8" });
-      if (copy.status !== 0) throw new Error(`Preview copy failed: ${copy.stderr}`);
+      materializeWorkspaceVersion(join(taskRun.artifact_path, "control", "baseline.git"), version.resultSha, workspace);
       const port = await allocatePort();
       url = `http://127.0.0.1:${port}${preview.readyPath}`;
       const log = join(directory, "preview.log");
@@ -76,9 +77,9 @@ export class PreviewManager {
       discard();
       throw error;
     }
-    this.#active = { process, directory, taskRunId, url };
+    this.#active = { process, directory, taskRunId, resultSha: version.resultSha, url };
     this.heartbeat();
-    return { taskRunId, url };
+    return { taskRunId, resultSha: version.resultSha, url };
   }
 
   // Скрытая вкладка шлёт heartbeat не чаще раза в минуту, поэтому аренда должна её переживать.

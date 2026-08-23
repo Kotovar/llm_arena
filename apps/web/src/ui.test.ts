@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, followupCountLabel, formatRelativeTime, promptCountLabel, resultChecks, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, followupCountLabel, formatRelativeTime, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -74,6 +74,12 @@ describe("интерфейс запуска", () => {
     expect(statusLabel("completed")).toBe("Завершён");
     expect(statusLabel("failed")).toBe("Ошибка");
     expect(statusLabel("cancelled")).toBe("Остановлен");
+    expect(statusLabel("running-followup")).toBe("Выполняется уточнение");
+  });
+
+  it("считает запуск активным, пока выполняется любое уточнение", () => {
+    expect(runIsActive({ status: "completed", activityStatus: "running-followup" })).toBe(true);
+    expect(runIsActive({ status: "completed", activityStatus: "completed" })).toBe(false);
   });
 
   it("создаёт безопасный базовый профиль для подключённой GGUF-модели", () => {

@@ -3,6 +3,9 @@ import { z } from "zod";
 export const taskKindSchema = z.enum(["prompt", "coding"]);
 export const runStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled"]);
 export const runnerKindSchema = z.enum(["llama-chat", "omp", "claude-code", "codex"]);
+export const resultShaSchema = z.string().trim().regex(/^[0-9a-f]{40,64}$/i, "Invalid result SHA");
+export const selectResultVersionSchema = z.object({ resultSha: resultShaSchema }).strict();
+export const previewResultVersionSchema = z.object({ resultSha: resultShaSchema.optional() }).strict();
 
 const taskBaseSchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -57,6 +60,10 @@ export const createModelSchema = z
       context.addIssue({ code: "custom", message: "Local GGUF models require path and alias" });
     }
   });
+
+export const renameModelSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+}).strict();
 
 export const llamaProfileSchema = z.object({
   context: z.union([z.literal("auto"), z.number().int().positive()]),
@@ -204,3 +211,5 @@ export type FixtureManifest = z.infer<typeof fixtureManifestSchema>;
 export type CommandSpec = z.infer<typeof commandSpecSchema>;
 export type NormalizedRunResult = z.infer<typeof normalizedRunResultSchema>;
 export type Review = z.infer<typeof reviewSchema>;
+export type SelectResultVersion = z.infer<typeof selectResultVersionSchema>;
+export type PreviewResultVersion = z.infer<typeof previewResultVersionSchema>;

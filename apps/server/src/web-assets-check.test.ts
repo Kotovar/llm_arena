@@ -20,6 +20,12 @@ function workspace(files: Record<string, string>) {
 const run = (cwd: string) => spawnSync(process.execPath, [checker], { cwd, encoding: "utf8" });
 
 describe("проверка файлов web-приложения", () => {
+  it("не принимает нетронутую стартовую заглушку", () => {
+    const result = run(workspace({ "index.html": "<h1>Приложение ещё не реализовано</h1><p>Coding-agent заменит этот файл во время benchmark.</p>" }));
+
+    expect(result.status).toBe(1);
+  });
+
   it("ловит ссылку на несозданный скрипт", () => {
     const cwd = workspace({ "index.html": `<script src="script.js"></script>` });
 

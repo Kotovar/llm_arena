@@ -17,4 +17,10 @@ describe("responsive result layout", () => {
     expect(css).toMatch(/\.followup-item[^}]*min-width:\s*0/);
     expect(css).toMatch(/\.followup-item[^}]*overflow-wrap:\s*anywhere/);
   });
+
+  it("provides compact disclosure controls for versions and follow-ups", () => {
+    expect(css).toMatch(/\.version-picker/);
+    expect(css).toMatch(/\.followups\s*>\s*summary/);
+    expect(css).toMatch(/\.followup-item\s*>\s*summary/);
+  });
 });

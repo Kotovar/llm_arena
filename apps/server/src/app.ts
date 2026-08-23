@@ -5,20 +5,25 @@ import {
   createExecutionProfileSchema,
   connectLocalModelSchema,
   createModelSchema,
+  renameModelSchema,
+  previewResultVersionSchema,
   createRunSchema,
   createTaskSchema,
   reviewSchema,
   modelDirectorySchema,
+  selectResultVersionSchema,
 } from "@llm-arena/shared";
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
 import { activeExportPath, renderFishCommand, renderFishLauncher, renderOmpLayout, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
+import { assertWorkspaceCommit, workspaceVersionDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import type { ArenaStore } from "./store.js";
+import { resolveCompletedResultVersion, selectedResultVersion } from "./result-versions.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 
 type EngineLike = {
@@ -30,7 +35,7 @@ type EngineLike = {
 };
 
 type PreviewLike = {
-  start(taskRunId: string): Promise<unknown>;
+  start(taskRunId: string, resultSha: string): Promise<unknown>;
   stop(): Promise<void>;
   heartbeat(): void;
 };
@@ -121,6 +126,16 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   };
   const hasActiveFollowup = (runId: string) => store.listTaskRuns(runId).some((taskRun) =>
     taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running"));
+  const activityStatus = (run: { id: string; status: string }) => hasActiveFollowup(run.id) ? "running-followup" : run.status;
+  const withSelectedVersion = (taskRun: NonNullable<ReturnType<ArenaStore["getTaskRun"]>>) => {
+    const { selected_followup_id: _, ...result } = taskRun;
+    return { ...result, selectedVersion: selectedResultVersion(taskRun) };
+  };
+  const resolvedVersion = (taskRun: NonNullable<ReturnType<ArenaStore["getTaskRun"]>>, resultSha?: string) => {
+    const selected = resultSha ? undefined : selectedResultVersion(taskRun);
+    if (!resultSha && !selected) throw new Error("No completed result version available");
+    return resolveCompletedResultVersion(taskRun, resultSha ?? selected!.resultSha);
+  };
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ZodError) return reply.code(400).send({ error: "Invalid request", issues: error.issues });
@@ -180,6 +195,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/models", async () => store.listModels());
   app.get("/api/model-catalog", async () => loadModelCatalog());
   app.post("/api/models", async (request, reply) => reply.code(201).send(store.createModel(parse(createModelSchema, request.body))));
+  app.patch<{ Params: { id: string } }>("/api/models/:id", async (request) => {
+    const { name } = parse(renameModelSchema, request.body);
+    return store.renameModel(request.params.id, name);
+  });
   app.delete<{ Params: { id: string } }>("/api/models/:id", async (request, reply) => {
     const model = store.getModel(request.params.id);
     if (!model) throw new Error("Model not found");
@@ -221,7 +240,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return engine.calibrate(request.params.id);
   });
 
-  app.get("/api/runs", async () => store.listRuns());
+  app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...run, activityStatus: activityStatus(run) })));
   app.post("/api/runs", async (request, reply) => {
     const input = parse(createRunSchema, request.body);
     if (!store.getActiveModel(input.modelId)) throw new Error("Model not found");
@@ -257,7 +276,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         return taskRun;
       }
     });
-    return { ...run, taskRuns };
+    return { ...run, activityStatus: activityStatus(run), taskRuns: taskRuns.map(withSelectedVersion) };
   });
   app.delete<{ Params: { id: string } }>("/api/runs/:id", async (request, reply) => {
     const run = store.getRun(request.params.id);
@@ -277,8 +296,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return { deleted: store.deleteRuns(terminal.map((run) => run.id)) };
   });
   app.post<{ Params: { id: string } }>("/api/runs/:id/cancel", async (request, reply) => {
-    const cancelled = engine ? await engine.cancel(request.params.id) : false;
-    if (!cancelled) store.updateRunStatus(request.params.id, "cancelled");
+    const run = store.getRun(request.params.id);
+    if (!run) throw new Error("Run not found");
+    const followup = store.listTaskRuns(run.id).flatMap((taskRun) => taskRun.followups)
+      .find((item) => item.status === "pending" || item.status === "running");
+    const cancelled = engine ? await engine.cancel(followup?.id ?? run.id) : false;
+    if (!cancelled && followup) store.saveFollowupResult(followup.id, {}, "cancelled");
+    if (!cancelled && !followup) store.updateRunStatus(run.id, "cancelled");
     return reply.code(202).send({ status: "cancelled" });
   });
   app.get<{ Params: { id: string } }>("/api/runs/:id/events", async (request, reply) => {
@@ -301,14 +325,14 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get<{ Params: { id: string } }>("/api/task-runs/:id", async (request) => {
     const run = store.getTaskRun(request.params.id);
     if (!run) throw new Error("Task run not found");
-    return run;
+    return withSelectedVersion(run);
   });
-  app.get<{ Params: { id: string } }>("/api/task-runs/:id/diff", async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { resultSha?: string } }>("/api/task-runs/:id/diff", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);
     if (!run) throw new Error("Task run not found");
-    const path = join(run.artifact_path, "diff.patch");
+    const version = resolvedVersion(run, request.query.resultSha);
     reply.type("text/plain");
-    return existsSync(path) ? readFileSync(path, "utf8") : "";
+    return workspaceVersionDiff(join(run.artifact_path, "control", "baseline.git"), version.baselineSha, version.resultSha);
   });
   app.get<{ Params: { id: string }; Querystring: { stream?: "stdout" | "stderr" | "display" } }>("/api/task-runs/:id/logs", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);
@@ -318,10 +342,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     reply.type("text/plain");
     return existsSync(path) ? createReadStream(path) : "";
   });
-  app.get<{ Params: { id: string } }>("/api/task-runs/:id/preview-image", async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { resultSha?: string } }>("/api/task-runs/:id/preview-image", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);
     if (!run) throw new Error("Task run not found");
-    const path = join(run.artifact_path, "preview.png");
+    const version = resolvedVersion(run, request.query.resultSha);
+    const path = join(version.artifactPath, "preview.png");
     if (!existsSync(path)) throw new Error("Preview image not found");
     reply.type("image/png");
     return createReadStream(path);
@@ -337,6 +362,15 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return createReadStream(path);
   });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => store.saveReview(request.params.id, parse(reviewSchema, request.body)));
+  app.put<{ Params: { id: string } }>("/api/task-runs/:id/selected-version", async (request) => {
+    const { resultSha } = parse(selectResultVersionSchema, request.body);
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) throw new Error("Task run not found");
+    const version = resolveCompletedResultVersion(taskRun, resultSha);
+    assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), version.resultSha);
+    const selected = store.selectFollowupVersion(taskRun.id, version.followupId);
+    return selectedResultVersion(selected);
+  });
   app.post<{ Params: { id: string } }>("/api/task-runs/:id/open-in-zed", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);
     if (!run) throw new Error("Task run not found");
@@ -375,7 +409,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
 
   app.post<{ Params: { id: string } }>("/api/task-runs/:id/preview", async (request) => {
     if (!preview) throw new Error("Preview manager is unavailable");
-    return preview.start(request.params.id);
+    const { resultSha } = parse(previewResultVersionSchema, request.body ?? {});
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) throw new Error("Task run not found");
+    const version = resolvedVersion(taskRun, resultSha);
+    assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), version.resultSha);
+    return preview.start(taskRun.id, version.resultSha);
   });
   app.post("/api/preview/heartbeat", async () => {
     preview?.heartbeat();

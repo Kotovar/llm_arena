@@ -14,6 +14,11 @@ try {
   process.exit(1);
 }
 
+if (html.includes("Приложение ещё не реализовано") && html.includes("Coding-agent заменит этот файл во время benchmark.")) {
+  console.error("index.html остался исходной заглушкой.");
+  process.exit(1);
+}
+
 const assetTag = /<(?:script|link|img|source|video|audio|iframe)\b[^>]*>/giu;
 const reference = /\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/iu;
 

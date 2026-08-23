@@ -23,6 +23,15 @@ describe("runner output parsers", () => {
     expect(result.metrics.generationTokensPerSecond.value).toBe(10);
   });
 
+  it("rejects a terminal OMP agent error", () => {
+    const output = JSON.stringify({
+      type: "agent_end",
+      messages: [{ role: "assistant", content: [], stopReason: "error", errorMessage: "Unable to connect. Is the computer able to access the url?" }],
+    });
+
+    expect(() => parseOmpOutput(output, 1_000, 0)).toThrow("Unable to connect. Is the computer able to access the url?");
+  });
+
   it("estimates Claude throughput from API duration", () => {
     const output = JSON.stringify({
       type: "result",

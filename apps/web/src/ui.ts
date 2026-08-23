@@ -3,6 +3,7 @@ import type { Model, Runner, Task, TaskRun } from "./types.js";
 const statusLabels: Record<string, string> = {
   pending: "В очереди",
   running: "Выполняется",
+  "running-followup": "Выполняется уточнение",
   completed: "Завершён",
   failed: "Ошибка",
   cancelled: "Остановлен",
@@ -11,6 +12,11 @@ const statusLabels: Record<string, string> = {
 
 export function statusLabel(status: string) {
   return statusLabels[status] ?? status;
+}
+
+export function runIsActive(run: { status: string; activityStatus?: string }) {
+  const status = run.activityStatus ?? run.status;
+  return status === "pending" || status === "running" || status === "running-followup";
 }
 
 export function chooseRunner(

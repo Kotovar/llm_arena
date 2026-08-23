@@ -80,6 +80,7 @@ type TaskRunRow = {
   result_json: string | null;
   error: string | null;
   artifact_path: string;
+  selected_followup_id: string | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -157,7 +158,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, benchmark_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_run_followups (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, task_run_id TEXT NOT NULL, position INTEGER NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, position));
@@ -172,6 +173,10 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!runColumns.some((column) => column.name === "model_ref")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN model_ref TEXT");
+  }
+  const taskRunColumns = sqlite.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>;
+  if (!taskRunColumns.some((column) => column.name === "selected_followup_id")) {
+    sqlite.exec("ALTER TABLE task_runs ADD COLUMN selected_followup_id TEXT");
   }
   const modelColumns = sqlite.prepare("PRAGMA table_info(models)").all() as Array<{ name: string }>;
   if (!modelColumns.some((column) => column.name === "archived_at")) {
@@ -383,6 +388,13 @@ export function createStore(filename: string) {
       const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NULL", id);
       return row ? mapModel(row) : undefined;
     },
+    renameModel(id: string, name: string) {
+      const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NULL", id);
+      if (!row) throw new Error("Model not found");
+      const updatedAt = now();
+      sqlite.prepare("UPDATE models SET name = ?, updated_at = ? WHERE id = ?").run(name, updatedAt, id);
+      return mapModel({ ...row, name, updated_at: updatedAt });
+    },
     archiveModel(id: string) {
       const timestamp = now();
       sqlite.prepare("UPDATE models SET archived_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, id);
@@ -497,7 +509,10 @@ export function createStore(filename: string) {
       const id = randomUUID();
       const createdAt = now();
       sqlite
-        .prepare("INSERT INTO task_runs VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL, ?, NULL, NULL, ?)")
+        .prepare(`INSERT INTO task_runs (
+          id, benchmark_run_id, task_revision_id, position, status, snapshot_json, artifact_path,
+          selected_followup_id, result_json, error, started_at, finished_at, created_at
+        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, NULL, NULL, NULL, NULL, NULL, ?)`)
         .run(id, benchmarkRunId, taskRevisionId, position, JSON.stringify(snapshot), artifactPath, createdAt);
       return one<TaskRunRow>("SELECT * FROM task_runs WHERE id = ?", id)!;
     },
@@ -557,6 +572,15 @@ export function createStore(filename: string) {
     saveFollowupResult(id: string, result: unknown, status: Exclude<RunStatus, "pending" | "running"> = "completed", error?: string) {
       sqlite.prepare("UPDATE task_run_followups SET status = ?, result_json = ?, error = ?, finished_at = ? WHERE id = ?")
         .run(status, JSON.stringify(result), error ?? null, now(), id);
+    },
+    selectFollowupVersion(taskRunId: string, followupId: string | null) {
+      const taskRun = one<TaskRunRow>("SELECT * FROM task_runs WHERE id = ?", taskRunId);
+      if (!taskRun || taskRun.status !== "completed") throw new Error("Completed task run not found");
+      if (followupId && !one<FollowupRow>("SELECT * FROM task_run_followups WHERE id = ? AND task_run_id = ? AND status = 'completed'", followupId, taskRunId)) {
+        throw new Error("Completed follow-up not found");
+      }
+      sqlite.prepare("UPDATE task_runs SET selected_followup_id = ? WHERE id = ?").run(followupId, taskRunId);
+      return this.getTaskRun(taskRunId)!;
     },
     saveReview(taskRunId: string, review: Review) {
       sqlite

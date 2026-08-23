@@ -92,6 +92,15 @@ export type Followup = {
   result_json: string | null;
   error: string | null;
   started_at: string | null;
+  finished_at: string | null;
+};
+
+export type ResultVersion = {
+  type: "initial" | "followup";
+  followupId: string | null;
+  resultSha: string;
+  status: "completed";
+  index: number;
 };
 
 export type TaskRun = {
@@ -102,6 +111,7 @@ export type TaskRun = {
   snapshot_json: string;
   result_json: string | null;
   error: string | null;
+  selectedVersion?: ResultVersion | null;
   review?: {
     correctness: number;
     code_quality: number;
@@ -121,6 +131,7 @@ export type Run = {
   model_ref: string | null;
   reasoning_effort: string | null;
   status: string;
+  activityStatus?: string;
   snapshot_json: string | null;
   created_at: string;
   started_at: string | null;

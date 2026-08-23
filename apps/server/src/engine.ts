@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { FixtureManifest, LlamaProfile } from "@llm-arena/shared";
-import { finalizeWorkspace, prepareWorkspace } from "./artifacts.js";
+import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { LlamaCppServerManager } from "./llama-server.js";
 import { allocatePort } from "./port.js";
@@ -12,6 +12,7 @@ import { createRedactor } from "./redact.js";
 import { createRunner } from "./runners/index.js";
 import { createLiveOutput } from "./runners/live-output.js";
 import type { ArenaStore } from "./store.js";
+import { completedResultVersions } from "./result-versions.js";
 import { readGpuInfo, startGpuSampler, type GpuInfo } from "./system-metrics.js";
 import { buildTaskPrompt } from "./task-prompt.js";
 
@@ -90,8 +91,10 @@ export class BenchmarkEngine {
         failedTask?.error ?? undefined,
       );
     } catch (error) {
-      this.store.updateRunStatus(run.id, controller.signal.aborted ? "cancelled" : "failed", (error as Error).message);
-      this.#emit({ type: "run.error", runId: run.id, data: { message: (error as Error).message } });
+      const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed");
+      const message = failedTask?.error ?? (error as Error).message;
+      this.store.updateRunStatus(run.id, controller.signal.aborted ? "cancelled" : "failed", message);
+      this.#emit({ type: "run.error", runId: run.id, data: { message } });
     } finally {
       this.#controllers.delete(run.id);
       this.#emit({ type: "run.status", runId: run.id, data: { status: this.store.getRun(run.id)?.status } });
@@ -205,9 +208,9 @@ export class BenchmarkEngine {
             displayPath,
           });
           if (backend) result.metrics.startupDurationMs = { value: backend.startupDurationMs, unit: "ms", source: "client-observed" };
-          const artifacts = effectiveTask.kind === "coding" ? finalizeWorkspace(prepared) : undefined;
-          const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, signal) : [];
           const status = result.exitCode === 0 ? "completed" : "failed";
+          const artifacts = status === "completed" ? finalizeWorkspace(prepared) : undefined;
+          const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, signal) : [];
           const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, signal);
           const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
@@ -245,6 +248,10 @@ export class BenchmarkEngine {
     if (!model || !definition) throw new Error("Saved model or runner is unavailable");
     const snapshot = JSON.parse(taskRun.snapshot_json) as { task: { kind: "prompt" | "coding" }; fixture?: FixtureManifest; profile?: { parameters: LlamaProfile } };
     const workspace = join(taskRun.artifact_path, "workspace");
+    const gitDir = join(taskRun.artifact_path, "control", "baseline.git");
+    const baseVersion = completedResultVersions(taskRun).at(-1);
+    if (!baseVersion) throw new Error("Original result has no SHA-backed version");
+    materializeWorkspaceVersion(gitDir, baseVersion.resultSha, workspace);
     mkdirSync(followup.artifact_path, { recursive: true });
     const stdoutPath = join(followup.artifact_path, "stdout.log");
     const stderrPath = join(followup.artifact_path, "stderr.log");
@@ -286,13 +293,12 @@ export class BenchmarkEngine {
         stderrPath,
         displayPath,
       });
-      const original = taskRun.result_json ? JSON.parse(taskRun.result_json) as { artifacts?: { baselineSha?: string } } : {};
-      const artifacts = snapshot.task.kind === "coding" && original.artifacts?.baselineSha
-        ? finalizeWorkspace({ artifactRoot: taskRun.artifact_path, workspace, gitDir: join(taskRun.artifact_path, "control", "baseline.git"), baselineSha: original.artifacts.baselineSha })
+      const status = result.exitCode === 0 ? "completed" : "failed";
+      const artifacts = status === "completed"
+        ? finalizeWorkspace({ artifactRoot: followup.artifact_path, workspace, gitDir, baselineSha: baseVersion.baselineSha })
         : undefined;
       const checks = snapshot.fixture ? await this.#runChecks(snapshot.fixture, workspace, followup.artifact_path, signal) : [];
-      const status = result.exitCode === 0 ? "completed" : "failed";
-      const previewImage = status === "completed" && await this.#capturePreview(snapshot.fixture, workspace, taskRun.artifact_path, signal);
+      const previewImage = status === "completed" && await this.#capturePreview(snapshot.fixture, workspace, followup.artifact_path, signal);
       const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
       writeFileSync(join(followup.artifact_path, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
       this.store.saveFollowupResult(followup.id, saved, status, status === "failed" ? `Runner exited ${result.exitCode}` : undefined);

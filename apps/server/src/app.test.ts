@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
+import { finalizeWorkspace, prepareWorkspace } from "./artifacts.js";
 import { loadConfig } from "./config.js";
 import { createStore } from "./store.js";
 
@@ -12,6 +13,25 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("renames a model without changing its execution identity", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-rename-model-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const model = store.createModel({ name: "gemma-4-12B-it-QAT-Q4_0", kind: "local-gguf", provider: "llama.cpp", modelRef: "gemma-4-12b-it-qat-q4-0", path: "/models/gemma-4-12B-it-QAT-Q4_0.gguf", alias: "gemma-4-12b-it-qat-q4-0" });
+    const app = buildApp({ store, config });
+
+    const renamed = await app.inject({ method: "PATCH", url: `/api/models/${model.id}`, payload: { name: "gemma-4-12B" } });
+
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({ id: model.id, name: "gemma-4-12B", modelRef: model.modelRef, path: model.path, alias: model.alias });
+    expect(store.getModel(model.id)).toMatchObject({ name: "gemma-4-12B", modelRef: model.modelRef, path: model.path, alias: model.alias });
+    const invalid = await app.inject({ method: "PATCH", url: `/api/models/${model.id}`, payload: { name: " " } });
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
   it("disconnects a model but keeps its history and frees the file", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-disconnect-"));
     directories.push(directory);
@@ -395,6 +415,67 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("exposes an active follow-up and only selects SHA-backed completed versions", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-version-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const source = join(directory, "fixture");
+    const artifactPath = join(directory, "task");
+    mkdirSync(source);
+    writeFileSync(join(source, "answer.txt"), "initial\n");
+    const prepared = prepareWorkspace(source, artifactPath);
+    const initial = finalizeWorkspace(prepared);
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, artifactPath, { task: task.currentRevision });
+    store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original", artifacts: initial });
+    store.updateRunStatus(run.id, "completed");
+    store.createFollowup(taskRun.id, "Уточни");
+    const previewCalls: Array<[string, string]> = [];
+    const app = buildApp({
+      store,
+      config,
+      preview: {
+        async start(taskRunId, resultSha) {
+          previewCalls.push([taskRunId, resultSha]);
+          return { taskRunId, resultSha, url: "http://127.0.0.1:4300/" };
+        },
+        async stop() {},
+        heartbeat() {},
+      },
+    });
+
+    const active = await app.inject({ method: "GET", url: `/api/runs/${run.id}` });
+    expect(active.json()).toMatchObject({ status: "completed", activityStatus: "running-followup" });
+    expect(active.json().taskRuns[0]).not.toHaveProperty("selected_followup_id");
+    expect(active.json().taskRuns[0].selectedVersion).toEqual({ type: "initial", followupId: null, resultSha: initial.resultSha, status: "completed", index: 0 });
+
+    const claimed = store.claimNextFollowup()!;
+    mkdirSync(claimed.artifact_path, { recursive: true });
+    writeFileSync(join(prepared.workspace, "answer.txt"), "followup\n");
+    const followupArtifacts = finalizeWorkspace({ ...prepared, artifactRoot: claimed.artifact_path });
+    store.saveFollowupResult(claimed.id, { finalAnswer: "Updated", artifacts: followupArtifacts });
+
+    const selected = await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/selected-version`, payload: { resultSha: followupArtifacts.resultSha } });
+    const preview = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/preview`, payload: { resultSha: followupArtifacts.resultSha } });
+    const detail = await app.inject({ method: "GET", url: `/api/runs/${run.id}` });
+
+    expect(selected.statusCode).toBe(200);
+    expect(selected.json()).toEqual({ type: "followup", followupId: claimed.id, resultSha: followupArtifacts.resultSha, status: "completed", index: 1 });
+    expect(preview.json()).toMatchObject({ taskRunId: taskRun.id, resultSha: followupArtifacts.resultSha });
+    expect(previewCalls).toEqual([[taskRun.id, followupArtifacts.resultSha]]);
+    expect(detail.json()).toMatchObject({ activityStatus: "completed" });
+    expect(detail.json().taskRuns[0].selectedVersion).toEqual(selected.json());
+
+    const invalid = await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/selected-version`, payload: { resultSha: "f".repeat(40) } });
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
   it("does not delete a result while its additional prompt is active", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-followup-delete-"));
     directories.push(directory);
@@ -415,6 +496,32 @@ describe("REST API", () => {
 
     expect(response.statusCode).toBe(400);
     expect(store.getRun(run.id)).toBeDefined();
+    await app.close();
+    store.close();
+  });
+
+  it("cancels an active follow-up instead of rewriting the completed run", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-followup-cancel-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
+    store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original" });
+    store.updateRunStatus(run.id, "completed");
+    const followup = store.createFollowup(taskRun.id, "Уточни");
+    const cancelled: string[] = [];
+    const engine = { wake() {}, async cancel(id: string) { cancelled.push(id); return true; }, subscribe() { return () => undefined; }, async calibrate() { return {}; }, async testModel() { return {}; } };
+    const app = buildApp({ store, config, engine });
+
+    const response = await app.inject({ method: "POST", url: `/api/runs/${run.id}/cancel` });
+
+    expect(response.statusCode).toBe(202);
+    expect(cancelled).toEqual([followup.id]);
+    expect(store.getRun(run.id)?.status).toBe("completed");
     await app.close();
     store.close();
   });

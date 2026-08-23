@@ -1,6 +1,7 @@
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { resultShaSchema } from "@llm-arena/shared";
 
 export type PreparedWorkspace = {
   artifactRoot: string;
@@ -40,8 +41,8 @@ export function finalizeWorkspace(prepared: PreparedWorkspace) {
   const gitArgs = ["--git-dir", prepared.gitDir, "--work-tree", prepared.workspace];
   run("git", [...gitArgs, "add", "-A"]);
   run("git", [...gitArgs, "commit", "-q", "--allow-empty", "-m", "agent result"]);
-  const resultSha = run("git", [...gitArgs, "rev-parse", "HEAD"]);
-  const diff = run("git", [...gitArgs, "diff", "--binary", prepared.baselineSha, resultSha]);
+  const resultSha = assertWorkspaceCommit(prepared.gitDir, run("git", [...gitArgs, "rev-parse", "HEAD"]));
+  const diff = workspaceVersionDiff(prepared.gitDir, prepared.baselineSha, resultSha);
   const changedFiles = run("git", [...gitArgs, "diff", "--name-only", prepared.baselineSha, resultSha])
     .split("\n")
     .filter(Boolean)
@@ -49,6 +50,30 @@ export function finalizeWorkspace(prepared: PreparedWorkspace) {
   const diffPath = join(prepared.artifactRoot, "diff.patch");
   writeFileSync(diffPath, diff ? `${diff}\n` : "", "utf8");
   return { diffPath, changedFiles, baselineSha: prepared.baselineSha, resultSha };
+}
+
+export function assertWorkspaceCommit(gitDir: string, resultSha: string): string {
+  const parsed = resultShaSchema.safeParse(resultSha);
+  if (!parsed.success) throw new Error("Invalid result SHA");
+  const sha = parsed.data.toLowerCase();
+  run("git", ["--git-dir", gitDir, "cat-file", "-e", `${sha}^{commit}`]);
+  return sha;
+}
+
+export function workspaceVersionDiff(gitDir: string, baselineSha: string, resultSha: string): string {
+  const baseline = assertWorkspaceCommit(gitDir, baselineSha);
+  const result = assertWorkspaceCommit(gitDir, resultSha);
+  return run("git", ["--git-dir", gitDir, "diff", "--binary", baseline, result]);
+}
+
+export function materializeWorkspaceVersion(gitDir: string, resultSha: string, workspace: string): void {
+  const sha = assertWorkspaceCommit(gitDir, resultSha);
+  rmSync(workspace, { recursive: true, force: true });
+  mkdirSync(workspace, { recursive: true });
+  const archive = spawnSync("git", ["--git-dir", gitDir, "archive", sha]);
+  if (archive.status !== 0) throw new Error(`git archive failed: ${archive.stderr.toString()}`);
+  const extract = spawnSync("tar", ["-x", "-C", workspace], { input: archive.stdout });
+  if (extract.status !== 0) throw new Error(`tar extract failed: ${extract.stderr.toString()}`);
 }
 
 export function readArtifactText(path: string): string {

@@ -144,14 +144,15 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(JSON.parse(withoutBrowserTaskRun.result_json!).previewImage).toBe(false);
     expect(JSON.parse(withoutBrowserTaskRun.result_json!).finalAnswer).toContain("Создай реальные файлы");
     const preview = new PreviewManager(store, config, new ProcessSupervisor("web-preview-test", 100));
-    const started = await preview.start(taskRun.id);
+    const started = await preview.start(taskRun.id, JSON.parse(taskRun.result_json!).artifacts.resultSha);
+    expect(started.resultSha).toBe(JSON.parse(taskRun.result_json!).artifacts.resultSha);
     expect(await fetch(started.url).then((response) => response.text())).toBe("<h1>Готовое приложение</h1>");
     await preview.stop();
     await engine.stop();
     store.close();
   });
 
-  it("marks the benchmark run failed when its runner exits unsuccessfully", async () => {
+  it("keeps the task failure when cleanup fails afterwards", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-failed-engine-"));
     directories.push(root);
     const script = join(root, "failing-codex.mjs");
@@ -165,11 +166,13 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
     const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("failed-engine-test", 100));
+    // Сброс backend может упасть уже после сохранения статуса задачи.
+    engine.subscribe(run.id, (event) => { if (event.type === "task.status" && (event.data as { status?: string } | undefined)?.status === "failed") throw new Error("fetch failed"); });
 
     await engine.processNext();
 
     expect(store.listTaskRuns(run.id)[0]?.status).toBe("failed");
-    expect(store.getRun(run.id)?.status).toBe("failed");
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", error: "Runner exited 1" });
     await engine.stop();
     store.close();
   });
@@ -197,21 +200,56 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     await engine.processNext();
     const taskRun = store.listTaskRuns(run.id)[0]!;
     const original = taskRun.result_json;
-    // Уточнение переписывает тот же workspace, поэтому снимок исходного прогона устарел:
-    // неудачный снимок уточнения не должен выдаваться за успех по старому файлу.
+    // Снимок исходной версии остаётся её метаданными: уточнение пишет только в свой каталог.
     writeFileSync(join(taskRun.artifact_path, "preview.png"), "устаревший снимок");
     config.browser = join(root, "missing-browser");
     store.createFollowup(taskRun.id, "Исправь заголовок");
 
     expect(await engine.processNext()).toBe(true);
 
-    expect(JSON.parse(store.listFollowups(taskRun.id)[0]!.result_json ?? "{}").previewImage).toBe(false);
-    expect(existsSync(join(taskRun.artifact_path, "preview.png"))).toBe(false);
+    const storedFollowup = store.listFollowups(taskRun.id)[0]!;
+    expect(JSON.parse(storedFollowup.result_json ?? "{}").previewImage).toBe(false);
+    expect(existsSync(join(taskRun.artifact_path, "preview.png"))).toBe(true);
+    expect(existsSync(join(storedFollowup.artifact_path, "preview.png"))).toBe(false);
 
     expect(readFileSync(join(taskRun.artifact_path, "workspace", "index.html"), "utf8")).toBe("<h1>Исправлено</h1>");
     expect(store.getTaskRun(taskRun.id)?.result_json).toBe(original);
-    expect(JSON.parse(store.listFollowups(taskRun.id)[0]!.result_json ?? "{}").finalAnswer).toBe("Follow-up done");
+    const followup = JSON.parse(storedFollowup.result_json ?? "{}");
+    expect(followup.finalAnswer).toBe("Follow-up done");
+    expect(followup.artifacts.resultSha).not.toBe(JSON.parse(original ?? "{}").artifacts.resultSha);
     expect(JSON.parse(store.getRun(run.id)?.snapshot_json ?? "{}").reasoningEffort).toBe("high");
+    await engine.stop();
+    store.close();
+  });
+
+  it("records a terminal error when a follow-up runner exits unsuccessfully", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-followup-failure-"));
+    directories.push(root);
+    const script = join(root, "failing-followup.mjs");
+    writeFileSync(script, `let input=""; for await (const chunk of process.stdin) input+=chunk;
+console.log(JSON.stringify({type:"thread.started",thread_id:"thread"}));
+console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"answer"}}));
+console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:1}}));
+if (input.includes("Дополнительный запрос")) process.exitCode=1;`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "answer", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("followup-failure-test", 100));
+
+    await engine.processNext();
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    const followup = store.createFollowup(taskRun.id, "Уточни");
+    await engine.processNext();
+
+    expect(store.getTaskRun(taskRun.id)?.status).toBe("completed");
+    expect(store.getFollowup(followup.id)).toMatchObject({ status: "failed", error: "Runner exited 1" });
+    expect(store.getFollowup(followup.id)?.finished_at).toBeTruthy();
+    expect(JSON.parse(store.getFollowup(followup.id)?.result_json ?? "{}").artifacts).toBeUndefined();
     await engine.stop();
     store.close();
   });
