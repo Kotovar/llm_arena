@@ -651,25 +651,115 @@ describe("REST API", () => {
     store.saveTaskRunResult(failedTaskRun.id, { artifacts: initial }, "failed", "failed");
     store.updateRunStatus(failedRun.id, "failed");
 
+    const failedCheckRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const failedCheckPath = join(directory, "failed-check");
+    const failedCheckArtifacts = finalizeWorkspace(prepareWorkspace(source, failedCheckPath));
+    const failedCheckTaskRun = store.createTaskRun(failedCheckRun.id, task.currentRevision.id, 0, failedCheckPath, {
+      task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" }, fixture: { preview: { readyPath: "/" } }, model,
+    });
+    store.saveTaskRunResult(failedCheckTaskRun.id, {
+      artifacts: failedCheckArtifacts,
+      checks: [{ id: "app-files", label: "App files", status: "fail", exitCode: 1, durationMs: 10 }],
+    });
+    store.updateRunStatus(failedCheckRun.id, "completed");
+
+    const failedSelectedRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const failedSelectedPath = join(directory, "failed-selected");
+    const failedSelectedWorkspace = prepareWorkspace(source, failedSelectedPath);
+    const failedSelectedInitial = finalizeWorkspace(failedSelectedWorkspace);
+    const failedSelectedTaskRun = store.createTaskRun(failedSelectedRun.id, task.currentRevision.id, 0, failedSelectedPath, {
+      task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" }, fixture: { preview: { readyPath: "/" } }, model,
+    });
+    store.saveTaskRunResult(failedSelectedTaskRun.id, {
+      artifacts: failedSelectedInitial,
+      checks: [{ id: "app-files", label: "App files", status: "pass", exitCode: 0, durationMs: 10 }],
+    });
+    const failedSelectedFollowup = store.createFollowup(failedSelectedTaskRun.id, "Break the app");
+    const claimedFailedSelectedFollowup = store.claimNextFollowup()!;
+    mkdirSync(claimedFailedSelectedFollowup.artifact_path, { recursive: true });
+    writeFileSync(join(failedSelectedWorkspace.workspace, "index.html"), "broken\n");
+    const failedSelectedFollowupArtifacts = finalizeWorkspace({ ...failedSelectedWorkspace, artifactRoot: claimedFailedSelectedFollowup.artifact_path });
+    store.saveFollowupResult(claimedFailedSelectedFollowup.id, {
+      artifacts: failedSelectedFollowupArtifacts,
+      checks: [{ id: "app-files", label: "App files", status: "fail", exitCode: 1, durationMs: 10 }],
+    });
+    store.selectFollowupVersion(failedSelectedTaskRun.id, failedSelectedFollowup.id);
+    store.updateRunStatus(failedSelectedRun.id, "completed");
+
     store.renameModel(model.id, "Gemma 4");
     const app = buildApp({ store, config });
     const response = await app.inject({ method: "GET", url: "/api/gallery" });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        taskRunId: taskRun.id,
-        runId: run.id,
-        prompt: { id: task.currentRevision.id, name: "Landing", prompt: "Build a landing page" },
-        model: { id: model.id, name: "Gemma" },
-        selectedVersion: { type: "followup", followupId: followup.id, resultSha: followupArtifacts.resultSha, status: "completed", index: 1 },
-        screenshotUrl: `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(followupArtifacts.resultSha)}`,
-        metrics: { durationMs: 2_500, inputTokens: 25, outputTokens: 50, tokensPerSecond: 5 },
-      }),
-      expect.objectContaining({ taskRunId: duplicateTaskRun.id, runId: duplicateRun.id, screenshotUrl: null }),
-    ]));
-    expect(response.json()).toHaveLength(2);
-    expect(JSON.stringify(response.json())).not.toContain("followups");
+    const gallery = response.json();
+    expect(gallery.find((item: { taskRunId: string }) => item.taskRunId === taskRun.id)).toMatchObject({
+      taskRunId: taskRun.id,
+      runId: run.id,
+      prompt: { id: task.currentRevision.id, name: "Landing", prompt: "Build a landing page" },
+      model: { id: model.id, name: "Gemma" },
+      selectedVersion: { type: "followup", followupId: followup.id, resultSha: followupArtifacts.resultSha, status: "completed", index: 1 },
+      screenshotUrl: `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(followupArtifacts.resultSha)}`,
+      metrics: { durationMs: 2_500, inputTokens: 25, outputTokens: 50, tokensPerSecond: 5 },
+    });
+    expect(gallery.find((item: { taskRunId: string }) => item.taskRunId === duplicateTaskRun.id)).toMatchObject({ taskRunId: duplicateTaskRun.id, runId: duplicateRun.id, screenshotUrl: null });
+    expect(gallery).toHaveLength(2);
+    expect(gallery).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskRunId: failedCheckTaskRun.id })]));
+    expect(gallery).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskRunId: failedSelectedTaskRun.id })]));
+    expect(JSON.stringify(gallery)).not.toContain("followups");
+    await app.close();
+    store.close();
+  });
+
+  it("exposes the model variant, reasoning effort and runner kind used for each Gallery result", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-gallery-run-info-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Landing", kind: "prompt", prompt: "Build a landing page", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const cloudModel = store.createModel({ name: "GPT-5.6 Codex", kind: "cloud", provider: "openai", modelRef: "gpt-5.6-codex" });
+    const localModel = store.createModel({ name: "Gemma 4", kind: "local-gguf", provider: "llama.cpp", modelRef: "gemma-4" });
+    const source = join(directory, "fixture");
+    mkdirSync(source);
+    writeFileSync(join(source, "index.html"), "initial\n");
+
+    const cloudRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: cloudModel.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const cloudArtifacts = finalizeWorkspace(prepareWorkspace(source, join(directory, "cloud")));
+    const cloudTaskRun = store.createTaskRun(cloudRun.id, task.currentRevision.id, 0, join(directory, "cloud"), {
+      task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" },
+      fixture: { preview: { readyPath: "/" } },
+      model: { ...cloudModel, modelRef: "gpt-5.6-spark" },
+      reasoningEffort: "high",
+      runner: { kind: "codex" },
+    });
+    store.saveTaskRunResult(cloudTaskRun.id, { artifacts: cloudArtifacts });
+    store.updateRunStatus(cloudRun.id, "completed");
+
+    const localRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: localModel.id, executionProfileId: null, runnerId: "omp", resultMode: "web" });
+    const localArtifacts = finalizeWorkspace(prepareWorkspace(source, join(directory, "local")));
+    const localTaskRun = store.createTaskRun(localRun.id, task.currentRevision.id, 0, join(directory, "local"), {
+      task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" },
+      fixture: { preview: { readyPath: "/" } },
+      model: localModel,
+      reasoningEffort: "medium",
+      runner: { kind: "omp" },
+    });
+    store.saveTaskRunResult(localTaskRun.id, { artifacts: localArtifacts });
+    store.updateRunStatus(localRun.id, "completed");
+
+    const app = buildApp({ store, config });
+    const gallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
+
+    expect(gallery.find((item: { taskRunId: string }) => item.taskRunId === cloudTaskRun.id)).toMatchObject({
+      model: { id: cloudModel.id, name: "GPT-5.6 Codex", kind: "cloud", modelRef: "gpt-5.6-spark" },
+      reasoningEffort: "high",
+      runnerKind: "codex",
+    });
+    expect(gallery.find((item: { taskRunId: string }) => item.taskRunId === localTaskRun.id)).toMatchObject({
+      model: { id: localModel.id, name: "Gemma 4", kind: "local-gguf", modelRef: "gemma-4" },
+      reasoningEffort: "medium",
+      runnerKind: "omp",
+    });
     await app.close();
     store.close();
   });

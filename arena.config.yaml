@@ -45,7 +45,7 @@ fixtures:
       После реализации проверь синтаксис созданных JavaScript-файлов. В итоговом ответе кратко перечисли сделанное.
     checks:
       - id: preview-server
-        label: Preview server
+        label: Preview server syntax
         command:
           argv: [node, --check, server.mjs]
           timeoutMs: 60000

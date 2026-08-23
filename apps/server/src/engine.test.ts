@@ -152,6 +152,36 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     store.close();
   });
 
+  it("fails a web task and skips its screenshot when a required check fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-web-check-failure-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    writeFileSync(script, `console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:0}}));`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.browser = join(root, "missing-browser");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("web-check-failure-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    const result = JSON.parse(taskRun.result_json ?? "{}");
+    expect(taskRun.status).toBe("failed");
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", error: "App files failed" });
+    expect(result.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: "app-files", status: "fail" })]));
+    expect(result).toMatchObject({ previewImage: false });
+    expect(result.artifacts).toBeUndefined();
+    expect(existsSync(join(taskRun.artifact_path, "preview.png"))).toBe(false);
+    await engine.stop();
+    store.close();
+  });
+
   it("keeps the task failure when cleanup fails afterwards", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-failed-engine-"));
     directories.push(root);
@@ -255,6 +285,43 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(followup.finalAnswer).toBe("Follow-up done");
     expect(followup.artifacts.resultSha).not.toBe(JSON.parse(original ?? "{}").artifacts.resultSha);
     expect(JSON.parse(store.getRun(run.id)?.snapshot_json ?? "{}").reasoningEffort).toBe("high");
+    await engine.stop();
+    store.close();
+  });
+
+  it("fails a web follow-up when a required check fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-web-followup-check-failure-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    writeFileSync(
+      script,
+      `import { readFileSync, writeFileSync } from "node:fs";
+const initial = readFileSync("index.html", "utf8").includes("Приложение ещё не реализовано");
+writeFileSync("index.html", initial ? "<h1>Готово</h1>" : "<h1>Приложение ещё не реализовано</h1><p>Coding-agent заменит этот файл во время benchmark.</p>");
+console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:0}}));`,
+    );
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.browser = join(root, "missing-browser");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("web-followup-check-failure-test", 100));
+
+    await engine.processNext();
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    const followup = store.createFollowup(taskRun.id, "Сломай приложение");
+    await engine.processNext();
+
+    const result = JSON.parse(store.getFollowup(followup.id)?.result_json ?? "{}");
+    expect(taskRun.status).toBe("completed");
+    expect(store.getFollowup(followup.id)).toMatchObject({ status: "failed", error: "App files failed" });
+    expect(result.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: "app-files", status: "fail" })]));
+    expect(result).toMatchObject({ previewImage: false });
+    expect(result.artifacts).toBeUndefined();
     await engine.stop();
     store.close();
   });

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import type { GalleryMetrics, GalleryResult, ResultVersion } from "../types.js";
-import { formatDuration, formatMetricValue, galleryMatrix, plural } from "../ui.js";
+import { formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, plural } from "../ui.js";
 import { usePreviewHeartbeat } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
@@ -36,9 +36,10 @@ function Screenshot({ result, className }: { result: GalleryResult; className: s
 }
 
 function GalleryResultButton({ result, onOpen }: { result: GalleryResult; onOpen: (result: GalleryResult) => void }) {
+  const tags = galleryResultTags(result);
   return <button type="button" className="gallery-result" onClick={() => onOpen(result)}>
     <Screenshot result={result} className="gallery-shot" />
-    <span className="gallery-result-copy"><strong>{versionLabel(result.selectedVersion)}</strong><small>Запуск {result.runId.slice(0, 8)}</small></span>
+    <span className="gallery-result-copy"><strong>{versionLabel(result.selectedVersion)}</strong><small>Запуск {result.runId.slice(0, 8)}</small>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
     <ResultMetrics metrics={result.metrics} compact />
   </button>;
 }
@@ -80,7 +81,7 @@ function GalleryDetail({ result, onClose }: { result: GalleryResult; onClose: ()
   return <dialog className="gallery-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
     <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span><h2>{result.prompt.name}</h2></div><button type="button" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}>Закрыть</button></header>
     <div className="gallery-detail-grid"><section><Screenshot result={result} className="gallery-detail-shot" />{preview ? <section className="result-preview"><header><div><span className="mono">Preview запущен</span><strong>Версия по SHA</strong></div><div><a href={preview.url} target="_blank" rel="noreferrer">Открыть в новой вкладке ↗</a><button type="button" onClick={() => stop.mutate()} disabled={stop.isPending}>Остановить preview</button></div></header><iframe title={`Preview ${result.prompt.name}`} src={preview.url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" /></section> : <section className="preview-cta"><div><span className="mono">Готовая версия</span><strong>Запустить web-приложение</strong><p>Preview материализует выбранный SHA и заменит текущий единственный preview.</p></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview →"}</button></section>}{start.error || stop.error ? <p className="error">{(start.error ?? stop.error)?.message}</p> : null}</section>
-      <aside className="gallery-details"><dl><div><dt>Модель</dt><dd>{result.model.name}</dd></div><div><dt>Версия</dt><dd>{versionLabel(result.selectedVersion)}</dd></div><div><dt>SHA</dt><dd><code title={result.selectedVersion.resultSha}>{result.selectedVersion.resultSha.slice(0, 12)}</code></dd></div></dl><ResultMetrics metrics={result.metrics} /><details><summary>Исходный промпт</summary><pre>{result.prompt.prompt}</pre></details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть полный результат запуска →</Link></aside>
+      <aside className="gallery-details"><dl><div><dt>Модель</dt><dd>{result.model.name}</dd></div><div><dt>Версия</dt><dd>{versionLabel(result.selectedVersion)}</dd></div><div><dt>SHA</dt><dd><code title={result.selectedVersion.resultSha}>{result.selectedVersion.resultSha.slice(0, 12)}</code></dd></div>{galleryResultTags(result).map((tag) => <div key={tag}><dt>Запуск</dt><dd>{tag}</dd></div>)}</dl><ResultMetrics metrics={result.metrics} /><details><summary>Исходный промпт</summary><pre>{result.prompt.prompt}</pre></details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть полный результат запуска →</Link></aside>
     </div>
   </dialog>;
 }

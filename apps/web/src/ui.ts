@@ -90,6 +90,22 @@ export function galleryMatrix(results: GalleryResult[]) {
   };
 }
 
+export function galleryResultTags(result: {
+  model: { name: string; kind?: Model["kind"]; modelRef?: string };
+  reasoningEffort?: string | null;
+  runnerKind?: string;
+}) {
+  const tags: string[] = [];
+  if (result.model.kind === "local-gguf") {
+    if (result.runnerKind === "omp") tags.push("с обвязкой (OMP)");
+    else if (result.runnerKind === "llama-chat") tags.push("без обвязки");
+  } else if (result.model.modelRef && result.model.modelRef !== result.model.name) {
+    tags.push(result.model.modelRef);
+  }
+  if (result.reasoningEffort) tags.push(`мышление: ${result.reasoningEffort}`);
+  return tags;
+}
+
 export function defaultLocalProfile(modelId: string) {
   return {
     modelId,

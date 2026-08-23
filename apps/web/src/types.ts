@@ -122,7 +122,9 @@ export type GalleryResult = {
   taskRunId: string;
   runId: string;
   prompt: { id: string; name: string; prompt: string };
-  model: { id: string; name: string };
+  model: { id: string; name: string; kind?: Model["kind"]; modelRef?: string };
+  reasoningEffort?: string | null;
+  runnerKind?: string;
   selectedVersion: ResultVersion;
   screenshotUrl: string | null;
   metrics?: GalleryMetrics;

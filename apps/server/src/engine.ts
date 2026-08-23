@@ -210,13 +210,14 @@ export class BenchmarkEngine {
             displayPath,
           });
           if (backend) result.metrics.startupDurationMs = { value: backend.startupDurationMs, unit: "ms", source: "client-observed" };
-          const status = result.exitCode === 0 ? "completed" : "failed";
-          const artifacts = status === "completed" ? finalizeWorkspace(prepared) : undefined;
           const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, signal) : [];
+          const failedCheck = checks.find((check) => check.status !== "pass");
+          const status = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
+          const artifacts = status === "completed" ? finalizeWorkspace(prepared) : undefined;
           const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, signal);
           const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
-          this.store.saveTaskRunResult(taskRun.id, saved, status, status === "failed" ? `Runner exited ${result.exitCode}` : undefined);
+          this.store.saveTaskRunResult(taskRun.id, saved, status, status === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
         } catch (error) {
           this.store.saveTaskRunResult(taskRun.id, {}, signal.aborted ? "cancelled" : "failed", (error as Error).message);
         }
@@ -297,15 +298,16 @@ export class BenchmarkEngine {
         stderrPath,
         displayPath,
       });
-      const status = result.exitCode === 0 ? "completed" : "failed";
+      const checks = snapshot.fixture ? await this.#runChecks(snapshot.fixture, workspace, followup.artifact_path, signal) : [];
+      const failedCheck = checks.find((check) => check.status !== "pass");
+      const status = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
       const artifacts = status === "completed"
         ? finalizeWorkspace({ artifactRoot: followup.artifact_path, workspace, gitDir, baselineSha: baseVersion.baselineSha })
         : undefined;
-      const checks = snapshot.fixture ? await this.#runChecks(snapshot.fixture, workspace, followup.artifact_path, signal) : [];
       const previewImage = status === "completed" && await this.#capturePreview(snapshot.fixture, workspace, followup.artifact_path, signal);
       const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
       writeFileSync(join(followup.artifact_path, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
-      this.store.saveFollowupResult(followup.id, saved, status, status === "failed" ? `Runner exited ${result.exitCode}` : undefined);
+      this.store.saveFollowupResult(followup.id, saved, status, status === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
     } finally {
       await backend?.stop();
     }

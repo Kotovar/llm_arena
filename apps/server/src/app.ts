@@ -79,7 +79,9 @@ function contained(root: string, requested: string): string {
 type GallerySnapshot = {
   task?: { name?: string; prompt?: string };
   fixture?: { preview?: unknown };
-  model?: { name?: string };
+  model?: { name?: string; modelRef?: string };
+  reasoningEffort?: string | null;
+  runner?: { kind?: string };
 };
 
 function parseGallerySnapshot(json: string): GallerySnapshot | undefined {
@@ -100,6 +102,15 @@ function galleryMetrics(resultJson: string | null) {
     return Object.values(result).some((item) => item !== undefined) ? result : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function checksPassed(resultJson: string | null) {
+  try {
+    const checks = (JSON.parse(resultJson ?? "{}") as { checks?: unknown }).checks;
+    return !Array.isArray(checks) || checks.every((check) => typeof check === "object" && check !== null && (check as { status?: unknown }).status === "pass");
+  } catch {
+    return false;
   }
 }
 
@@ -286,10 +297,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/gallery", async () => store.listRuns().flatMap((run) => {
     if (run.result_mode !== "web") return [];
     return store.listTaskRuns(run.id).flatMap((taskRun) => {
-      if (taskRun.status !== "completed") return [];
+      if (taskRun.status !== "completed" || !checksPassed(taskRun.result_json)) return [];
       const selected = selectedResultVersionRecord(taskRun);
       const snapshot = parseGallerySnapshot(taskRun.snapshot_json);
-      if (!selected || !snapshot?.fixture?.preview) return [];
+      if (!selected || !snapshot?.fixture?.preview || !checksPassed(selected.resultJson)) return [];
       try {
         assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), selected.resultSha);
       } catch {
@@ -304,7 +315,14 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         taskRunId: taskRun.id,
         runId: run.id,
         prompt: { id: taskRun.task_revision_id, name: task.name, prompt: task.prompt },
-        model: { id: run.model_id, name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8) },
+        model: {
+          id: run.model_id,
+          name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),
+          kind: model?.kind,
+          modelRef: snapshot.model?.modelRef || run.model_ref || undefined,
+        },
+        reasoningEffort: snapshot.reasoningEffort ?? null,
+        runnerKind: snapshot.runner?.kind,
         selectedVersion,
         screenshotUrl: existsSync(join(artifactPath, "preview.png"))
           ? `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(selected.resultSha)}`
