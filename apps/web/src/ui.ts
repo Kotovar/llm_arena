@@ -145,6 +145,10 @@ export function shouldFollowOutput(scrollTop: number, clientHeight: number, scro
   return scrollHeight - scrollTop - clientHeight < 24;
 }
 
+export function diagnosticErrorPreview(raw: string, limit = 8_000) {
+  return raw.slice(0, limit);
+}
+
 export function reviewSaveLabel(isPending: boolean, isSuccess: boolean) {
   return isPending ? "Сохраняем…" : isSuccess ? "Сохранено" : "Сохранить";
 }

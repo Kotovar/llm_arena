@@ -17,6 +17,7 @@ import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
 import { activeExportPath, renderFishCommand, renderFishLauncher, renderOmpLayout, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
+import { describeGenerationError } from "./generation-error.js";
 import { assertWorkspaceCommit, workspaceVersionDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
@@ -128,9 +129,19 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   const hasActiveFollowup = (runId: string) => store.listTaskRuns(runId).some((taskRun) =>
     taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running"));
   const activityStatus = (run: { id: string; status: string }) => hasActiveFollowup(run.id) ? "running-followup" : run.status;
+  const withPublicError = <T extends { error: string | null }>(item: T) => {
+    const { error, ...result } = item;
+    const errorDetails = describeGenerationError(error);
+    return { ...result, error: errorDetails?.message ?? null, errorDetails };
+  };
+  const errorDetails = (error: string | null) => {
+    const details = describeGenerationError(error);
+    if (!details || !error) throw new Error("Error details not found");
+    return { ...details, raw: error };
+  };
   const withSelectedVersion = (taskRun: NonNullable<ReturnType<ArenaStore["getTaskRun"]>>) => {
-    const { selected_followup_id: _, ...result } = taskRun;
-    return { ...result, selectedVersion: selectedResultVersion(taskRun) };
+    const { selected_followup_id: _, followups, ...result } = taskRun;
+    return { ...withPublicError(result), followups: followups.map(withPublicError), selectedVersion: selectedResultVersion(taskRun) };
   };
   const resolvedVersion = (taskRun: NonNullable<ReturnType<ArenaStore["getTaskRun"]>>, resultSha?: string) => {
     const selected = resultSha ? undefined : selectedResultVersion(taskRun);
@@ -241,7 +252,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return engine.calibrate(request.params.id);
   });
 
-  app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...run, activityStatus: activityStatus(run) })));
+  app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run) })));
   app.post("/api/runs", async (request, reply) => {
     const input = parse(createRunSchema, request.body);
     if (!store.getActiveModel(input.modelId)) throw new Error("Model not found");
@@ -277,7 +288,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         return taskRun;
       }
     });
-    return { ...run, activityStatus: activityStatus(run), taskRuns: taskRuns.map(withSelectedVersion) };
+    return { ...withPublicError(run), activityStatus: activityStatus(run), taskRuns: taskRuns.map(withSelectedVersion) };
+  });
+  app.get<{ Params: { id: string } }>("/api/runs/:id/error-details", async (request) => {
+    const run = store.getRun(request.params.id);
+    if (!run) throw new Error("Run not found");
+    return errorDetails(run.error);
   });
   app.delete<{ Params: { id: string } }>("/api/runs/:id", async (request, reply) => {
     const run = store.getRun(request.params.id);
@@ -329,6 +345,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const run = store.getTaskRun(request.params.id);
     if (!run) throw new Error("Task run not found");
     return withSelectedVersion(run);
+  });
+  app.get<{ Params: { id: string } }>("/api/task-runs/:id/error-details", async (request) => {
+    const run = store.getTaskRun(request.params.id);
+    if (!run) throw new Error("Task run not found");
+    return errorDetails(run.error);
   });
   app.get<{ Params: { id: string }; Querystring: { resultSha?: string } }>("/api/task-runs/:id/diff", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);
@@ -401,6 +422,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const path = join(followup.artifact_path, filename);
     reply.type("text/plain");
     return existsSync(path) ? createReadStream(path) : "";
+  });
+  app.get<{ Params: { id: string } }>("/api/followups/:id/error-details", async (request) => {
+    const followup = store.getFollowup(request.params.id);
+    if (!followup) throw new Error("Additional prompt not found");
+    return errorDetails(followup.error);
   });
   app.post<{ Params: { id: string } }>("/api/followups/:id/cancel", async (request, reply) => {
     const followup = store.getFollowup(request.params.id);

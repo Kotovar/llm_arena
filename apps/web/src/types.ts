@@ -84,6 +84,13 @@ export type Fixture = { id: string; name: string; checks: Array<{ id: string; la
 export type ModelOption = { id: string; name: string; efforts: string[]; defaultEffort: string | null };
 export type ModelCatalog = { claude: { models: ModelOption[] }; codex: { models: ModelOption[] } };
 
+export type GenerationErrorDetails = {
+  code: "invalid_tool_call" | "generation_failed" | string;
+  message: string;
+  details?: string;
+  rawSize: number;
+};
+
 export type Followup = {
   id: string;
   position: number;
@@ -91,6 +98,7 @@ export type Followup = {
   status: string;
   result_json: string | null;
   error: string | null;
+  errorDetails?: GenerationErrorDetails | null;
   started_at: string | null;
   finished_at: string | null;
 };
@@ -111,6 +119,7 @@ export type TaskRun = {
   snapshot_json: string;
   result_json: string | null;
   error: string | null;
+  errorDetails?: GenerationErrorDetails | null;
   selectedVersion?: ResultVersion | null;
   review?: {
     correctness: number;
@@ -137,6 +146,7 @@ export type Run = {
   started_at: string | null;
   finished_at: string | null;
   error: string | null;
+  errorDetails?: GenerationErrorDetails | null;
   review_score?: number | null;
   reviewed_count?: number;
   task_count?: number;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, followupCountLabel, formatRelativeTime, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -142,6 +142,13 @@ describe("интерфейс запуска", () => {
   it("останавливает автопрокрутку, когда пользователь ушёл вверх", () => {
     expect(shouldFollowOutput(700, 300, 1_000)).toBe(true);
     expect(shouldFollowOutput(300, 300, 1_000)).toBe(false);
+  });
+
+  it("ограничивает raw error перед рендерингом в DOM", () => {
+    const preview = diagnosticErrorPreview("x".repeat(20_000), 500);
+
+    expect(preview).toHaveLength(500);
+    expect(preview).toBe("x".repeat(500));
   });
 
   it("показывает состояние сохранения оценки", () => {

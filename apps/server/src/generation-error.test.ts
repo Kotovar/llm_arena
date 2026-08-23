@@ -1,0 +1,23 @@
+import { describe, expect, it } from "vitest";
+import { describeGenerationError } from "./generation-error.js";
+
+describe("generation error diagnostics", () => {
+  it("classifies an oversized malformed tool call without using its raw payload as the message", () => {
+    const raw = `500 Failed to parse tool call arguments as JSON:\n[json.exception.parse_error.101] parse error at line 1, column 352294: missing closing quote\n${"<tool_call|><|channel>thought ".repeat(12_000)}`;
+
+    expect(describeGenerationError(raw)).toMatchObject({
+      code: "invalid_tool_call",
+      message: "Не удалось разобрать tool call модели: некорректный JSON.",
+      details: "Сервер модели вернул HTTP 500 до выполнения tool call.",
+      rawSize: expect.any(Number),
+    });
+  });
+
+  it("limits generic provider details while retaining the raw error for the diagnostic endpoint", () => {
+    const details = describeGenerationError("provider failure: ".concat("x".repeat(20_000)));
+
+    expect(details).toMatchObject({ code: "generation_failed", message: "Генерация завершилась с ошибкой." });
+    expect(details?.details).toHaveLength(280);
+    expect(details?.rawSize).toBeGreaterThan(20_000);
+  });
+});

@@ -3,8 +3,8 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Status, useData } from "../shell.js";
-import type { Fixture, Followup, Model, ResultVersion, Run, Runner, Task, TaskRun } from "../types.js";
-import { checkStatusLabel, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, promptCountLabel, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, shouldFollowOutput } from "../ui.js";
+import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, Runner, Task, TaskRun } from "../types.js";
+import { checkStatusLabel, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, promptCountLabel, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, shouldFollowOutput } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
@@ -66,6 +66,7 @@ type DisplayVersion = {
   status: string;
   resultJson: string | null;
   error: string | null;
+  errorDetails: GenerationErrorDetails | null | undefined;
   startedAt: string | null;
   finishedAt: string | null;
   resultSha: string | undefined;
@@ -84,6 +85,7 @@ function resultVersions(taskRun: TaskRun): DisplayVersion[] {
       status: taskRun.status,
       resultJson: taskRun.result_json,
       error: taskRun.error,
+      errorDetails: taskRun.errorDetails,
       startedAt: null,
       finishedAt: null,
       resultSha: initialSha,
@@ -97,6 +99,7 @@ function resultVersions(taskRun: TaskRun): DisplayVersion[] {
       status: followup.status,
       resultJson: followup.result_json,
       error: followup.error,
+      errorDetails: followup.errorDetails,
       startedAt: followup.started_at,
       finishedAt: followup.finished_at,
       resultSha: resultSha(followup.result_json) ?? (selected?.type === "followup" && selected.followupId === followup.id ? selected.resultSha : undefined),
@@ -146,11 +149,26 @@ function initialReview(taskRun: TaskRun): ReviewDraft {
   } : { correctness: 5, codeQuality: 5, uiQuality: 5, instructionFollowing: 5, comment: "" };
 }
 
+function GenerationError({ error, errorDetails, endpoint }: { error: string | null; errorDetails: GenerationErrorDetails | null | undefined; endpoint: string }) {
+  const [open, setOpen] = useState(false);
+  const [copyMessage, setCopyMessage] = useState("");
+  const diagnostic = useQuery({ queryKey: ["generation-error", endpoint], queryFn: () => api<GenerationErrorDetails & { raw: string }>(endpoint), enabled: open, staleTime: Infinity });
+  const message = errorDetails?.message ?? error;
+  if (!message) return null;
+  async function copyRaw() {
+    if (!diagnostic.data?.raw) return;
+    try { await navigator.clipboard.writeText(diagnostic.data.raw); setCopyMessage("Скопировано"); }
+    catch { setCopyMessage("Не удалось скопировать"); }
+    window.setTimeout(() => setCopyMessage(""), 2_500);
+  }
+  return <section className="generation-error"><div><span className="mono">Ошибка генерации</span><strong>{message}</strong>{errorDetails?.details ? <p>{errorDetails.details}</p> : null}</div><details onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Показать технические детали</summary>{open ? <div className="generation-error-raw">{diagnostic.isPending ? <p>Загружаем диагностический лог…</p> : null}{diagnostic.error ? <p className="error">{diagnostic.error.message}</p> : null}{diagnostic.data ? <><div><small>{diagnostic.data.rawSize.toLocaleString("ru-RU")} Б</small><button onClick={() => void copyRaw()}>Копировать полный лог</button>{copyMessage ? <span className={copyMessage === "Скопировано" ? "success" : "error"}>{copyMessage}</span> : null}</div><pre>{diagnosticErrorPreview(diagnostic.data.raw)}</pre>{diagnostic.data.raw.length > 8_000 ? <p>В области показаны первые 8 000 символов; кнопка копирует полный лог.</p> : null}</> : null}</div> : null}</details></section>;
+}
+
 function FollowupResult({ followup, cancelPending, onCancel }: { followup: Followup; cancelPending: boolean; onCancel: () => void }) {
   const active = followup.status === "pending" || followup.status === "running";
   const liveLogs = useQuery({ queryKey: ["followup-logs", followup.id], queryFn: () => apiText(`/followups/${followup.id}/logs?stream=display`), enabled: followup.status === "running", refetchInterval: 1_000 });
   return <details className="followup-item"><summary><span className="followup-summary-title"><span className="mono">Уточнение {followup.position}</span><Status value={followup.status} /></span>{active ? <Elapsed since={followup.started_at} /> : followup.finished_at ? <time dateTime={followup.finished_at}>{formatRelativeTime(followup.finished_at)}</time> : null}</summary><div className="followup-content"><p>{followup.prompt}</p>
-    {followup.error ? <p className="error">{followup.error}</p> : null}
+    {followup.error ? <GenerationError error={followup.error} errorDetails={followup.errorDetails} endpoint={`/followups/${followup.id}/error-details`} /> : null}
     {active ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />{followup.status === "pending" ? "Уточнение ожидает запуска" : "Модель выполняет уточнение"}</strong><Elapsed since={followup.started_at} /><button className="danger" onClick={onCancel} disabled={cancelPending}>Остановить</button></div><pre>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre></div> : null}
     {followup.result_json && !active ? <p className="followup-note">Результат доступен в переключателе версий выше.</p> : null}
   </div></details>;
@@ -217,6 +235,7 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
   const isSelectedFinal = activeVersion.resultSha === taskRun.selectedVersion?.resultSha;
   const canUseVersion = activeVersion.status === "completed" && Boolean(activeVersion.resultSha);
   const logsPath = activeVersion.type === "followup" ? `/followups/${activeVersion.followupId!}/logs` : `/task-runs/${taskRun.id}/logs`;
+  const errorDetailsPath = activeVersion.type === "followup" ? `/followups/${activeVersion.followupId!}/error-details` : `/task-runs/${taskRun.id}/error-details`;
   return <article className="result-card">
     <header>
       <div><span className="mono">Промпт {taskRun.position + 1} · {snapshot.task.kind === "coding" ? "работа с проектом" : "ответ"}</span><h3>{snapshot.task.name}</h3>{taskRun.review ? <div className="saved-score"><strong>{reviewTotal(taskRun.review)}/40</strong>{reviewCriteria.map(([key, label]) => <span key={key}>{label}: {key === "codeQuality" ? taskRun.review!.code_quality : key === "uiQuality" ? taskRun.review!.ui_quality : key === "instructionFollowing" ? taskRun.review!.instruction_following : taskRun.review!.correctness}</span>)}</div> : <span className="unrated">Не оценено</span>}</div>
@@ -232,7 +251,7 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
       })}</div>
     </section>
     {selectFinal.error ? <p className="error">{selectFinal.error.message}</p> : null}
-    {activeVersion.error ? <p className="error">{activeVersion.error}</p> : null}
+    {activeVersion.error ? <GenerationError error={activeVersion.error} errorDetails={activeVersion.errorDetails} endpoint={errorDetailsPath} /> : null}
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button className="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>Прервать</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
     {result ? <MetricStrip result={result} /> : null}
     <ChecksStrip result={result} />
@@ -285,13 +304,14 @@ export function RunDetail({ runId }: { runId: string }) {
   const activeTask = run.data.taskRuns?.find((task) => task.status === "running");
   const activeTaskName = activeTask ? (JSON.parse(activeTask.snapshot_json) as { task: { name: string } }).task.name : undefined;
   const activeFollowup = run.data.taskRuns?.flatMap((task) => task.followups ?? []).find((followup) => followup.status === "pending" || followup.status === "running");
+  const hasTaskError = run.data.taskRuns?.some((task) => task.error);
   const activityStatus = run.data.activityStatus ?? run.data.status;
   const runningFollowup = activityStatus === "running-followup";
   const isActive = live;
   const scores = reviewSummary(run.data.taskRuns?.map((task) => task.review) ?? [], total);
   return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? "Выполняется уточнение" : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
-    {run.data.error ? <p className="run-error">{run.data.error}</p> : null}
+    {run.data.error && !hasTaskError ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
     <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive ? <button className="danger" onClick={() => { if (window.confirm("Удалить этот результат и все его файлы?")) remove.mutate(); }} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}><div className="stack">{run.data.taskRuns?.map((taskRun) => <TaskResult key={taskRun.id} taskRun={taskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} />)}{isActive && !run.data.taskRuns?.length ? <Empty>Готовим рабочее окружение и запускаем модель…</Empty> : null}</div>{remove.error ? <p className="error">{remove.error.message}</p> : null}</Panel>
   </Page>;
 }

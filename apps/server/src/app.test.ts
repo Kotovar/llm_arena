@@ -356,6 +356,39 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("keeps a huge provider error out of normal result payloads and exposes it on demand", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-error-details-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/model.gguf", alias: "local" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "omp", resultMode: "web" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
+    const raw = `500 Failed to parse tool call arguments as JSON: column 352294\n${"<tool_call|><|channel>thought ".repeat(12_000)}`;
+    store.saveTaskRunResult(taskRun.id, {}, "failed", raw);
+    store.updateRunStatus(run.id, "failed", raw);
+    const app = buildApp({ store, config });
+
+    const detail = await app.inject({ method: "GET", url: `/api/runs/${run.id}` });
+    const list = await app.inject({ method: "GET", url: "/api/runs" });
+    const diagnostic = await app.inject({ method: "GET", url: `/api/task-runs/${taskRun.id}/error-details` });
+
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({
+      error: "Не удалось разобрать tool call модели: некорректный JSON.",
+      errorDetails: { code: "invalid_tool_call", rawSize: raw.length },
+      taskRuns: [{ error: "Не удалось разобрать tool call модели: некорректный JSON.", errorDetails: { code: "invalid_tool_call" } }],
+    });
+    expect(JSON.stringify(detail.json())).not.toContain("<tool_call|><|channel>thought");
+    expect(list.json()[0]).toMatchObject({ error: "Не удалось разобрать tool call модели: некорректный JSON." });
+    expect(diagnostic.statusCode).toBe(200);
+    expect(diagnostic.json()).toMatchObject({ code: "invalid_tool_call", raw });
+    await app.close();
+    store.close();
+  });
+
   it("bulk deletion keeps active runs", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-clear-"));
     directories.push(directory);
