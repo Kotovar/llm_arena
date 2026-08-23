@@ -67,6 +67,36 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_t
     expect(result.finalAnswer).toBe("normal");
   });
 
+  it("switches web tasks between isolated and normal OMP environments", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
+    directories.push(root);
+    const script = join(root, "fake-omp-web.mjs");
+    writeFileSync(
+      script,
+      `const normal = !process.env.PI_CODING_AGENT_DIR && !process.argv.includes("--no-skills");
+console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:normal ? "normal" : "isolated"}]}]}));`,
+    );
+    const runner = createRunner("omp", new ProcessSupervisor("runner-test", 100));
+    const input = {
+      definition: { id: "fake", name: "Fake", kind: "omp" as const, exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
+      prompt: "Build it",
+      workspace: root,
+      modelRef: "test-model",
+      taskKind: "coding" as const,
+      taskDataDir: root,
+      timeoutMs: 2_000,
+      signal: new AbortController().signal,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+    };
+
+    const isolated = await runner.run({ ...input, useOmpAgent: false });
+    const normal = await runner.run({ ...input, useOmpAgent: true });
+
+    expect(isolated.finalAnswer).toBe("isolated");
+    expect(normal.finalAnswer).toBe("normal");
+  });
+
   it("keeps an active runner alive past the configured idle timeout", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
     directories.push(root);

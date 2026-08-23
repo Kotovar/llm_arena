@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStore } from "./store.js";
 
@@ -67,6 +68,43 @@ describe("benchmark revisions", () => {
 });
 
 describe("run queue", () => {
+  it("migrates legacy text runs to their normal OMP environment", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-legacy-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const sqlite = new DatabaseSync(filename);
+    sqlite.exec(`
+      CREATE TABLE benchmark_runs (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        benchmark_revision_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        execution_profile_id TEXT,
+        runner_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        snapshot_json TEXT,
+        error TEXT,
+        started_at TEXT,
+        finished_at TEXT,
+        created_at TEXT NOT NULL,
+        result_mode TEXT NOT NULL DEFAULT 'text',
+        model_ref TEXT,
+        reasoning_effort TEXT
+      );
+      INSERT INTO benchmark_runs (id, benchmark_revision_id, model_id, runner_id, status, created_at, result_mode)
+      VALUES
+        ('legacy-text', 'benchmark', 'model', 'omp', 'pending', '2026-08-23T00:00:00.000Z', 'text'),
+        ('legacy-web', 'benchmark', 'model', 'omp', 'pending', '2026-08-23T00:00:00.000Z', 'web');
+    `);
+    sqlite.close();
+
+    const store = createStore(filename);
+
+    expect(store.getRun("legacy-text")?.use_omp_agent).toBe(1);
+    expect(store.getRun("legacy-web")?.use_omp_agent).toBe(0);
+    store.close();
+  });
+
   it("summarizes only persisted human reviews", () => {
     const store = testStore();
     const first = store.createTask({ name: "First", kind: "prompt", prompt: "One", tags: [] });

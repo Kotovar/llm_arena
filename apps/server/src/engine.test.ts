@@ -177,6 +177,43 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     store.close();
   });
 
+  it("uses the requested OMP environment for web runs and their follow-ups", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-web-omp-engine-"));
+    directories.push(root);
+    const script = join(root, "fake-omp.mjs");
+    writeFileSync(
+      script,
+      `import { writeFileSync } from "node:fs";
+const normal = !process.env.PI_CODING_AGENT_DIR && !process.argv.includes("--no-skills");
+writeFileSync("index.html", "<h1>Готовое приложение</h1>");
+console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:normal ? "normal" : "isolated"}]}]}));`,
+    );
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.browser = join(root, "missing-browser");
+    config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model" });
+    const request = { benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" as const, useOmpAgent: true };
+    const run = store.createRun(request);
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("web-omp-engine-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    expect(JSON.parse(taskRun.result_json ?? "{}").finalAnswer).toBe("normal");
+    expect(JSON.parse(store.getRun(run.id)?.snapshot_json ?? "{}").useOmpAgent).toBe(true);
+
+    store.createFollowup(taskRun.id, "Измени страницу");
+    await engine.processNext();
+
+    expect(JSON.parse(store.listFollowups(taskRun.id)[0]?.result_json ?? "{}").finalAnswer).toBe("normal");
+    await engine.stop();
+    store.close();
+  });
+
   it("runs an additional prompt in the existing web workspace without replacing the original answer", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-followup-engine-"));
     directories.push(root);

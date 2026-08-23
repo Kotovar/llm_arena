@@ -54,6 +54,7 @@ type RunRow = {
   execution_profile_id: string | null;
   runner_id: string;
   result_mode: "text" | "web";
+  use_omp_agent: number;
   model_ref: string | null;
   reasoning_effort: string | null;
   status: RunStatus;
@@ -157,7 +158,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS benchmark_revision_tasks (benchmark_revision_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(benchmark_revision_id, task_revision_id));
     CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, benchmark_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, benchmark_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -173,6 +174,10 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!runColumns.some((column) => column.name === "model_ref")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN model_ref TEXT");
+  }
+  if (!runColumns.some((column) => column.name === "use_omp_agent")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN use_omp_agent INTEGER NOT NULL DEFAULT 0");
+    sqlite.exec("UPDATE benchmark_runs SET use_omp_agent = CASE WHEN result_mode = 'text' THEN 1 ELSE 0 END");
   }
   const taskRunColumns = sqlite.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>;
   if (!taskRunColumns.some((column) => column.name === "selected_followup_id")) {
@@ -468,8 +473,8 @@ export function createStore(filename: string) {
       if (!model) throw new Error("Model not found");
       const modelRef = model.kind === "cloud" ? input.modelRef ?? model.modelRef : model.modelRef;
       sqlite
-        .prepare("INSERT INTO benchmark_runs (id, benchmark_revision_id, model_id, execution_profile_id, runner_id, result_mode, model_ref, reasoning_effort, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
-        .run(id, input.benchmarkRevisionId, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, modelRef, input.reasoningEffort ?? null, createdAt);
+        .prepare("INSERT INTO benchmark_runs (id, benchmark_revision_id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+        .run(id, input.benchmarkRevisionId, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, createdAt);
       return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
     },
     getRun(id: string) {

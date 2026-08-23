@@ -154,6 +154,7 @@ export type Run = {
   model_id: string;
   runner_id: string;
   result_mode: "text" | "web";
+  use_omp_agent: number;
   model_ref: string | null;
   reasoning_effort: string | null;
   status: string;

@@ -64,18 +64,20 @@ describe("normalized results", () => {
 });
 
 describe("run configuration", () => {
-  it("keeps the selected result mode in the parsed run", () => {
+  it("keeps the selected result mode and OMP environment in the parsed run", () => {
     const parsed = createRunSchema.parse({
       benchmarkRevisionId: "2d2b5de7-7469-48a7-b625-2ff4509fa8a7",
       modelId: "62c2acc6-bc4f-4e01-ae65-3cf124d76219",
       executionProfileId: null,
       runnerId: "codex-proxy",
       resultMode: "web",
+      useOmpAgent: true,
       modelRef: "gpt-5.6-terra",
       reasoningEffort: "high",
     });
 
     expect(parsed.resultMode).toBe("web");
+    expect(parsed.useOmpAgent).toBe(true);
     expect(parsed.modelRef).toBe("gpt-5.6-terra");
     expect(parsed.reasoningEffort).toBe("high");
   });
@@ -90,6 +92,7 @@ describe("run configuration", () => {
     });
 
     expect(parsed.reasoningEffort).toBeNull();
+    expect(parsed.useOmpAgent).toBe(false);
   });
 
   it("keeps the configured default runner marker", () => {

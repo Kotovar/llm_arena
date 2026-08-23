@@ -111,6 +111,7 @@ export const createRunSchema = z.object({
   executionProfileId: z.string().uuid().nullable(),
   runnerId: z.string().trim().min(1),
   resultMode: z.enum(["text", "web"]),
+  useOmpAgent: z.boolean().default(false),
   modelRef: z.string().trim().min(1).optional(),
   reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).nullable().default(null),
 });

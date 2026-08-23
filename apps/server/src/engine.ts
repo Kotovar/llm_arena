@@ -140,7 +140,7 @@ export class BenchmarkEngine {
 
     const runRoot = join(this.config.dataDir, "runs", run.id);
     mkdirSync(runRoot, { recursive: true });
-    this.store.setRunSnapshot(run.id, { benchmark, model: selectedModel, profile, resultMode: run.result_mode, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
+    this.store.setRunSnapshot(run.id, { benchmark, model: selectedModel, profile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
     const backendStdout = join(runRoot, "backend.stdout.log");
     const backendStderr = join(runRoot, "backend.stderr.log");
     writeFileSync(backendStdout, "");
@@ -176,7 +176,7 @@ export class BenchmarkEngine {
         if (effectiveTask.kind === "coding" && !fixture) throw new Error(`Fixture ${effectiveTask.fixtureId} not found`);
         const source = fixture?.source ?? this.#emptyFixture();
         const prepared = prepareWorkspace(source, artifactRoot);
-        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture, model: selectedModel, profile, resultMode: run.result_mode, reasoningEffort: run.reasoning_effort, runner: definition });
+        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture, model: selectedModel, profile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
         this.store.startTaskRun(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: "running", position, name: task.name } });
         const stdoutPath = join(artifactRoot, "stdout.log");
@@ -195,6 +195,7 @@ export class BenchmarkEngine {
             definition,
             prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
             taskKind: effectiveTask.kind,
+            useOmpAgent: run.use_omp_agent === 1,
             workspace: prepared.workspace,
             modelRef: selectedModel.modelRef,
             reasoningEffort: run.reasoning_effort,
@@ -282,6 +283,7 @@ export class BenchmarkEngine {
         definition,
         prompt,
         taskKind: snapshot.task.kind,
+        useOmpAgent: run.use_omp_agent === 1,
         workspace,
         modelRef: run.model_ref ?? model.modelRef,
         reasoningEffort: run.reasoning_effort,
@@ -311,7 +313,7 @@ export class BenchmarkEngine {
 
   async #runAgent(input: {
     definition: ArenaConfig["runners"][number]; prompt: string; workspace: string; modelRef: string; reasoningEffort: string | null;
-    taskKind: "prompt" | "coding"; taskDataDir: string; timeoutMs: number; signal: AbortSignal; baseUrl?: string; runId: string; taskRunId: string;
+    taskKind: "prompt" | "coding"; useOmpAgent: boolean; taskDataDir: string; timeoutMs: number; signal: AbortSignal; baseUrl?: string; runId: string; taskRunId: string;
     stdoutPath: string; stderrPath: string; displayPath: string;
   }) {
     const secretValues = input.definition.envPassthrough.flatMap((name) => process.env[name] ? [process.env[name]!] : []);
@@ -325,6 +327,7 @@ export class BenchmarkEngine {
       modelRef: input.modelRef,
       reasoningEffort: input.reasoningEffort,
       taskKind: input.taskKind,
+      useOmpAgent: input.useOmpAgent,
       taskDataDir: input.taskDataDir,
       timeoutMs: input.timeoutMs,
       signal: input.signal,

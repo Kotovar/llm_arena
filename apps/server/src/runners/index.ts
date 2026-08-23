@@ -10,6 +10,7 @@ export type RunnerInput = {
   modelRef: string;
   reasoningEffort?: string | null;
   taskKind?: "prompt" | "coding";
+  useOmpAgent?: boolean;
   taskDataDir: string;
   timeoutMs: number;
   signal: AbortSignal;
@@ -121,12 +122,12 @@ export function createRunner(kind: RunnerKind, supervisor: ProcessSupervisor): M
     case "omp":
       return new CliRunner(
         supervisor,
-        (input) => buildOmpCommand(input.definition.exec, input.workspace, input.modelRef, input.prompt, input.taskKind === "prompt"),
+        (input) => buildOmpCommand(input.definition.exec, input.workspace, input.modelRef, input.prompt, input.useOmpAgent ?? input.taskKind === "prompt"),
         parseOmpOutput,
         false,
         (input) => ({
           LLAMA_CPP_BASE_URL: input.baseUrl,
-          ...(input.taskKind === "prompt" ? {} : { PI_CODING_AGENT_DIR: `${input.taskDataDir}/omp` }),
+          ...(input.useOmpAgent ?? input.taskKind === "prompt" ? {} : { PI_CODING_AGENT_DIR: `${input.taskDataDir}/omp` }),
         }),
       );
     case "claude-code":
