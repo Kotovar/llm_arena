@@ -557,6 +557,92 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("projects selected SHA-backed web versions for Gallery without exposing follow-ups", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-gallery-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Landing", kind: "prompt", prompt: "Build a landing page", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Gemma", kind: "cloud", provider: "openai", modelRef: "gemma" });
+    const source = join(directory, "fixture");
+    mkdirSync(source);
+    writeFileSync(join(source, "index.html"), "initial\n");
+
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const artifactPath = join(directory, "selected");
+    const prepared = prepareWorkspace(source, artifactPath);
+    const initial = finalizeWorkspace(prepared);
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, artifactPath, {
+      task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" }, fixture: { preview: { readyPath: "/" } }, model,
+    });
+    store.saveTaskRunResult(taskRun.id, {
+      artifacts: initial,
+      metrics: { totalDurationMs: { value: 100 }, inputTokens: { value: 10 }, outputTokens: { value: 20 }, generationTokensPerSecond: { value: 2 } },
+    });
+    const followup = store.createFollowup(taskRun.id, "Make it green");
+    const claimed = store.claimNextFollowup()!;
+    mkdirSync(claimed.artifact_path, { recursive: true });
+    writeFileSync(join(prepared.workspace, "index.html"), "followup\n");
+    const followupArtifacts = finalizeWorkspace({ ...prepared, artifactRoot: claimed.artifact_path });
+    writeFileSync(join(claimed.artifact_path, "preview.png"), "png");
+    store.saveFollowupResult(followup.id, {
+      artifacts: followupArtifacts,
+      metrics: { totalDurationMs: { value: 2_500 }, inputTokens: { value: 25 }, outputTokens: { value: 50 }, generationTokensPerSecond: { value: 5 } },
+    });
+    store.selectFollowupVersion(taskRun.id, followup.id);
+    store.updateRunStatus(run.id, "completed");
+
+    const duplicateRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const duplicatePath = join(directory, "duplicate");
+    const duplicateWorkspace = prepareWorkspace(source, duplicatePath);
+    const duplicateArtifacts = finalizeWorkspace(duplicateWorkspace);
+    const duplicateTaskRun = store.createTaskRun(duplicateRun.id, task.currentRevision.id, 0, duplicatePath, {
+      task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" }, fixture: { preview: { readyPath: "/" } }, model,
+    });
+    store.saveTaskRunResult(duplicateTaskRun.id, { artifacts: duplicateArtifacts });
+    store.updateRunStatus(duplicateRun.id, "completed");
+
+    const textRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const textTaskRun = store.createTaskRun(textRun.id, task.currentRevision.id, 0, join(directory, "text"), { task: task.currentRevision, fixture: { preview: { readyPath: "/" } } });
+    store.saveTaskRunResult(textTaskRun.id, { artifacts: initial });
+    store.updateRunStatus(textRun.id, "completed");
+
+    const noPreviewRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const noPreviewPath = join(directory, "no-preview");
+    const noPreviewArtifacts = finalizeWorkspace(prepareWorkspace(source, noPreviewPath));
+    const noPreviewTaskRun = store.createTaskRun(noPreviewRun.id, task.currentRevision.id, 0, noPreviewPath, { task: task.currentRevision });
+    store.saveTaskRunResult(noPreviewTaskRun.id, { artifacts: noPreviewArtifacts });
+    store.updateRunStatus(noPreviewRun.id, "completed");
+
+    const failedRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const failedTaskRun = store.createTaskRun(failedRun.id, task.currentRevision.id, 0, join(directory, "failed"), { task: task.currentRevision, fixture: { preview: { readyPath: "/" } } });
+    store.saveTaskRunResult(failedTaskRun.id, { artifacts: initial }, "failed", "failed");
+    store.updateRunStatus(failedRun.id, "failed");
+
+    store.renameModel(model.id, "Gemma 4");
+    const app = buildApp({ store, config });
+    const response = await app.inject({ method: "GET", url: "/api/gallery" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskRunId: taskRun.id,
+        runId: run.id,
+        prompt: { id: task.currentRevision.id, name: "Landing", prompt: "Build a landing page" },
+        model: { id: model.id, name: "Gemma 4" },
+        selectedVersion: { type: "followup", followupId: followup.id, resultSha: followupArtifacts.resultSha, status: "completed", index: 1 },
+        screenshotUrl: `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(followupArtifacts.resultSha)}`,
+        metrics: { durationMs: 2_500, inputTokens: 25, outputTokens: 50, tokensPerSecond: 5 },
+      }),
+      expect.objectContaining({ taskRunId: duplicateTaskRun.id, runId: duplicateRun.id, screenshotUrl: null }),
+    ]));
+    expect(response.json()).toHaveLength(2);
+    expect(JSON.stringify(response.json())).not.toContain("followups");
+    await app.close();
+    store.close();
+  });
+
   it("does not delete a result while its additional prompt is active", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-followup-delete-"));
     directories.push(directory);

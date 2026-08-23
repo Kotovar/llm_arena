@@ -30,6 +30,10 @@ export type ResultVersionRecord = ResultVersion & {
   baselineSha: string;
 };
 
+export type SelectedResultVersionRecord = ResultVersionRecord & {
+  resultJson: string | null;
+};
+
 function artifactShas(resultJson: string | null): { baselineSha: string; resultSha: string } | undefined {
   if (!resultJson) return undefined;
   try {
@@ -68,12 +72,21 @@ export function completedResultVersions(taskRun: StoredTaskRun): ResultVersionRe
 }
 
 export function selectedResultVersion(taskRun: StoredTaskRun): ResultVersion | null {
-  const versions = completedResultVersions(taskRun);
-  const selected = versions.find((version) => version.followupId === taskRun.selected_followup_id)
-    ?? versions.find((version) => version.type === "initial");
+  const selected = selectedResultVersionRecord(taskRun);
   if (!selected) return null;
-  const { artifactPath: _, baselineSha: __, ...version } = selected;
+  const { artifactPath: _, baselineSha: __, resultJson: ___, ...version } = selected;
   return version;
+}
+
+export function selectedResultVersionRecord(taskRun: StoredTaskRun): SelectedResultVersionRecord | undefined {
+  const versions = completedResultVersions(taskRun);
+  const version = versions.find((item) => item.followupId === taskRun.selected_followup_id)
+    ?? versions.find((version) => version.type === "initial");
+  if (!version) return undefined;
+  const source = version.followupId
+    ? taskRun.followups.find((followup) => followup.id === version.followupId)
+    : taskRun;
+  return source ? { ...version, resultJson: source.result_json } : undefined;
 }
 
 export function resolveCompletedResultVersion(taskRun: StoredTaskRun, resultSha: string): ResultVersionRecord {

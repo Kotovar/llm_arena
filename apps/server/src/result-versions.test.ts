@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completedResultVersions, resolveCompletedResultVersion, selectedResultVersion } from "./result-versions.js";
+import { completedResultVersions, resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 
 const baselineSha = "b".repeat(40);
 const initialSha = "1".repeat(40);
@@ -45,6 +45,13 @@ describe("result versions", () => {
       resultSha: followupSha,
       status: "completed",
       index: 1,
+    });
+    expect(selectedResultVersionRecord(run)).toMatchObject({
+      type: "followup",
+      followupId: "followup-1",
+      resultSha: followupSha,
+      artifactPath: "/runs/task-run/followups/001",
+      resultJson: run.followups[0]!.result_json,
     });
   });
 

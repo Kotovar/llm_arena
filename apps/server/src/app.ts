@@ -24,7 +24,7 @@ import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import type { ArenaStore } from "./store.js";
-import { resolveCompletedResultVersion, selectedResultVersion } from "./result-versions.js";
+import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 
 type EngineLike = {
@@ -71,6 +71,33 @@ function contained(root: string, requested: string): string {
   const candidate = realpathSync(resolve(base, requested));
   if (candidate !== base && !candidate.startsWith(`${base}${sep}`)) throw new Error("Artifact path escapes workspace");
   return candidate;
+}
+
+type GallerySnapshot = {
+  task?: { name?: string; prompt?: string };
+  fixture?: { preview?: unknown };
+  model?: { name?: string };
+};
+
+function parseGallerySnapshot(json: string): GallerySnapshot | undefined {
+  try { return JSON.parse(json) as GallerySnapshot; }
+  catch { return undefined; }
+}
+
+function galleryMetrics(resultJson: string | null) {
+  try {
+    const metrics = (JSON.parse(resultJson ?? "{}") as { metrics?: Record<string, { value?: unknown }> }).metrics;
+    const value = (name: string) => typeof metrics?.[name]?.value === "number" && Number.isFinite(metrics[name]!.value) ? metrics[name]!.value : undefined;
+    const result = {
+      durationMs: value("totalDurationMs"),
+      inputTokens: value("inputTokens"),
+      outputTokens: value("outputTokens"),
+      tokensPerSecond: value("generationTokensPerSecond"),
+    };
+    return Object.values(result).some((item) => item !== undefined) ? result : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike; openWorkspace?: (workspace: string) => Promise<void> }) {
@@ -253,6 +280,36 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
 
   app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run) })));
+  app.get("/api/gallery", async () => store.listRuns().flatMap((run) => {
+    if (run.result_mode !== "web") return [];
+    return store.listTaskRuns(run.id).flatMap((taskRun) => {
+      if (taskRun.status !== "completed") return [];
+      const selected = selectedResultVersionRecord(taskRun);
+      const snapshot = parseGallerySnapshot(taskRun.snapshot_json);
+      if (!selected || !snapshot?.fixture?.preview) return [];
+      try {
+        assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), selected.resultSha);
+      } catch {
+        return [];
+      }
+      const task = snapshot.task ?? store.getTaskRevision(taskRun.task_revision_id);
+      if (!task?.name || !task.prompt) return [];
+      const model = store.getModel(run.model_id);
+      const { artifactPath, baselineSha: _, resultJson, ...selectedVersion } = selected;
+      const metrics = galleryMetrics(resultJson);
+      return [{
+        taskRunId: taskRun.id,
+        runId: run.id,
+        prompt: { id: taskRun.task_revision_id, name: task.name, prompt: task.prompt },
+        model: { id: run.model_id, name: model?.name || snapshot.model?.name || run.model_ref || run.model_id.slice(0, 8) },
+        selectedVersion,
+        screenshotUrl: existsSync(join(artifactPath, "preview.png"))
+          ? `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(selected.resultSha)}`
+          : null,
+        ...(metrics ? { metrics } : {}),
+      }];
+    });
+  }));
   app.post("/api/runs", async (request, reply) => {
     const input = parse(createRunSchema, request.body);
     if (!store.getActiveModel(input.modelId)) throw new Error("Model not found");
