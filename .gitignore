@@ -5,3 +5,4 @@ dist/
 coverage/
 *.log
 arena.config.local.yaml
+docs/superpowers
