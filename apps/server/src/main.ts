@@ -35,6 +35,8 @@ if (store.listModels().length === 0) {
 const supervisor = new ProcessSupervisor(ownerId, config.defaults.processGraceMs);
 const engine = new BenchmarkEngine(store, config, supervisor);
 const preview = new PreviewManager(store, config, supervisor);
+const removedPreviewRoots = preview.cleanupOrphaned();
+if (removedPreviewRoots.length) console.log(`Removed ${removedPreviewRoots.length} orphan preview root(s)`);
 const app = buildApp({ store, config, engine, preview });
 
 let closing = false;

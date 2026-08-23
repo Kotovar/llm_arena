@@ -308,6 +308,54 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("deletes only previews owned by the deleted run", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-delete-preview-"));
+    directories.push(directory);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const store = createStore(join(directory, "arena.sqlite"));
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const runA = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const runB = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRunA = store.createTaskRun(runA.id, task.currentRevision.id, 0, join(config.dataDir, "runs", runA.id, "task"), { task: task.currentRevision });
+    const taskRunB = store.createTaskRun(runB.id, task.currentRevision.id, 0, join(config.dataDir, "runs", runB.id, "task"), { task: task.currentRevision });
+    store.saveTaskRunResult(taskRunA.id, { finalAnswer: "A" });
+    store.saveTaskRunResult(taskRunB.id, { finalAnswer: "B" });
+    store.updateRunStatus(runA.id, "completed");
+    store.updateRunStatus(runB.id, "completed");
+    const previewRootA = join(config.dataDir, "previews", taskRunA.id);
+    const previewRootB = join(config.dataDir, "previews", taskRunB.id);
+    mkdirSync(join(previewRootA, "sha-a", "workspace"), { recursive: true });
+    mkdirSync(join(previewRootB, "sha-b", "workspace"), { recursive: true });
+    const previewRemovals: string[][] = [];
+    let globalStops = 0;
+    const app = buildApp({
+      store,
+      config,
+      preview: {
+        async start() { return {}; },
+        async stop() { globalStops += 1; },
+        heartbeat() {},
+        async removeTaskRunPreviews(taskRunIds: string[]) {
+          previewRemovals.push(taskRunIds);
+          for (const taskRunId of taskRunIds) rmSync(join(config.dataDir, "previews", taskRunId), { recursive: true, force: true });
+        },
+      },
+    });
+
+    const response = await app.inject({ method: "DELETE", url: `/api/runs/${runA.id}` });
+
+    expect(response.statusCode).toBe(204);
+    expect(previewRemovals).toEqual([[taskRunA.id]]);
+    expect(globalStops).toBe(0);
+    expect(existsSync(previewRootA)).toBe(false);
+    expect(existsSync(previewRootB)).toBe(true);
+    await app.close();
+    store.close();
+  });
+
   it("bulk deletion keeps active runs", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-clear-"));
     directories.push(directory);

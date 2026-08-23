@@ -1,5 +1,5 @@
-import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { appendFileSync, mkdirSync, readdirSync, readlinkSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type { FixtureManifest } from "@llm-arena/shared";
 import { materializeWorkspaceVersion } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
@@ -10,6 +10,58 @@ import type { ArenaStore } from "./store.js";
 
 export function renderPreviewArgv(argv: readonly string[], port: number): string[] {
   return argv.map((argument) => argument.replaceAll("{port}", String(port)));
+}
+
+export function removePreviewDirectory(directory: string): void {
+  rmSync(directory, { recursive: true, force: true });
+  try {
+    rmdirSync(dirname(directory));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTEMPTY") throw error;
+  }
+}
+
+function previewDirectoryInUse(directory: string): boolean {
+  // На неподдерживаемой платформе не рискуем удалять непустой orphan без проверки процесса.
+  if (process.platform !== "linux") return true;
+  const target = resolve(directory);
+  try {
+    for (const entry of readdirSync("/proc", { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
+      try {
+        const cwd = readlinkSync(join("/proc", entry.name, "cwd"));
+        if (cwd === target || cwd.startsWith(`${target}/`)) return true;
+      } catch {
+        // Процесс мог завершиться или быть недоступен между readdir и readlink.
+      }
+    }
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+export function cleanupOrphanPreviewRoots(
+  dataDir: string,
+  taskRunIds: ReadonlySet<string>,
+  directoryInUse: (directory: string) => boolean = previewDirectoryInUse,
+): string[] {
+  const previews = join(dataDir, "previews");
+  try {
+    const removed: string[] = [];
+    for (const entry of readdirSync(previews, { withFileTypes: true })) {
+      if (!entry.isDirectory() || taskRunIds.has(entry.name)) continue;
+      const directory = join(previews, entry.name);
+      if (directoryInUse(directory)) continue;
+      rmSync(directory, { recursive: true, force: true });
+      removed.push(entry.name);
+    }
+    return removed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 export async function waitReady(url: string, process: OwnedProcess, timeoutMs = 120_000): Promise<void> {
@@ -47,7 +99,7 @@ export class PreviewManager {
     const directory = join(this.config.dataDir, "previews", taskRunId, version.resultSha);
     const workspace = join(directory, "workspace");
     // Материализованный commit живёт ровно столько же, сколько preview-процесс.
-    const discard = () => rmSync(directory, { recursive: true, force: true });
+    const discard = () => removePreviewDirectory(directory);
     mkdirSync(directory, { recursive: true });
     let process: OwnedProcess;
     let url: string;
@@ -99,6 +151,19 @@ export class PreviewManager {
     this.#active = undefined;
     if (!active) return;
     await active.process.stop();
-    rmSync(active.directory, { recursive: true, force: true });
+    removePreviewDirectory(active.directory);
+  }
+
+  async removeTaskRunPreviews(taskRunIds: string[]): Promise<void> {
+    const ids = new Set(taskRunIds);
+    if (this.#active && ids.has(this.#active.taskRunId)) await this.stop();
+    for (const taskRunId of ids) {
+      rmSync(join(this.config.dataDir, "previews", taskRunId), { recursive: true, force: true });
+    }
+  }
+
+  cleanupOrphaned(): string[] {
+    const taskRunIds = new Set(this.store.listRuns().flatMap((run) => this.store.listTaskRuns(run.id).map((taskRun) => taskRun.id)));
+    return cleanupOrphanPreviewRoots(this.config.dataDir, taskRunIds);
   }
 }

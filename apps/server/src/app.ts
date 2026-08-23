@@ -38,6 +38,7 @@ type PreviewLike = {
   start(taskRunId: string, resultSha: string): Promise<unknown>;
   stop(): Promise<void>;
   heartbeat(): void;
+  removeTaskRunPreviews?(taskRunIds: string[]): Promise<void>;
 };
 
 function parse<T>(schema: ZodType<T>, value: unknown): T {
@@ -283,7 +284,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!run) throw new Error("Run not found");
     if (run.status === "pending" || run.status === "running") throw new Error("Active run must be cancelled before deletion");
     if (hasActiveFollowup(run.id)) throw new Error("Active additional prompt must be cancelled before deletion");
-    await preview?.stop();
+    const taskRunIds = store.listTaskRuns(run.id).map((taskRun) => taskRun.id);
+    await preview?.removeTaskRunPreviews?.(taskRunIds);
     rmSync(resolve(config.dataDir, "runs", run.id), { recursive: true, force: true });
     store.deleteRuns([run.id]);
     return reply.code(204).send();
@@ -291,7 +293,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.delete("/api/runs", async () => {
     const terminal = store.listRuns().filter((run) =>
       run.status !== "pending" && run.status !== "running" && !hasActiveFollowup(run.id));
-    await preview?.stop();
+    const taskRunIds = terminal.flatMap((run) => store.listTaskRuns(run.id).map((taskRun) => taskRun.id));
+    await preview?.removeTaskRunPreviews?.(taskRunIds);
     for (const run of terminal) rmSync(resolve(config.dataDir, "runs", run.id), { recursive: true, force: true });
     return { deleted: store.deleteRuns(terminal.map((run) => run.id)) };
   });
