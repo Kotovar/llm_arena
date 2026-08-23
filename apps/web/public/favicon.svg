@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>LLM Arena</title>
+  <rect width="64" height="64" rx="12" fill="#071016" />
+  <path d="m18 17 17 15-17 15" fill="none" stroke="#72D0FF" stroke-linecap="round" stroke-linejoin="round" stroke-width="7" />
+  <path d="M39 47h10" stroke="#7BD7A8" stroke-linecap="round" stroke-width="7" />
+</svg>
