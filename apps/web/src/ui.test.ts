@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -227,6 +227,30 @@ describe("сравнение результатов", () => {
     expect(betterResult(review(7), review(7))).toBeUndefined();
     expect(betterResult(review(7), {})).toBeUndefined();
     expect(betterResult(undefined, review(7))).toBeUndefined();
+  });
+});
+
+describe("Gallery", () => {
+  it("строит полную матрицу и не схлопывает несколько запусков одной пары", () => {
+    const result = (taskRunId: string, promptId: string, modelId: string) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: promptId, name: `Prompt ${promptId}`, prompt: `Text ${promptId}` },
+      model: { id: modelId, name: `Model ${modelId}` },
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+    });
+    const matrix = galleryMatrix([
+      result("a1", "p1", "m1"),
+      result("a2", "p1", "m1"),
+      result("b1", "p1", "m2"),
+      result("c1", "p2", "m2"),
+    ]);
+
+    expect(matrix.models.map((model) => model.id)).toEqual(["m1", "m2"]);
+    expect(matrix.rows.map((row) => row.prompt.id)).toEqual(["p1", "p2"]);
+    expect(matrix.rows[0]!.cells.map((cell) => cell.results.map((item) => item.taskRunId))).toEqual([["a1", "a2"], ["b1"]]);
+    expect(matrix.rows[1]!.cells.map((cell) => cell.results.map((item) => item.taskRunId))).toEqual([[], ["c1"]]);
   });
 });
 

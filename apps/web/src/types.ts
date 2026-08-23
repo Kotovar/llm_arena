@@ -111,6 +111,23 @@ export type ResultVersion = {
   index: number;
 };
 
+export type GalleryMetrics = {
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  tokensPerSecond?: number;
+};
+
+export type GalleryResult = {
+  taskRunId: string;
+  runId: string;
+  prompt: { id: string; name: string; prompt: string };
+  model: { id: string; name: string };
+  selectedVersion: ResultVersion;
+  screenshotUrl: string | null;
+  metrics?: GalleryMetrics;
+};
+
 export type TaskRun = {
   id: string;
   task_revision_id: string;

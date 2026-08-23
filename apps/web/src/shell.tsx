@@ -27,7 +27,7 @@ export function Page({ title, eyebrow, intro, children }: { title: string; eyebr
 export function Shell() {
   const groups = [
     { label: "Запуск", links: [["/", "Новый запуск"]] },
-    { label: "Анализ", links: [["/runs", "Результаты"], ["/compare", "Сравнение"]] },
+    { label: "Анализ", links: [["/runs", "Результаты"], ["/compare", "Сравнение"], ["/gallery", "Gallery"]] },
     { label: "Подготовка", links: [["/tasks", "Промпты"], ["/models", "Модели"], ["/settings", "Настройки"]] },
   ] as const;
   return <div className="shell"><aside className="sidebar"><div className="brand"><span className="brand-mark">A/B</span><div><strong>LLM Arena</strong><small>сравнение моделей</small></div></div><nav aria-label="Навигация LLM Arena">{groups.map((group) => <div className="nav-group" key={group.label}><span className="nav-group-label">{group.label}</span>{group.links.map(([to, label]) => <Link key={to} to={to} activeOptions={{ exact: to === "/" }}>{label}</Link>)}</div>)}</nav><div className="host"><span className="host-label">Локальный узел</span><span><i className="pulse" />127.0.0.1</span></div></aside><main className="content"><Outlet /></main></div>;

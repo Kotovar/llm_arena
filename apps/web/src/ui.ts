@@ -1,4 +1,4 @@
-import type { Model, Runner, Task, TaskRun } from "./types.js";
+import type { GalleryResult, Model, Runner, Task, TaskRun } from "./types.js";
 
 const statusLabels: Record<string, string> = {
   pending: "В очереди",
@@ -67,6 +67,26 @@ export function matchTaskRuns(left: TaskRun[], right: TaskRun[]) {
   const rightByRevision = new Map(right.map((taskRun) => [taskRun.task_revision_id, taskRun]));
   const revisionIds = [...leftByRevision.keys(), ...[...rightByRevision.keys()].filter((id) => !leftByRevision.has(id))];
   return revisionIds.map((revisionId) => ({ revisionId, left: leftByRevision.get(revisionId), right: rightByRevision.get(revisionId) }));
+}
+
+export function galleryMatrix(results: GalleryResult[]) {
+  const prompts = new Map<string, GalleryResult["prompt"]>();
+  const models = new Map<string, GalleryResult["model"]>();
+  const cells = new Map<string, GalleryResult[]>();
+  for (const result of results) {
+    prompts.set(result.prompt.id, prompts.get(result.prompt.id) ?? result.prompt);
+    models.set(result.model.id, models.get(result.model.id) ?? result.model);
+    const key = `${result.prompt.id}\0${result.model.id}`;
+    cells.set(key, [...(cells.get(key) ?? []), result]);
+  }
+  const modelList = [...models.values()];
+  return {
+    models: modelList,
+    rows: [...prompts.values()].map((prompt) => ({
+      prompt,
+      cells: modelList.map((model) => ({ model, results: cells.get(`${prompt.id}\0${model.id}`) ?? [] })),
+    })),
+  };
 }
 
 export function defaultLocalProfile(modelId: string) {

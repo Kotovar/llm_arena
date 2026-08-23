@@ -5,6 +5,7 @@ import { RouterProvider, createRootRoute, createRoute, createRouter } from "@tan
 import { api } from "./api.js";
 import { Launcher } from "./screens/launcher.js";
 import { ComparePage } from "./screens/compare.js";
+import { GalleryPage } from "./screens/gallery.js";
 import { ModelsPage } from "./screens/models.js";
 import { RunDetail, RunsPage } from "./screens/results.js";
 import { SettingsPage } from "./screens/settings.js";
@@ -54,8 +55,9 @@ const runsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs", 
 function RunDetailRoute() { const { runId } = runRoute.useParams(); return <RunDetail runId={runId} />; }
 const runRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs/$runId", component: RunDetailRoute });
 const compareRoute = createRoute({ getParentRoute: () => rootRoute, path: "/compare", component: ComparePage });
+const galleryRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gallery", component: GalleryPage });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, compareRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, compareRoute, galleryRoute, settingsRoute]);
 const router = createRouter({ routeTree, defaultPreload: "intent" });
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }
 
