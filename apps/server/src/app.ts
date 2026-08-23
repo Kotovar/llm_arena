@@ -51,6 +51,7 @@ function parse<T>(schema: ZodType<T>, value: unknown): T {
 const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict();
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
 const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
+const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
 const externalLauncherQuerySchema = z.object({
   profileName: z.string().trim().min(1),
   port: z.coerce.number().int().min(1).max(65535).default(8080),
@@ -294,43 +295,77 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
 
   app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run) })));
-  app.get("/api/gallery", async () => store.listRuns().flatMap((run) => {
-    if (run.result_mode !== "web") return [];
-    return store.listTaskRuns(run.id).flatMap((taskRun) => {
-      if (taskRun.status !== "completed" || !checksPassed(taskRun.result_json)) return [];
-      const selected = selectedResultVersionRecord(taskRun);
-      const snapshot = parseGallerySnapshot(taskRun.snapshot_json);
-      if (!selected || !snapshot?.fixture?.preview || !checksPassed(selected.resultJson)) return [];
-      try {
-        assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), selected.resultSha);
-      } catch {
-        return [];
-      }
-      const task = snapshot.task ?? store.getTaskRevision(taskRun.task_revision_id);
-      if (!task?.name || !task.prompt) return [];
-      const model = store.getModel(run.model_id);
-      const { artifactPath, baselineSha: _, resultJson, ...selectedVersion } = selected;
-      const metrics = galleryMetrics(resultJson);
-      return [{
-        taskRunId: taskRun.id,
-        runId: run.id,
-        prompt: { id: taskRun.task_revision_id, name: task.name, prompt: task.prompt },
-        model: {
-          id: run.model_id,
-          name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),
-          kind: model?.kind,
-          modelRef: snapshot.model?.modelRef || run.model_ref || undefined,
-        },
-        reasoningEffort: snapshot.reasoningEffort ?? null,
-        runnerKind: snapshot.runner?.kind,
-        selectedVersion,
-        screenshotUrl: existsSync(join(artifactPath, "preview.png"))
-          ? `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(selected.resultSha)}`
-          : null,
-        ...(metrics ? { metrics } : {}),
-      }];
+  app.get("/api/leaderboard", async () => {
+    const totals = new Map<string, { modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scoreSum: number }>();
+    for (const run of store.listRuns()) {
+      const entry = totals.get(run.model_id) ?? {
+        modelId: run.model_id,
+        modelName: store.getModel(run.model_id)?.name ?? run.model_ref ?? run.model_id.slice(0, 8),
+        runCount: 0,
+        reviewedTaskRunCount: 0,
+        scoreSum: 0,
+      };
+      entry.runCount += 1;
+      entry.reviewedTaskRunCount += run.reviewed_count;
+      entry.scoreSum += run.review_score ?? 0;
+      totals.set(run.model_id, entry);
+    }
+    return [...totals.values()]
+      .map(({ scoreSum, ...entry }) => ({ ...entry, avgScore: entry.reviewedTaskRunCount ? scoreSum / entry.reviewedTaskRunCount : null }))
+      .sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
+  });
+  app.get("/api/gallery", async () => {
+    const featured = new Set(store.listGalleryFeatured().map((item) => item.task_run_id));
+    return store.listRuns().flatMap((run) => {
+      if (run.result_mode !== "web") return [];
+      return store.listTaskRuns(run.id).flatMap((taskRun) => {
+        if (taskRun.status !== "completed" || !checksPassed(taskRun.result_json)) return [];
+        const selected = selectedResultVersionRecord(taskRun);
+        const snapshot = parseGallerySnapshot(taskRun.snapshot_json);
+        if (!selected || !snapshot?.fixture?.preview || !checksPassed(selected.resultJson)) return [];
+        try {
+          assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), selected.resultSha);
+        } catch {
+          return [];
+        }
+        const task = snapshot.task ?? store.getTaskRevision(taskRun.task_revision_id);
+        if (!task?.name || !task.prompt) return [];
+        const model = store.getModel(run.model_id);
+        const { artifactPath, baselineSha: _, resultJson, ...selectedVersion } = selected;
+        const metrics = galleryMetrics(resultJson);
+        return [{
+          taskRunId: taskRun.id,
+          runId: run.id,
+          prompt: { id: taskRun.task_revision_id, name: task.name, prompt: task.prompt },
+          model: {
+            id: run.model_id,
+            name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),
+            kind: model?.kind,
+            modelRef: snapshot.model?.modelRef || run.model_ref || undefined,
+          },
+          reasoningEffort: snapshot.reasoningEffort ?? null,
+          runnerKind: snapshot.runner?.kind,
+          useOmpAgent: run.use_omp_agent === 1,
+          featured: featured.has(taskRun.id),
+          selectedVersion,
+          screenshotUrl: existsSync(join(artifactPath, "preview.png"))
+            ? `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(selected.resultSha)}`
+            : null,
+          ...(metrics ? { metrics } : {}),
+        }];
+      });
     });
-  }));
+  });
+  app.put("/api/gallery/featured", async (request) => {
+    const { taskRunId } = parse(galleryFeaturedSchema, request.body);
+    const taskRun = store.getTaskRun(taskRunId);
+    if (!taskRun || taskRun.status !== "completed" || !checksPassed(taskRun.result_json)) throw new Error("Completed working task run not found");
+    const run = store.getRun(taskRun.benchmark_run_id);
+    const selected = selectedResultVersionRecord(taskRun);
+    if (!run || run.result_mode !== "web" || !selected || !checksPassed(selected.resultJson)) throw new Error("Completed working web result not found");
+    assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), selected.resultSha);
+    return store.selectGalleryFeatured(taskRunId);
+  });
   app.post("/api/runs", async (request, reply) => {
     const input = parse(createRunSchema, request.body);
     if (!store.getActiveModel(input.modelId)) throw new Error("Model not found");

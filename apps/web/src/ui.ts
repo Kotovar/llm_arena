@@ -85,7 +85,7 @@ export function galleryMatrix(results: GalleryResult[]) {
     models: modelList,
     rows: [...prompts.values()].map((prompt) => ({
       prompt,
-      cells: modelList.map((model) => ({ model, results: cells.get(`${prompt.id}\0${model.id}`) ?? [] })),
+      cells: modelList.map((model) => ({ model, results: (cells.get(`${prompt.id}\0${model.id}`) ?? []).toSorted((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))) })),
     })),
   };
 }
@@ -94,10 +94,12 @@ export function galleryResultTags(result: {
   model: { name: string; kind?: Model["kind"]; modelRef?: string };
   reasoningEffort?: string | null;
   runnerKind?: string;
+  useOmpAgent?: boolean;
 }) {
   const tags: string[] = [];
   if (result.model.kind === "local-gguf") {
-    if (result.runnerKind === "omp") tags.push("с обвязкой (OMP)");
+    if (result.useOmpAgent !== undefined) tags.push(result.useOmpAgent ? "с обвязкой (OMP)" : "без обвязки");
+    else if (result.runnerKind === "omp") tags.push("с обвязкой (OMP)");
     else if (result.runnerKind === "llama-chat") tags.push("без обвязки");
   } else if (result.model.modelRef && result.model.modelRef !== result.model.name) {
     tags.push(result.model.modelRef);
@@ -280,11 +282,16 @@ export function runListScore(run: { review_score?: number | null; reviewed_count
   return `${run.review_score ?? 0}/${run.reviewed_count * 40}`;
 }
 
-export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string }, runnerName?: string) {
+export function ompModeLabel(useOmpAgent: number) {
+  return useOmpAgent === 1 ? "с обвязкой (OMP)" : "без обвязки";
+}
+
+export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string }, runnerName?: string, ompMode?: string) {
   if (run.status === "failed" && run.error) return run.error;
   return [
     run.task_count ? promptCountLabel(run.task_count) : undefined,
     runnerName ?? run.runner_id,
     run.result_mode === "web" ? "web-приложение" : "текстовый ответ",
+    ompMode,
   ].filter(Boolean).join(" · ");
 }

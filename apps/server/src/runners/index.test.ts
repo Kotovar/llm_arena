@@ -41,13 +41,15 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_t
     expect(result.sessionId).toBe("fake-thread");
   });
 
-  it("uses the normal OMP profile for prompt tasks", async () => {
+  it("uses isolated OMP state without disabling prompt-agent capabilities", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
     directories.push(root);
     const script = join(root, "fake-omp.mjs");
     writeFileSync(
       script,
-      `console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:process.env.PI_CODING_AGENT_DIR ? "isolated" : "normal"}]}]}));`,
+      `const isolatedState = process.env.PI_CODING_AGENT_DIR?.endsWith("/omp");
+const wrapped = !process.argv.includes("--no-extensions") && !process.argv.includes("--no-skills") && !process.argv.includes("--no-rules");
+console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:isolatedState && wrapped ? "wrapped-isolated" : "wrong"}]}]}));`,
     );
     const runner = createRunner("omp", new ProcessSupervisor("runner-test", 100));
 
@@ -64,7 +66,7 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_t
       onStderr: () => undefined,
     });
 
-    expect(result.finalAnswer).toBe("normal");
+    expect(result.finalAnswer).toBe("wrapped-isolated");
   });
 
   it("switches web tasks between isolated and normal OMP environments", async () => {
@@ -73,8 +75,9 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_t
     const script = join(root, "fake-omp-web.mjs");
     writeFileSync(
       script,
-      `const normal = !process.env.PI_CODING_AGENT_DIR && !process.argv.includes("--no-skills");
-console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:normal ? "normal" : "isolated"}]}]}));`,
+      `const isolatedState = process.env.PI_CODING_AGENT_DIR?.endsWith("/omp");
+const wrapped = !process.argv.includes("--no-skills");
+console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:(wrapped ? "wrapped" : "bare") + ":" + (isolatedState ? "isolated-state" : "shared-state")}]}]}));`,
     );
     const runner = createRunner("omp", new ProcessSupervisor("runner-test", 100));
     const input = {
@@ -93,8 +96,8 @@ console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content
     const isolated = await runner.run({ ...input, useOmpAgent: false });
     const normal = await runner.run({ ...input, useOmpAgent: true });
 
-    expect(isolated.finalAnswer).toBe("isolated");
-    expect(normal.finalAnswer).toBe("normal");
+    expect(isolated.finalAnswer).toBe("bare:isolated-state");
+    expect(normal.finalAnswer).toBe("wrapped:isolated-state");
   });
 
   it("keeps an active runner alive past the configured idle timeout", async () => {

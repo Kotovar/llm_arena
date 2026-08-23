@@ -80,6 +80,7 @@ export type ExternalLauncher = {
 };
 
 export type Runner = { id: string; name: string; kind: string; exec: string[]; default?: boolean };
+export type LeaderboardEntry = { modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; avgScore: number | null };
 export type Fixture = { id: string; name: string; checks: Array<{ id: string; label: string }>; preview?: unknown };
 export type ModelOption = { id: string; name: string; efforts: string[]; defaultEffort: string | null };
 export type ModelCatalog = { claude: { models: ModelOption[] }; codex: { models: ModelOption[] } };
@@ -125,6 +126,8 @@ export type GalleryResult = {
   model: { id: string; name: string; kind?: Model["kind"]; modelRef?: string };
   reasoningEffort?: string | null;
   runnerKind?: string;
+  useOmpAgent?: boolean;
+  featured?: boolean;
   selectedVersion: ResultVersion;
   screenshotUrl: string | null;
   metrics?: GalleryMetrics;

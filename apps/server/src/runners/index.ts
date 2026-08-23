@@ -127,7 +127,7 @@ export function createRunner(kind: RunnerKind, supervisor: ProcessSupervisor): M
         false,
         (input) => ({
           LLAMA_CPP_BASE_URL: input.baseUrl,
-          ...(input.useOmpAgent ?? input.taskKind === "prompt" ? {} : { PI_CODING_AGENT_DIR: `${input.taskDataDir}/omp` }),
+          PI_CODING_AGENT_DIR: `${input.taskDataDir}/omp`,
         }),
       );
     case "claude-code":

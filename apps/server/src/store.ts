@@ -112,6 +112,13 @@ type ReviewRow = {
   updated_at: string;
 };
 
+type GalleryFeaturedRow = {
+  task_revision_id: string;
+  model_id: string;
+  task_run_id: string;
+  updated_at: string;
+};
+
 type ModelRow = {
   id: string;
   name: string;
@@ -163,6 +170,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_run_followups (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, task_run_id TEXT NOT NULL, position INTEGER NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, position));
+    CREATE TABLE IF NOT EXISTS gallery_featured (task_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, task_run_id TEXT NOT NULL UNIQUE, updated_at TEXT NOT NULL, PRIMARY KEY(task_revision_id, model_id));
     CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
   `);
   const runColumns = sqlite.prepare("PRAGMA table_info(benchmark_runs)").all() as Array<{ name: string }>;
@@ -298,6 +306,7 @@ export function createStore(filename: string) {
     return transaction(() => {
       const taskRunIds = ids.flatMap((id) => all<{ id: string }>("SELECT id FROM task_runs WHERE benchmark_run_id = ?", id).map((row) => row.id));
       for (const taskRunId of taskRunIds) {
+        sqlite.prepare("DELETE FROM gallery_featured WHERE task_run_id = ?").run(taskRunId);
         sqlite.prepare("DELETE FROM task_run_followups WHERE task_run_id = ?").run(taskRunId);
         sqlite.prepare("DELETE FROM reviews WHERE task_run_id = ?").run(taskRunId);
         sqlite.prepare("DELETE FROM check_runs WHERE task_run_id = ?").run(taskRunId);
@@ -544,6 +553,23 @@ export function createStore(filename: string) {
         review: one<ReviewRow>("SELECT * FROM reviews WHERE task_run_id = ?", row.id),
         followups: this.listFollowups(row.id),
       }));
+    },
+    listGalleryFeatured() {
+      return all<GalleryFeaturedRow>("SELECT * FROM gallery_featured");
+    },
+    selectGalleryFeatured(taskRunId: string) {
+      const target = one<{ task_revision_id: string; model_id: string }>(`
+        SELECT task_runs.task_revision_id, benchmark_runs.model_id
+        FROM task_runs JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
+        WHERE task_runs.id = ?
+      `, taskRunId);
+      if (!target) throw new Error("Task run not found");
+      const updatedAt = now();
+      sqlite.prepare(`
+        INSERT INTO gallery_featured (task_revision_id, model_id, task_run_id, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(task_revision_id, model_id) DO UPDATE SET task_run_id = excluded.task_run_id, updated_at = excluded.updated_at
+      `).run(target.task_revision_id, target.model_id, taskRunId, updatedAt);
+      return { taskRunId, taskRevisionId: target.task_revision_id, modelId: target.model_id, updatedAt };
     },
     createFollowup(taskRunId: string, prompt: string) {
       const taskRun = one<TaskRunRow>("SELECT * FROM task_runs WHERE id = ?", taskRunId);

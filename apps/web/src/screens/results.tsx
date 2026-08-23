@@ -3,8 +3,9 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Status, useData } from "../shell.js";
+import { useToast } from "../toast.js";
 import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, Runner, Task, TaskRun } from "../types.js";
-import { checkStatusLabel, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, promptCountLabel, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, shouldFollowOutput } from "../ui.js";
+import { checkStatusLabel, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, ompModeLabel, promptCountLabel, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
@@ -13,11 +14,13 @@ function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[];
   const runnerName = runners.find((runner) => runner.id === run.runner_id)?.name;
   return <div className="run-row-wrap"><Link className="run-row" to="/runs/$runId" params={{ runId: run.id }}>
     <Status value={visibleStatus} />
-    <span className="run-row-copy"><strong>{modelName}</strong><small className={run.status === "failed" && run.error ? "error" : ""}>{runListMeta(run, runnerName)}</small></span>
+    <span className="run-row-copy"><strong>{modelName}</strong><small className={run.status === "failed" && run.error ? "error" : ""}>{runListMeta(run, runnerName, ompModeLabel(run.use_omp_agent))}</small></span>
     <span className={run.reviewed_count ? "run-row-score" : "run-row-score run-row-score-none"}>{runListScore(run)}</span>
     <time dateTime={run.created_at} title={new Date(run.created_at).toLocaleString("ru-RU")}>{formatRelativeTime(run.created_at)}</time>
   </Link>{onDelete && terminal ? <button className="row-delete" title="Удалить результат" aria-label={`Удалить запуск ${modelName}`} onClick={() => onDelete(run)}>✕</button> : null}</div>;
 }
+
+const runStatusOptions = ["pending", "running", "running-followup", "completed", "failed", "cancelled"];
 
 export function RunsPage() {
   const client = useQueryClient();
@@ -27,8 +30,16 @@ export function RunsPage() {
   const remove = useMutation({ mutationFn: (id: string) => api(`/runs/${id}`, { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["runs"] }) });
   const clear = useMutation({ mutationFn: () => api<{ deleted: number }>("/runs", { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["runs"] }) });
   const terminalCount = runs.data?.filter((run) => !runIsActive(run)).length ?? 0;
+  const [modelFilter, setModelFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  // Модели-опции берём из самих запусков (через runModelName), а не из /models: отключённая
+  // модель пропадает из /models, но её прошлые запуски остаются и должны быть фильтруемы.
+  const modelFilterOptions = [...new Map((runs.data ?? []).map((run) => [run.model_id, runModelName(run, models.data ?? [])] as const)).entries()].sort((a, b) => a[1].localeCompare(b[1], "ru"));
+  const filtered = (runs.data ?? []).filter((run) => (!modelFilter || run.model_id === modelFilter) && (!statusFilter || (run.activityStatus ?? run.status) === statusFilter));
   function deleteRun(run: Run) { if (window.confirm(`Удалить результат запуска ${run.id.slice(0, 8)} и его файлы?`)) remove.mutate(run.id); }
-  return <Page title="Результаты запусков" eyebrow="История" intro="Здесь сохраняются ответы, изменения файлов, проверки и метрики каждого запуска."><Panel title={`Запусков: ${runs.data?.length ?? 0}`} action={<button className="danger" disabled={!terminalCount || clear.isPending} onClick={() => { if (window.confirm(`Удалить все завершённые результаты (${terminalCount}) и их файлы?`)) clear.mutate(); }}>{clear.isPending ? "Очищаем…" : "Очистить все"}</button>}><div className="run-list">{runs.data?.toReversed().map((run) => <RunRow key={run.id} run={run} models={models.data ?? []} runners={runners.data ?? []} onDelete={deleteRun} />)}{!runs.data?.length ? <Empty>Запусков пока нет. Выберите модель и промпт на главной странице.</Empty> : null}</div>{remove.error || clear.error ? <p className="error">{(remove.error ?? clear.error)?.message}</p> : null}</Panel></Page>;
+  return <Page title="Результаты запусков" eyebrow="История" intro="Здесь сохраняются ответы, изменения файлов, проверки и метрики каждого запуска."><Panel title={`Запусков: ${filtered.length} из ${runs.data?.length ?? 0}`} action={<button className="danger" disabled={!terminalCount || clear.isPending} onClick={() => { if (window.confirm(`Удалить все завершённые результаты (${terminalCount}) и их файлы?`)) clear.mutate(); }}>{clear.isPending ? "Очищаем…" : "Очистить все"}</button>}>
+    <div className="run-filters"><select value={modelFilter} onChange={(event) => setModelFilter(event.currentTarget.value)} aria-label="Фильтр по модели"><option value="">Все модели</option>{modelFilterOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select><select value={statusFilter} onChange={(event) => setStatusFilter(event.currentTarget.value)} aria-label="Фильтр по статусу"><option value="">Любой статус</option>{runStatusOptions.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></div>
+    <div className="run-list">{filtered.toReversed().map((run) => <RunRow key={run.id} run={run} models={models.data ?? []} runners={runners.data ?? []} onDelete={deleteRun} />)}{runs.data?.length && !filtered.length ? <Empty>Нет запусков по выбранному фильтру.</Empty> : null}{!runs.data?.length ? <Empty>Запусков пока нет. Выберите модель и промпт на главной странице.</Empty> : null}</div>{remove.error || clear.error ? <p className="error">{(remove.error ?? clear.error)?.message}</p> : null}</Panel></Page>;
 }
 
 export function metric(result: Record<string, unknown> | undefined, name: string) {
@@ -119,16 +130,26 @@ export function usePreviewHeartbeat(active: boolean) {
   }, [active]);
 }
 
+// Preview-сервер один на всё приложение (см. PreviewManager.leaseMs) — если оставить страницу,
+// пока preview активен, он проработает ещё до 2 минут без пользы. Останавливаем адресно при уходе.
+export function useStopPreviewOnUnmount(preview: PreviewState | undefined) {
+  const ref = useRef(preview);
+  useEffect(() => { ref.current = preview; }, [preview]);
+  useEffect(() => () => {
+    const active = ref.current;
+    if (active) void api("/preview", { method: "DELETE", body: JSON.stringify({ taskRunId: active.taskRunId, resultSha: active.resultSha }) });
+  }, []);
+}
+
 function ChecksStrip({ result }: { result: Record<string, unknown> | undefined }) {
   const checks = resultChecks(result);
   if (!checks.length) return null;
   return <div className="checks">{checks.map((check) => <span key={check.id} className={`check-badge check-${check.status}`}>{check.label}: {checkStatusLabel(check.status)}{check.durationMs === undefined ? null : <small>{formatDuration(check.durationMs)}</small>}</span>)}</div>;
 }
 
-function ResultPreview({ url, onClose }: { url: string; onClose: () => void }) {
-  const close = useMutation({ mutationFn: () => api("/preview", { method: "DELETE" }), onSuccess: onClose });
+export function ResultPreview({ url, onClose, closing, title = "Готовое web-приложение" }: { url: string; onClose: () => void; closing?: boolean; title?: string }) {
   usePreviewHeartbeat(true);
-  return <section className="result-preview"><header><div><span className="mono">Preview запущен</span><strong>Готовое web-приложение</strong></div><div><a href={url} target="_blank" rel="noreferrer">Открыть в новой вкладке ↗</a><button onClick={() => close.mutate()}>Остановить preview</button></div></header><iframe title="Preview результата" src={url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" /></section>;
+  return <section className="result-preview"><header><div><span className="mono">Preview запущен</span><strong>{title}</strong></div><div><a href={url} target="_blank" rel="noreferrer">Открыть в новой вкладке ↗</a><button type="button" onClick={onClose} disabled={closing}>Остановить preview</button></div></header><iframe title={`Preview: ${title}`} src={url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" /></section>;
 }
 
 type ReviewDraft = { correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; comment: string };
@@ -151,17 +172,16 @@ function initialReview(taskRun: TaskRun): ReviewDraft {
 
 function GenerationError({ error, errorDetails, endpoint }: { error: string | null; errorDetails: GenerationErrorDetails | null | undefined; endpoint: string }) {
   const [open, setOpen] = useState(false);
-  const [copyMessage, setCopyMessage] = useState("");
+  const toast = useToast();
   const diagnostic = useQuery({ queryKey: ["generation-error", endpoint], queryFn: () => api<GenerationErrorDetails & { raw: string }>(endpoint), enabled: open, staleTime: Infinity });
   const message = errorDetails?.message ?? error;
   if (!message) return null;
   async function copyRaw() {
     if (!diagnostic.data?.raw) return;
-    try { await navigator.clipboard.writeText(diagnostic.data.raw); setCopyMessage("Скопировано"); }
-    catch { setCopyMessage("Не удалось скопировать"); }
-    window.setTimeout(() => setCopyMessage(""), 2_500);
+    try { await navigator.clipboard.writeText(diagnostic.data.raw); toast("Скопировано"); }
+    catch { toast("Не удалось скопировать", "error"); }
   }
-  return <section className="generation-error"><div><span className="mono">Ошибка генерации</span><strong>{message}</strong>{errorDetails?.details ? <p>{errorDetails.details}</p> : null}</div><details onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Показать технические детали</summary>{open ? <div className="generation-error-raw">{diagnostic.isPending ? <p>Загружаем диагностический лог…</p> : null}{diagnostic.error ? <p className="error">{diagnostic.error.message}</p> : null}{diagnostic.data ? <><div><small>{diagnostic.data.rawSize.toLocaleString("ru-RU")} Б</small><button onClick={() => void copyRaw()}>Копировать полный лог</button>{copyMessage ? <span className={copyMessage === "Скопировано" ? "success" : "error"}>{copyMessage}</span> : null}</div><pre>{diagnosticErrorPreview(diagnostic.data.raw)}</pre>{diagnostic.data.raw.length > 8_000 ? <p>В области показаны первые 8 000 символов; кнопка копирует полный лог.</p> : null}</> : null}</div> : null}</details></section>;
+  return <section className="generation-error"><div><span className="mono">Ошибка генерации</span><strong>{message}</strong>{errorDetails?.details ? <p>{errorDetails.details}</p> : null}</div><details onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Показать технические детали</summary>{open ? <div className="generation-error-raw">{diagnostic.isPending ? <p>Загружаем диагностический лог…</p> : null}{diagnostic.error ? <p className="error">{diagnostic.error.message}</p> : null}{diagnostic.data ? <><div><small>{diagnostic.data.rawSize.toLocaleString("ru-RU")} Б</small><button onClick={() => void copyRaw()}>Копировать полный лог</button></div><pre>{diagnosticErrorPreview(diagnostic.data.raw)}</pre>{diagnostic.data.raw.length > 8_000 ? <p>В области показаны первые 8 000 символов; кнопка копирует полный лог.</p> : null}</> : null}</div> : null}</details></section>;
 }
 
 function FollowupResult({ followup, cancelPending, onCancel }: { followup: Followup; cancelPending: boolean; onCancel: () => void }) {
@@ -191,9 +211,8 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
   const [lastActivity, setLastActivity] = useState<number>();
   const [draft, setDraft] = useState(() => initialReview(taskRun));
   const [saved, setSaved] = useState(Boolean(taskRun.review));
-  const [answerCopy, setAnswerCopy] = useState("");
   const [shotMissing, setShotMissing] = useState(false);
-  const [zedMessage, setZedMessage] = useState("");
+  const toast = useToast();
   const previewUrl = activePreview?.taskRunId === taskRun.id && activePreview.resultSha === activeVersion.resultSha ? activePreview.url : undefined;
   const showShot = Boolean(result?.previewImage) && Boolean(activeVersion.resultSha) && !shotMissing;
   const otherPreviewActive = Boolean(activePreview) && !previewUrl;
@@ -205,7 +224,8 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
   const review = useMutation({ mutationFn: (body: unknown) => api(`/task-runs/${taskRun.id}/review`, { method: "PUT", body: JSON.stringify(body) }), onSuccess: async () => { await client.invalidateQueries({ queryKey: ["run", runId] }); setSaved(true); } });
   const selectFinal = useMutation({ mutationFn: (resultSha: string) => api<ResultVersion>(`/task-runs/${taskRun.id}/selected-version`, { method: "PUT", body: JSON.stringify({ resultSha }) }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const preview = useMutation({ mutationFn: (resultSha: string) => api<PreviewState>(`/task-runs/${taskRun.id}/preview`, { method: "POST", body: JSON.stringify({ resultSha }) }), onSuccess: onPreview });
-  const zed = useMutation({ mutationFn: () => api<{ workspace: string }>(`/task-runs/${taskRun.id}/open-in-zed`, { method: "POST" }), onSuccess: ({ workspace }) => setZedMessage(`Открыто в Zed: ${workspace}`) });
+  const closePreview = useMutation({ mutationFn: () => api("/preview", { method: "DELETE" }), onSuccess: () => onPreview(undefined) });
+  const zed = useMutation({ mutationFn: () => api<{ workspace: string }>(`/task-runs/${taskRun.id}/open-in-zed`, { method: "POST" }), onSuccess: ({ workspace }) => toast(`Открыто в Zed: ${workspace}`) });
   const cancel = useMutation({ mutationFn: () => api(`/runs/${runId}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const addFollowup = useMutation({ mutationFn: (prompt: string) => api(`/task-runs/${taskRun.id}/followups`, { method: "POST", body: JSON.stringify({ prompt }) }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const cancelFollowup = useMutation({ mutationFn: (id: string) => api(`/followups/${id}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
@@ -223,12 +243,16 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
     if (activePreview?.taskRunId !== taskRun.id || activePreview.resultSha === activeVersion.resultSha) return;
     void api("/preview", { method: "DELETE" }).finally(() => onPreview(undefined));
   }, [activePreview?.resultSha, activePreview?.taskRunId, activeVersion.resultSha, taskRun.id]);
+  const zedErrorWorkspace = (zed.error as (Error & { data?: { workspace?: string } }) | null)?.data?.workspace;
   function rate(event: FormEvent<HTMLFormElement>) { event.preventDefault(); review.mutate(draft); }
   function updateScore(key: keyof Omit<ReviewDraft, "comment">, value: number) { setDraft((current) => ({ ...current, [key]: value })); setSaved(false); review.reset(); }
   async function copyAnswer() {
-    try { await navigator.clipboard.writeText(String(result?.finalAnswer ?? "")); setAnswerCopy("Скопировано"); }
-    catch { setAnswerCopy("Не удалось скопировать"); }
-    window.setTimeout(() => setAnswerCopy(""), 2_500);
+    try { await navigator.clipboard.writeText(String(result?.finalAnswer ?? "")); toast("Скопировано"); }
+    catch { toast("Не удалось скопировать", "error"); }
+  }
+  async function copyWorkspacePath(workspace: string) {
+    try { await navigator.clipboard.writeText(workspace); toast("Скопировано"); }
+    catch { toast("Не удалось скопировать", "error"); }
   }
   function sendFollowup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = event.currentTarget; const prompt = String(new FormData(form).get("prompt") ?? "").trim(); if (prompt) addFollowup.mutate(prompt, { onSuccess: () => form.reset() }); }
   const draftTotal = draft.correctness + draft.codeQuality + draft.uiQuality + draft.instructionFollowing;
@@ -255,12 +279,11 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button className="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>Прервать</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
     {result ? <MetricStrip result={result} /> : null}
     <ChecksStrip result={result} />
-    {snapshot.fixture?.preview && canUseVersion ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => onPreview(undefined)} /> : <section className={showShot ? "preview-cta with-shot" : "preview-cta"}>{showShot ? <img className="preview-shot" src={`/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(activeVersion.resultSha!)}`} alt={`Снимок web-приложения: ${activeVersion.label}`} loading="lazy" onError={() => setShotMissing(true)} /> : null}<div><span className="mono">Версия готова</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Preview-сервер один: текущий preview будет остановлен перед запуском этой SHA-версии." : "Откроем зафиксированные файлы выбранной SHA-версии."}</p></div><button className="primary" onClick={() => preview.mutate(activeVersion.resultSha!)} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
+    {snapshot.fixture?.preview && canUseVersion ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => closePreview.mutate()} closing={closePreview.isPending} /> : <section className={showShot ? "preview-cta with-shot" : "preview-cta"}>{showShot ? <img className="preview-shot" src={`/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(activeVersion.resultSha!)}`} alt={`Снимок web-приложения: ${activeVersion.label}`} loading="lazy" onError={() => setShotMissing(true)} /> : null}<div><span className="mono">Версия готова</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Preview-сервер один: текущий preview будет остановлен перед запуском этой SHA-версии." : "Откроем зафиксированные файлы выбранной SHA-версии."}</p></div><button className="primary" onClick={() => preview.mutate(activeVersion.resultSha!)} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
     {preview.error ? <p className="error">{preview.error.message}</p> : null}
     {result?.finalAnswer ? <details className="answer-surface" open><summary><span className="mono">{activeVersion.label}</span><strong>Ответ модели</strong></summary><pre className="answer">{String(result.finalAnswer)}</pre></details> : null}
-    <div className="actions">{result?.finalAnswer ? <><button onClick={() => void copyAnswer()}>Копировать ответ</button>{answerCopy ? <span className={answerCopy === "Скопировано" ? "success" : "error"}>{answerCopy}</span> : null}</> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>Изменения версии</button><a href={logsPath} target="_blank" rel="noreferrer">Сырые логи ↗</a><a href={`${logsPath}?stream=stderr`} target="_blank" rel="noreferrer">Ошибки ↗</a></div>
-    {zedMessage ? <p className="success ide-message">{zedMessage}</p> : null}
-    {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{(zed.error as Error & { data?: { workspace?: string } }).data?.workspace ? <><code>{(zed.error as Error & { data?: { workspace?: string } }).data!.workspace}</code><button onClick={() => void navigator.clipboard.writeText((zed.error as Error & { data?: { workspace?: string } }).data!.workspace!)}>Скопировать путь</button></> : null}</div> : null}
+    <div className="actions">{result?.finalAnswer ? <button onClick={() => void copyAnswer()}>Копировать ответ</button> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>Изменения версии</button><a href={logsPath} target="_blank" rel="noreferrer">Сырые логи ↗</a><a href={`${logsPath}?stream=stderr`} target="_blank" rel="noreferrer">Ошибки ↗</a></div>
+    {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{zedErrorWorkspace ? <><code>{zedErrorWorkspace}</code><button onClick={() => void copyWorkspacePath(zedErrorWorkspace)}>Скопировать путь</button></> : null}</div> : null}
     {artifact !== undefined ? <pre className="artifact">{artifact || "Нет данных"}</pre> : null}
     {taskRun.status === "completed" ? <details className="followups"><summary><strong>Уточнения ({followups.length})</strong>{hasActiveFollowup ? <span className="chip">Выполняется</span> : null}</summary><div className="followups-content">{followups.length ? <div className="followup-list">{followups.map((item) => <FollowupResult key={item.id} followup={item} cancelPending={cancelFollowup.isPending} onCancel={() => cancelFollowup.mutate(item.id)} />)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" disabled={hasActiveFollowup || addFollowup.isPending}>{hasActiveFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></div></details> : null}
     {taskRun.status === "completed" || taskRun.review ? <form className="review" onSubmit={rate}><div className="review-heading"><div><span className="mono">Моя оценка</span><strong>Оцените результат по четырём критериям</strong></div><output>{draftTotal}/40</output></div>{reviewCriteria.map(([key, label]) => <label className="score-control" key={key}><span>{label}<output>{draft[key]}/10</output></span><input type="range" min="1" max="10" value={draft[key]} onChange={(event) => updateScore(key, Number(event.currentTarget.value))} /></label>)}<label className="comment">Комментарий<input value={draft.comment} onChange={(event) => { setDraft((current) => ({ ...current, comment: event.currentTarget.value })); setSaved(false); review.reset(); }} /></label><button className={saved ? "saved" : ""} disabled={review.isPending}>{reviewSaveLabel(review.isPending, saved)}</button>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form> : null}
@@ -294,6 +317,7 @@ export function RunDetail({ runId }: { runId: string }) {
   }, [client, live, runId]);
   const runners = useData<Runner[]>("runners", "/runners");
   const [preview, setPreview] = useState<PreviewState>();
+  useStopPreviewOnUnmount(preview);
   const cancel = useMutation({ mutationFn: () => api(`/runs/${runId}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const remove = useMutation({ mutationFn: () => api(`/runs/${runId}`, { method: "DELETE" }), onSuccess: () => navigate({ to: "/runs" }) });
   if (run.error) return <Page title="Запуск не найден" eyebrow="Результат" intro="Он мог быть удалён вместе с файлами, либо сервер сейчас недоступен."><p className="error">{run.error.message}</p><p className="actions"><Link to="/runs">← Ко всем результатам</Link></p></Page>;
@@ -309,7 +333,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const runningFollowup = activityStatus === "running-followup";
   const isActive = live;
   const scores = reviewSummary(run.data.taskRuns?.map((task) => task.review) ?? [], total);
-  return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
+  return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", ompModeLabel(run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? "Выполняется уточнение" : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
     {run.data.error && !hasTaskError ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
     <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive ? <button className="danger" onClick={() => { if (window.confirm("Удалить этот результат и все его файлы?")) remove.mutate(); }} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}><div className="stack">{run.data.taskRuns?.map((taskRun) => <TaskResult key={taskRun.id} taskRun={taskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} />)}{isActive && !run.data.taskRuns?.length ? <Empty>Готовим рабочее окружение и запускаем модель…</Empty> : null}</div>{remove.error ? <p className="error">{remove.error.message}</p> : null}</Panel>

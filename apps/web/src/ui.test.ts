@@ -210,6 +210,10 @@ describe("подписи списка запусков", () => {
     expect(runListMeta({ ...completed, result_mode: "web" }, undefined)).toBe("2 промпта · llama-chat · web-приложение");
   });
 
+  it("различает локальный запуск с обвязкой и без неё", () => {
+    expect(runListMeta({ runner_id: "omp", result_mode: "web", task_count: 1, error: null, status: "completed" }, "OMP", "без обвязки")).toBe("1 промпт · OMP · web-приложение · без обвязки");
+  });
+
   it("показывает оценку запуска только когда она есть", () => {
     expect(runListScore({ reviewed_count: 0 })).toBe("Не оценено");
     expect(runListScore({ review_score: 33, reviewed_count: 1, task_count: 2 })).toBe("33/40");
@@ -254,11 +258,28 @@ describe("Gallery", () => {
     expect(matrix.rows[1]!.cells.map((cell) => cell.results.map((item) => item.taskRunId))).toEqual([[], ["c1"]]);
   });
 
+  it("ставит выбранный главный результат первым в ячейке", () => {
+    const result = (taskRunId: string, featured = false) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: "p1", name: "Prompt", prompt: "Text" },
+      model: { id: "m1", name: "Model" },
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+      featured,
+    });
+
+    const matrix = galleryMatrix([result("first"), result("new", true)]);
+
+    expect(matrix.rows[0]!.cells[0]!.results.map((item) => item.taskRunId)).toEqual(["new", "first"]);
+  });
+
   it("собирает подписи о варианте модели, мышлении и обвязке", () => {
     expect(galleryResultTags({ model: { name: "GPT-5.6 Codex", kind: "cloud", modelRef: "gpt-5.6-spark" }, reasoningEffort: "high" })).toEqual(["gpt-5.6-spark", "мышление: high"]);
     expect(galleryResultTags({ model: { name: "GPT-5.6 Codex", kind: "cloud", modelRef: "GPT-5.6 Codex" } })).toEqual([]);
     expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "omp", reasoningEffort: "medium" })).toEqual(["с обвязкой (OMP)", "мышление: medium"]);
     expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "llama-chat" })).toEqual(["без обвязки"]);
+    expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "omp", useOmpAgent: false })).toEqual(["без обвязки"]);
   });
 });
 

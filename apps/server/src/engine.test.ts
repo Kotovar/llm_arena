@@ -214,9 +214,9 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     writeFileSync(
       script,
       `import { writeFileSync } from "node:fs";
-const normal = !process.env.PI_CODING_AGENT_DIR && !process.argv.includes("--no-skills");
+const normal = process.env.PI_CODING_AGENT_DIR?.endsWith("/omp") && !process.argv.includes("--no-skills");
 writeFileSync("index.html", "<h1>Готовое приложение</h1>");
-console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:normal ? "normal" : "isolated"}]}]}));`,
+console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:normal ? "wrapped" : "wrong"}]}]}));`,
     );
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = join(root, ".data");
@@ -233,13 +233,13 @@ console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content
     await engine.processNext();
 
     const taskRun = store.listTaskRuns(run.id)[0]!;
-    expect(JSON.parse(taskRun.result_json ?? "{}").finalAnswer).toBe("normal");
+    expect(JSON.parse(taskRun.result_json ?? "{}").finalAnswer).toBe("wrapped");
     expect(JSON.parse(store.getRun(run.id)?.snapshot_json ?? "{}").useOmpAgent).toBe(true);
 
     store.createFollowup(taskRun.id, "Измени страницу");
     await engine.processNext();
 
-    expect(JSON.parse(store.listFollowups(taskRun.id)[0]?.result_json ?? "{}").finalAnswer).toBe("normal");
+    expect(JSON.parse(store.listFollowups(taskRun.id)[0]?.result_json ?? "{}").finalAnswer).toBe("wrapped");
     await engine.stop();
     store.close();
   });

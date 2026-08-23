@@ -2,10 +2,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Page, Panel, useData } from "../shell.js";
+import { useToast } from "../toast.js";
 import type { AppSettings, LocalModelFile, Runner } from "../types.js";
 
 export function SettingsPage() {
   const client = useQueryClient();
+  const toast = useToast();
   const settings = useData<AppSettings>("settings", "/settings");
   const files = useData<LocalModelFile[]>("local-model-files", "/local-model-files");
   const diagnostics = useData<Record<string, string>>("diagnostics", "/diagnostics");
@@ -19,6 +21,7 @@ export function SettingsPage() {
     mutationFn: () => api("/settings/model-directory", { method: "PUT", body: JSON.stringify({ modelDirectory }) }),
     onSuccess: async () => {
       setDirectoryTouched(false);
+      toast("Путь сохранён, список моделей обновлён.");
       await Promise.all([
         client.invalidateQueries({ queryKey: ["settings"] }),
         client.invalidateQueries({ queryKey: ["local-model-files"] }),
@@ -27,7 +30,6 @@ export function SettingsPage() {
   });
   return <Page title="Настройки приложения" eyebrow="Настройки" intro="Здесь меняются только доверенные серверные пути. Команды запуска и пути отдельных моделей браузер не задаёт.">
     <Panel title="Каталог локальных моделей"><form className="directory-form" onSubmit={(event) => { event.preventDefault(); saveDirectory.mutate(); }}><label>Папка с GGUF-файлами<input value={modelDirectory} onChange={(event) => { setModelDirectory(event.currentTarget.value); setDirectoryTouched(true); }} placeholder="models" required /></label><button className="primary" disabled={saveDirectory.isPending || !directoryTouched}>{saveDirectory.isPending ? "Проверяем…" : "Сохранить путь"}</button><small>Укажите абсолютный путь к папке. Приложение покажет обычные GGUF-файлы только из её верхнего уровня.</small></form>
-      {saveDirectory.isSuccess ? <p className="success">Путь сохранён, список моделей обновлён.</p> : null}
       {saveDirectory.error ? <p className="error">{saveDirectory.error.message}</p> : null}
       {files.error ? <p className="error">Папка недоступна: {files.error.message}</p> : null}
       {files.data ? <div className="directory-state"><strong>{files.data.length} GGUF</strong><span>{files.data.filter((file) => file.connectedModelId).length} уже подключено</span></div> : null}

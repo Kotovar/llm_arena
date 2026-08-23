@@ -1,11 +1,11 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import type { GalleryMetrics, GalleryResult, ResultVersion } from "../types.js";
 import { formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, plural } from "../ui.js";
-import { usePreviewHeartbeat } from "./results.js";
+import { ResultPreview } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
 
@@ -46,11 +46,12 @@ function GalleryResultButton({ result, onOpen }: { result: GalleryResult; onOpen
 
 function GalleryCell({ results, onOpen }: { results: GalleryResult[]; onOpen: (result: GalleryResult) => void }) {
   if (!results.length) return <span className="gallery-empty">Нет результата</span>;
-  if (results.length === 1) return <GalleryResultButton result={results[0]!} onOpen={onOpen} />;
-  return <details className="gallery-multiple"><summary><strong>{results.length} {plural(results.length, "результат", "результата", "результатов")}</strong><span>Выберите запуск</span></summary><div>{results.map((result) => <GalleryResultButton key={result.taskRunId} result={result} onOpen={onOpen} />)}</div></details>;
+  const [featured, ...alternatives] = results;
+  return <div className="gallery-cell"><GalleryResultButton result={featured!} onOpen={onOpen} />{alternatives.length ? <details className="gallery-multiple"><summary><strong>Ещё {alternatives.length} {plural(alternatives.length, "результат", "результата", "результатов")}</strong><span>Выберите запуск</span></summary><div>{alternatives.map((result) => <GalleryResultButton key={result.taskRunId} result={result} onOpen={onOpen} />)}</div></details> : null}</div>;
 }
 
 function GalleryDetail({ result, onClose }: { result: GalleryResult; onClose: () => void }) {
+  const client = useQueryClient();
   const dialog = useRef<HTMLDialogElement>(null);
   const activePreview = useRef<PreviewState | undefined>(undefined);
   const closed = useRef(false);
@@ -67,7 +68,10 @@ function GalleryDetail({ result, onClose }: { result: GalleryResult; onClose: ()
     mutationFn: () => activePreview.current ? stopPreview(activePreview.current) : Promise.resolve(),
     onSuccess: () => { activePreview.current = undefined; setPreview(undefined); },
   });
-  usePreviewHeartbeat(Boolean(preview));
+  const feature = useMutation({
+    mutationFn: () => api("/gallery/featured", { method: "PUT", body: JSON.stringify({ taskRunId: result.taskRunId }) }),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: ["gallery"] }); onClose(); },
+  });
   useEffect(() => {
     closed.current = false;
     if (dialog.current && !dialog.current.open) dialog.current.showModal();
@@ -79,9 +83,9 @@ function GalleryDetail({ result, onClose }: { result: GalleryResult; onClose: ()
     };
   }, []);
   return <dialog className="gallery-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
-    <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span><h2>{result.prompt.name}</h2></div><button type="button" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}>Закрыть</button></header>
-    <div className="gallery-detail-grid"><section><Screenshot result={result} className="gallery-detail-shot" />{preview ? <section className="result-preview"><header><div><span className="mono">Preview запущен</span><strong>Версия по SHA</strong></div><div><a href={preview.url} target="_blank" rel="noreferrer">Открыть в новой вкладке ↗</a><button type="button" onClick={() => stop.mutate()} disabled={stop.isPending}>Остановить preview</button></div></header><iframe title={`Preview ${result.prompt.name}`} src={preview.url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" /></section> : <section className="preview-cta"><div><span className="mono">Готовая версия</span><strong>Запустить web-приложение</strong><p>Preview материализует выбранный SHA и заменит текущий единственный preview.</p></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview →"}</button></section>}{start.error || stop.error ? <p className="error">{(start.error ?? stop.error)?.message}</p> : null}</section>
-      <aside className="gallery-details"><dl><div><dt>Модель</dt><dd>{result.model.name}</dd></div><div><dt>Версия</dt><dd>{versionLabel(result.selectedVersion)}</dd></div><div><dt>SHA</dt><dd><code title={result.selectedVersion.resultSha}>{result.selectedVersion.resultSha.slice(0, 12)}</code></dd></div>{galleryResultTags(result).map((tag) => <div key={tag}><dt>Запуск</dt><dd>{tag}</dd></div>)}</dl><ResultMetrics metrics={result.metrics} /><details><summary>Исходный промпт</summary><pre>{result.prompt.prompt}</pre></details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть полный результат запуска →</Link></aside>
+    <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span><h2>{result.prompt.name}</h2></div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}>✕</button></header>
+    <div className="gallery-detail-grid"><section><Screenshot result={result} className="gallery-detail-shot" />{preview ? <ResultPreview url={preview.url} onClose={() => stop.mutate()} closing={stop.isPending} title="Версия по SHA" /> : <section className="preview-cta"><div><span className="mono">Готовая версия</span><strong>Запустить web-приложение</strong><p>Preview материализует выбранный SHA и заменит текущий единственный preview.</p></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview →"}</button></section>}{start.error || stop.error ? <p className="error">{(start.error ?? stop.error)?.message}</p> : null}</section>
+      <aside className="gallery-details"><dl><div><dt>Модель</dt><dd>{result.model.name}</dd></div><div><dt>Версия</dt><dd>{versionLabel(result.selectedVersion)}</dd></div><div><dt>SHA</dt><dd><code title={result.selectedVersion.resultSha}>{result.selectedVersion.resultSha.slice(0, 12)}</code></dd></div>{galleryResultTags(result).map((tag) => <div key={tag}><dt>Запуск</dt><dd>{tag}</dd></div>)}</dl>{result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button>}{feature.error ? <p className="error">{feature.error.message}</p> : null}<ResultMetrics metrics={result.metrics} /><details><summary>Исходный промпт</summary><pre>{result.prompt.prompt}</pre></details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть полный результат запуска →</Link></aside>
     </div>
   </dialog>;
 }
@@ -90,7 +94,7 @@ export function GalleryPage() {
   const gallery = useData<GalleryResult[]>("gallery", "/gallery");
   const [opened, setOpened] = useState<GalleryResult>();
   const matrix = galleryMatrix(gallery.data ?? []);
-  return <div className="gallery-page"><Page title="Галерея" eyebrow="Сравнение" intro="Выбранные итоговые версии web-результатов. Каждая ячейка привязана к её result SHA; preview не запускаются автоматически.">
+  return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея" intro="Выбранные итоговые версии web-результатов. Каждая ячейка привязана к её result SHA; preview не запускаются автоматически.">
     {gallery.isPending ? <Empty>Загружаем выбранные результаты…</Empty> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
     {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty>Пока нет успешных web-результатов с выбранной версией. Запустите web-задачу и выберите итоговую версию на странице результата.</Empty> : null}

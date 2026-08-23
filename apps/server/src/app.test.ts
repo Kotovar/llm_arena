@@ -706,6 +706,12 @@ describe("REST API", () => {
     expect(gallery).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskRunId: failedCheckTaskRun.id })]));
     expect(gallery).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskRunId: failedSelectedTaskRun.id })]));
     expect(JSON.stringify(gallery)).not.toContain("followups");
+
+    const promoted = await app.inject({ method: "PUT", url: "/api/gallery/featured", payload: { taskRunId: duplicateTaskRun.id } });
+    expect(promoted.statusCode).toBe(200);
+    expect(promoted.json()).toMatchObject({ taskRunId: duplicateTaskRun.id });
+    const featuredGallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
+    expect(featuredGallery.find((item: { taskRunId: string }) => item.taskRunId === duplicateTaskRun.id)).toMatchObject({ featured: true });
     await app.close();
     store.close();
   });
@@ -735,7 +741,7 @@ describe("REST API", () => {
     store.saveTaskRunResult(cloudTaskRun.id, { artifacts: cloudArtifacts });
     store.updateRunStatus(cloudRun.id, "completed");
 
-    const localRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: localModel.id, executionProfileId: null, runnerId: "omp", resultMode: "web" });
+    const localRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: localModel.id, executionProfileId: null, runnerId: "omp", resultMode: "web", useOmpAgent: false });
     const localArtifacts = finalizeWorkspace(prepareWorkspace(source, join(directory, "local")));
     const localTaskRun = store.createTaskRun(localRun.id, task.currentRevision.id, 0, join(directory, "local"), {
       task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" },
@@ -759,6 +765,7 @@ describe("REST API", () => {
       model: { id: localModel.id, name: "Gemma 4", kind: "local-gguf", modelRef: "gemma-4" },
       reasoningEffort: "medium",
       runnerKind: "omp",
+      useOmpAgent: false,
     });
     await app.close();
     store.close();
@@ -810,6 +817,56 @@ describe("REST API", () => {
     expect(response.statusCode).toBe(202);
     expect(cancelled).toEqual([followup.id]);
     expect(store.getRun(run.id)?.status).toBe("completed");
+    await app.close();
+    store.close();
+  });
+
+  it("aggregates the leaderboard by model, weighting by reviewed task run and keeping archived models", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
+
+    const scored = store.createModel({ name: "Scored Model", kind: "cloud", provider: "openai", modelRef: "scored" });
+    const runA = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRunA1 = store.createTaskRun(runA.id, task.currentRevision.id, 0, join(directory, "a1"), { task: task.currentRevision });
+    store.saveTaskRunResult(taskRunA1.id, { finalAnswer: "A1" });
+    await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunA1.id}/review`, payload: review(10) }); // 40
+    const taskRunA2 = store.createTaskRun(runA.id, task.currentRevision.id, 1, join(directory, "a2"), { task: task.currentRevision });
+    store.saveTaskRunResult(taskRunA2.id, { finalAnswer: "A2" });
+    await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunA2.id}/review`, payload: review(5) }); // 20
+    const runB = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRunB1 = store.createTaskRun(runB.id, task.currentRevision.id, 0, join(directory, "b1"), { task: task.currentRevision });
+    store.saveTaskRunResult(taskRunB1.id, { finalAnswer: "B1" });
+    await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunB1.id}/review`, payload: review(9) }); // 36
+    // Средний балл считается по промптам (40+20+36)/3, а не по ранам ((40+20)/2 и 36)/2 — иначе один слабый ран с одним промптом весил бы столько же, сколько ран с двумя.
+
+    const unscored = store.createModel({ name: "Unscored Model", kind: "cloud", provider: "openai", modelRef: "unscored" });
+    const runC = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: unscored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    store.createTaskRun(runC.id, task.currentRevision.id, 0, join(directory, "c1"), { task: task.currentRevision });
+
+    const archived = store.createModel({ name: "Archived Model", kind: "cloud", provider: "openai", modelRef: "archived" });
+    const runD = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: archived.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRunD1 = store.createTaskRun(runD.id, task.currentRevision.id, 0, join(directory, "d1"), { task: task.currentRevision });
+    store.saveTaskRunResult(taskRunD1.id, { finalAnswer: "D1" });
+    await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunD1.id}/review`, payload: review(7) }); // 28
+    store.updateRunStatus(runD.id, "completed");
+    expect((await app.inject({ method: "DELETE", url: `/api/models/${archived.id}` })).statusCode).toBe(204);
+
+    const response = await app.inject({ method: "GET", url: "/api/leaderboard" });
+    expect(response.statusCode).toBe(200);
+    const entries = response.json() as Array<{ modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; avgScore: number | null }>;
+
+    expect(entries.find((entry) => entry.modelId === scored.id)).toMatchObject({ modelName: "Scored Model", runCount: 2, reviewedTaskRunCount: 3, avgScore: 32 });
+    expect(entries.find((entry) => entry.modelId === archived.id)).toMatchObject({ modelName: "Archived Model", runCount: 1, reviewedTaskRunCount: 1, avgScore: 28 });
+    expect(entries.find((entry) => entry.modelId === unscored.id)).toMatchObject({ modelName: "Unscored Model", runCount: 1, reviewedTaskRunCount: 0, avgScore: null });
+    // Убывание по среднему баллу, неоценённые — в хвосте.
+    expect(entries.map((entry) => entry.modelId)).toEqual([scored.id, archived.id, unscored.id]);
     await app.close();
     store.close();
   });

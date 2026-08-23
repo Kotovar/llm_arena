@@ -6,10 +6,12 @@ import { api } from "./api.js";
 import { Launcher } from "./screens/launcher.js";
 import { ComparePage } from "./screens/compare.js";
 import { GalleryPage } from "./screens/gallery.js";
+import { LeaderboardPage } from "./screens/leaderboard.js";
 import { ModelsPage } from "./screens/models.js";
 import { RunDetail, RunsPage } from "./screens/results.js";
 import { SettingsPage } from "./screens/settings.js";
 import { Empty, Page, Panel, Shell, useData } from "./shell.js";
+import { ToastProvider } from "./toast.js";
 import type { Task } from "./types.js";
 import { taskUpdateBody } from "./ui.js";
 import "./styles.css";
@@ -26,14 +28,13 @@ function TasksPage() {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    create.mutate({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt"), tags: String(data.get("tags") ?? "").split(",").map((tag) => tag.trim()).filter(Boolean) });
+    create.mutate({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt") });
     event.currentTarget.reset();
   }
   return <Page title="Подготовленные промпты" eyebrow="Промпты" intro="Добавьте задания, на которых хотите сравнивать модели. История старых запусков не изменится после редактирования.">
     <div className="two-col"><Panel title="Добавить промпт"><form onSubmit={submit} className="form-grid">
       <label className="span-2">Название<input name="name" required /></label>
       <label className="span-2">Текст промпта<textarea name="prompt" rows={8} required /></label>
-      <label className="span-2">Метки через запятую<input name="tags" /></label>
       <button className="primary">Добавить</button>{create.error ? <p className="error">{create.error.message}</p> : null}
     </form></Panel>
     <Panel title={`Промптов: ${tasks.data?.length ?? 0}`}><div className="stack">{tasks.data?.map((task) => <article className="item prompt-item" key={task.id}>
@@ -54,11 +55,12 @@ const modelsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/model
 const runsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs", component: RunsPage });
 function RunDetailRoute() { const { runId } = runRoute.useParams(); return <RunDetail runId={runId} />; }
 const runRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs/$runId", component: RunDetailRoute });
+const leaderboardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/leaderboard", component: LeaderboardPage });
 const compareRoute = createRoute({ getParentRoute: () => rootRoute, path: "/compare", component: ComparePage });
 const galleryRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gallery", component: GalleryPage });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, compareRoute, galleryRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, galleryRoute, settingsRoute]);
 const router = createRouter({ routeTree, defaultPreload: "intent" });
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><ToastProvider><QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider></ToastProvider></StrictMode>);
