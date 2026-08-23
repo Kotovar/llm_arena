@@ -9,6 +9,10 @@ import { usePreviewHeartbeat } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
 
+function stopPreview(preview: PreviewState) {
+  return api("/preview", { method: "DELETE", body: JSON.stringify({ taskRunId: preview.taskRunId, resultSha: preview.resultSha }) });
+}
+
 function versionLabel(version: ResultVersion) {
   return version.type === "initial" ? "Исходная версия" : `Уточнение ${version.index}`;
 }
@@ -47,20 +51,31 @@ function GalleryCell({ results, onOpen }: { results: GalleryResult[]; onOpen: (r
 
 function GalleryDetail({ result, onClose }: { result: GalleryResult; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const ownsPreview = useRef(false);
+  const activePreview = useRef<PreviewState | undefined>(undefined);
+  const closed = useRef(false);
   const [preview, setPreview] = useState<PreviewState>();
   const start = useMutation({
     mutationFn: () => api<PreviewState>(`/task-runs/${result.taskRunId}/preview`, { method: "POST", body: JSON.stringify({ resultSha: result.selectedVersion.resultSha }) }),
-    onSuccess: (next) => { ownsPreview.current = true; setPreview(next); },
+    onSuccess: (next) => {
+      if (closed.current) { void stopPreview(next); return; }
+      activePreview.current = next;
+      setPreview(next);
+    },
   });
   const stop = useMutation({
-    mutationFn: () => api("/preview", { method: "DELETE" }),
-    onSuccess: () => { ownsPreview.current = false; setPreview(undefined); },
+    mutationFn: () => activePreview.current ? stopPreview(activePreview.current) : Promise.resolve(),
+    onSuccess: () => { activePreview.current = undefined; setPreview(undefined); },
   });
   usePreviewHeartbeat(Boolean(preview));
   useEffect(() => {
+    closed.current = false;
     if (dialog.current && !dialog.current.open) dialog.current.showModal();
-    return () => { if (ownsPreview.current) void api("/preview", { method: "DELETE" }); };
+    return () => {
+      closed.current = true;
+      const active = activePreview.current;
+      activePreview.current = undefined;
+      if (active) void stopPreview(active);
+    };
   }, []);
   return <dialog className="gallery-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
     <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span><h2>{result.prompt.name}</h2></div><button type="button" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}>Закрыть</button></header>

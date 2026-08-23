@@ -154,6 +154,11 @@ export class PreviewManager {
     removePreviewDirectory(active.directory);
   }
 
+  async stopIf(taskRunId: string, resultSha: string): Promise<void> {
+    if (this.#active?.taskRunId !== taskRunId || this.#active.resultSha !== resultSha.toLowerCase()) return;
+    await this.stop();
+  }
+
   async removeTaskRunPreviews(taskRunIds: string[]): Promise<void> {
     const ids = new Set(taskRunIds);
     if (this.#active && ids.has(this.#active.taskRunId)) await this.stop();

@@ -356,6 +356,37 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("stops only the matching preview when Gallery closes", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-gallery-preview-stop-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const stopped: Array<{ taskRunId: string; resultSha: string }> = [];
+    let globalStops = 0;
+    const app = buildApp({
+      store,
+      config,
+      preview: {
+        async start() { return {}; },
+        async stop() { globalStops += 1; },
+        async stopIf(taskRunId, resultSha) { stopped.push({ taskRunId, resultSha }); },
+        heartbeat() {},
+      },
+    });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/preview",
+      payload: { taskRunId: "00000000-0000-4000-8000-000000000001", resultSha: "a".repeat(40) },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(stopped).toEqual([{ taskRunId: "00000000-0000-4000-8000-000000000001", resultSha: "a".repeat(40) }]);
+    expect(globalStops).toBe(0);
+    await app.close();
+    store.close();
+  });
+
   it("keeps a huge provider error out of normal result payloads and exposes it on demand", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-error-details-"));
     directories.push(directory);
@@ -630,7 +661,7 @@ describe("REST API", () => {
         taskRunId: taskRun.id,
         runId: run.id,
         prompt: { id: task.currentRevision.id, name: "Landing", prompt: "Build a landing page" },
-        model: { id: model.id, name: "Gemma 4" },
+        model: { id: model.id, name: "Gemma" },
         selectedVersion: { type: "followup", followupId: followup.id, resultSha: followupArtifacts.resultSha, status: "completed", index: 1 },
         screenshotUrl: `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(followupArtifacts.resultSha)}`,
         metrics: { durationMs: 2_500, inputTokens: 25, outputTokens: 50, tokensPerSecond: 5 },

@@ -7,6 +7,7 @@ import {
   createModelSchema,
   renameModelSchema,
   previewResultVersionSchema,
+  resultShaSchema,
   createRunSchema,
   createTaskSchema,
   reviewSchema,
@@ -38,6 +39,7 @@ type EngineLike = {
 type PreviewLike = {
   start(taskRunId: string, resultSha: string): Promise<unknown>;
   stop(): Promise<void>;
+  stopIf?(taskRunId: string, resultSha: string): Promise<void>;
   heartbeat(): void;
   removeTaskRunPreviews?(taskRunIds: string[]): Promise<void>;
 };
@@ -48,6 +50,7 @@ function parse<T>(schema: ZodType<T>, value: unknown): T {
 
 const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict();
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
+const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
 const externalLauncherQuerySchema = z.object({
   profileName: z.string().trim().min(1),
   port: z.coerce.number().int().min(1).max(65535).default(8080),
@@ -301,7 +304,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         taskRunId: taskRun.id,
         runId: run.id,
         prompt: { id: taskRun.task_revision_id, name: task.name, prompt: task.prompt },
-        model: { id: run.model_id, name: model?.name || snapshot.model?.name || run.model_ref || run.model_id.slice(0, 8) },
+        model: { id: run.model_id, name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8) },
         selectedVersion,
         screenshotUrl: existsSync(join(artifactPath, "preview.png"))
           ? `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(selected.resultSha)}`
@@ -506,8 +509,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     preview?.heartbeat();
     return { status: "ok" };
   });
-  app.delete("/api/preview", async (_request, reply) => {
-    await preview?.stop();
+  app.delete<{ Body: unknown }>("/api/preview", async (request, reply) => {
+    const target = request.body === undefined ? undefined : parse(previewStopSchema, request.body);
+    if (target && preview?.stopIf) await preview.stopIf(target.taskRunId, target.resultSha);
+    else await preview?.stop();
     return reply.code(204).send();
   });
 
