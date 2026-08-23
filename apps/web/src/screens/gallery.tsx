@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import type { GalleryMetrics, GalleryResult, ResultVersion } from "../types.js";
-import { formatDuration, formatMetricValue, galleryMatrix } from "../ui.js";
+import { formatDuration, formatMetricValue, galleryMatrix, plural } from "../ui.js";
 import { usePreviewHeartbeat } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
@@ -46,7 +46,7 @@ function GalleryResultButton({ result, onOpen }: { result: GalleryResult; onOpen
 function GalleryCell({ results, onOpen }: { results: GalleryResult[]; onOpen: (result: GalleryResult) => void }) {
   if (!results.length) return <span className="gallery-empty">Нет результата</span>;
   if (results.length === 1) return <GalleryResultButton result={results[0]!} onOpen={onOpen} />;
-  return <details className="gallery-multiple"><summary><strong>{results.length} результатов</strong><span>Выберите запуск</span></summary><div>{results.map((result) => <GalleryResultButton key={result.taskRunId} result={result} onOpen={onOpen} />)}</div></details>;
+  return <details className="gallery-multiple"><summary><strong>{results.length} {plural(results.length, "результат", "результата", "результатов")}</strong><span>Выберите запуск</span></summary><div>{results.map((result) => <GalleryResultButton key={result.taskRunId} result={result} onOpen={onOpen} />)}</div></details>;
 }
 
 function GalleryDetail({ result, onClose }: { result: GalleryResult; onClose: () => void }) {
@@ -89,11 +89,11 @@ export function GalleryPage() {
   const gallery = useData<GalleryResult[]>("gallery", "/gallery");
   const [opened, setOpened] = useState<GalleryResult>();
   const matrix = galleryMatrix(gallery.data ?? []);
-  return <Page title="Gallery" eyebrow="Сравнение" intro="Выбранные итоговые версии web-результатов. Каждая ячейка привязана к её result SHA; preview не запускаются автоматически.">
+  return <div className="gallery-page"><Page title="Галерея" eyebrow="Сравнение" intro="Выбранные итоговые версии web-результатов. Каждая ячейка привязана к её result SHA; preview не запускаются автоматически.">
     {gallery.isPending ? <Empty>Загружаем выбранные результаты…</Empty> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
     {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty>Пока нет успешных web-результатов с выбранной версией. Запустите web-задачу и выберите итоговую версию на странице результата.</Empty> : null}
     {matrix.rows.length ? <Panel title="Матрица результатов" action={<span className="mono">{matrix.rows.length} × {matrix.models.length}</span>}><div className="gallery-scroll"><table className="gallery-table"><thead><tr><th scope="col">Промпт</th>{matrix.models.map((model) => <th scope="col" key={model.id}>{model.name}</th>)}</tr></thead><tbody>{matrix.rows.map((row) => <tr key={row.prompt.id}><th scope="row" className="gallery-prompt"><strong>{row.prompt.name}</strong><small>{row.prompt.prompt}</small></th>{row.cells.map((cell) => <td key={cell.model.id}><GalleryCell results={cell.results} onOpen={setOpened} /></td>)}</tr>)}</tbody></table></div></Panel> : null}
     {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} onClose={() => setOpened(undefined)} /> : null}
-  </Page>;
+  </Page></div>;
 }
