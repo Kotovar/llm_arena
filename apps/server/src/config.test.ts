@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "./config.js";
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("host configuration", () => {
-  it("loads current-machine runners without treating fish functions as executables", () => {
+  it("loads portable runner commands without treating fish functions as executables", () => {
     const config = loadConfig("../../arena.config.yaml");
     const proxy = config.runners.find((runner) => runner.id === "claude-proxy");
 
@@ -17,7 +19,16 @@ describe("host configuration", () => {
     expect(fixture?.source).toMatch(/\/fixtures\/node-smoke$/u);
   });
 
-  it("uses the configured absolute local model directory", () => {
-    expect(loadConfig("../../arena.config.yaml").modelDirectory).toBe("models");
+  it("uses environment overrides for local machine paths", () => {
+    vi.stubEnv("LLM_ARENA_MODEL_DIRECTORY", "/models");
+    vi.stubEnv("LLM_ARENA_LLAMA_SERVER", "/bin/llama-server");
+    vi.stubEnv("LLM_ARENA_OMP_EXECUTABLE", "/bin/omp");
+
+    const config = loadConfig("../../arena.config.yaml");
+
+    expect(config.modelDirectory).toBe("/models");
+    expect(config.llamaServer.executable).toBe("/bin/llama-server");
+    expect(config.runners.find((runner) => runner.id === "llama-chat")?.exec).toEqual(["/bin/llama-server"]);
+    expect(config.runners.find((runner) => runner.id === "omp")?.exec).toEqual(["/bin/omp"]);
   });
 });

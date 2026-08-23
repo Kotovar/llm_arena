@@ -34,11 +34,20 @@ export function loadConfig(filename = "arena.config.yaml") {
   const absoluteFilename = resolve(filename);
   const root = dirname(absoluteFilename);
   const parsed = configSchema.parse(parse(readFileSync(absoluteFilename, "utf8")));
+  const llamaServerExecutable = process.env.LLM_ARENA_LLAMA_SERVER ?? parsed.llamaServer.executable;
+  const modelDirectory = process.env.LLM_ARENA_MODEL_DIRECTORY ?? parsed.modelDirectory;
+  const ompExecutable = process.env.LLM_ARENA_OMP_EXECUTABLE;
   return {
     ...parsed,
     root,
     dataDir: resolve(root, parsed.dataDir),
-    modelDirectory: isAbsolute(parsed.modelDirectory) ? parsed.modelDirectory : resolve(root, parsed.modelDirectory),
+    modelDirectory: isAbsolute(modelDirectory) ? modelDirectory : resolve(root, modelDirectory),
+    llamaServer: { ...parsed.llamaServer, executable: llamaServerExecutable },
+    runners: parsed.runners.map((runner) => {
+      if (runner.id === "llama-chat") return { ...runner, exec: [llamaServerExecutable, ...runner.exec.slice(1)] };
+      if (runner.id === "omp" && ompExecutable) return { ...runner, exec: [ompExecutable, ...runner.exec.slice(1)] };
+      return runner;
+    }),
     fixtures: parsed.fixtures.map((fixture) => ({ ...fixture, source: resolve(root, fixture.source) })),
   };
 }

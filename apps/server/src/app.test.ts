@@ -139,7 +139,8 @@ describe("REST API", () => {
     mkdirSync(modelsRoot);
     writeFileSync(join(modelsRoot, "My Model.gguf"), "gguf");
     const store = createStore(join(directory, "arena.sqlite"));
-    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
     const parameters = {
       context: "auto",
       nGpuLayers: "auto",
@@ -163,7 +164,7 @@ describe("REST API", () => {
       payload: { filename: "My Model.gguf", name: "My model", profileName: "Manual", profile: parameters },
     });
 
-    expect(defaults.json()).toMatchObject({ modelDirectory: "models", externalModelId: null });
+    expect(defaults.json()).toMatchObject({ modelDirectory: config.modelDirectory, externalModelId: null });
     expect(updated.json()).toEqual({ modelDirectory: modelsRoot });
     expect(listed.json()).toEqual([{ filename: "My Model.gguf", sizeBytes: 4, connectedModelId: null }]);
     expect(connected.statusCode).toBe(201);

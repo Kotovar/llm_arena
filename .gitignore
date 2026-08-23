@@ -4,5 +4,12 @@ dist/
 .worktrees/
 coverage/
 *.log
+.env
+.env.*
+!.env.example
+/models/*
+!/models/.gitkeep
+*.gguf
+*.safetensors
 arena.config.local.yaml
 docs/superpowers

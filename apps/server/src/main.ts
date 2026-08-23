@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
@@ -9,6 +10,8 @@ import { ProcessSupervisor } from "./process-supervisor.js";
 import { createStore } from "./store.js";
 
 const defaultConfig = fileURLToPath(new URL("../../../arena.config.yaml", import.meta.url));
+const envFile = join(dirname(defaultConfig), ".env");
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 const config = loadConfig(process.env.LLM_ARENA_CONFIG ?? defaultConfig);
 const releaseLock = acquireInstanceLock(config.dataDir);
 const ownerId = loadOwnerId(config.dataDir);
