@@ -1,13 +1,11 @@
-export function buildOmpCommand(exec: readonly string[], workspace: string, modelAlias: string, prompt: string): string[] {
+export function buildOmpCommand(exec: readonly string[], workspace: string, modelAlias: string, prompt: string, useAgentEnvironment = false): string[] {
   return [
     ...exec,
     "--mode",
     "json",
     "--print",
     "--no-session",
-    "--no-extensions",
-    "--no-skills",
-    "--no-rules",
+    ...(useAgentEnvironment ? [] : ["--no-extensions", "--no-skills", "--no-rules"]),
     "--cwd",
     workspace,
     "--model",

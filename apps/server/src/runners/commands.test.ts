@@ -24,6 +24,23 @@ describe("verified non-interactive commands", () => {
     ]);
   });
 
+  it("keeps the configured OMP environment available for prompt agents", () => {
+    expect(buildOmpCommand(direct, "/tmp/work", "ornith", "Do it", true)).toEqual([
+      "agent",
+      "--mode",
+      "json",
+      "--print",
+      "--no-session",
+      "--cwd",
+      "/tmp/work",
+      "--model",
+      "llama.cpp/ornith",
+      "--approval-mode",
+      "yolo",
+      "Do it",
+    ]);
+  });
+
   it("keeps Claude in safe non-interactive stream-json mode", () => {
     const command = buildClaudeCommand(direct, "claude-model", "high", "Do it");
     expect(command).toContain("--no-session-persistence");

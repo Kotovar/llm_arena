@@ -41,6 +41,32 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_t
     expect(result.sessionId).toBe("fake-thread");
   });
 
+  it("uses the normal OMP profile for prompt tasks", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
+    directories.push(root);
+    const script = join(root, "fake-omp.mjs");
+    writeFileSync(
+      script,
+      `console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:process.env.PI_CODING_AGENT_DIR ? "isolated" : "normal"}]}]}));`,
+    );
+    const runner = createRunner("omp", new ProcessSupervisor("runner-test", 100));
+
+    const result = await runner.run({
+      definition: { id: "fake", name: "Fake", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
+      prompt: "Use tools",
+      workspace: root,
+      modelRef: "test-model",
+      taskKind: "prompt",
+      taskDataDir: root,
+      timeoutMs: 2_000,
+      signal: new AbortController().signal,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+    });
+
+    expect(result.finalAnswer).toBe("normal");
+  });
+
   it("keeps an active runner alive past the configured idle timeout", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
     directories.push(root);

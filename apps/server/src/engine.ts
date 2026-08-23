@@ -194,6 +194,7 @@ export class BenchmarkEngine {
           const result = await this.#runAgent({
             definition,
             prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
+            taskKind: effectiveTask.kind,
             workspace: prepared.workspace,
             modelRef: selectedModel.modelRef,
             reasoningEffort: run.reasoning_effort,
@@ -280,6 +281,7 @@ export class BenchmarkEngine {
       const result = await this.#runAgent({
         definition,
         prompt,
+        taskKind: snapshot.task.kind,
         workspace,
         modelRef: run.model_ref ?? model.modelRef,
         reasoningEffort: run.reasoning_effort,
@@ -309,7 +311,7 @@ export class BenchmarkEngine {
 
   async #runAgent(input: {
     definition: ArenaConfig["runners"][number]; prompt: string; workspace: string; modelRef: string; reasoningEffort: string | null;
-    taskDataDir: string; timeoutMs: number; signal: AbortSignal; baseUrl?: string; runId: string; taskRunId: string;
+    taskKind: "prompt" | "coding"; taskDataDir: string; timeoutMs: number; signal: AbortSignal; baseUrl?: string; runId: string; taskRunId: string;
     stdoutPath: string; stderrPath: string; displayPath: string;
   }) {
     const secretValues = input.definition.envPassthrough.flatMap((name) => process.env[name] ? [process.env[name]!] : []);
@@ -322,6 +324,7 @@ export class BenchmarkEngine {
       workspace: input.workspace,
       modelRef: input.modelRef,
       reasoningEffort: input.reasoningEffort,
+      taskKind: input.taskKind,
       taskDataDir: input.taskDataDir,
       timeoutMs: input.timeoutMs,
       signal: input.signal,

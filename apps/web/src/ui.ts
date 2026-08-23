@@ -23,9 +23,10 @@ export function chooseRunner(
   model: Pick<Model, "kind" | "provider">,
   taskKinds: Task["currentRevision"]["kind"][],
   runners: Runner[],
+  useOmpAgent = false,
 ) {
   const kind = model.kind === "local-gguf"
-    ? taskKinds.includes("coding") ? "omp" : "llama-chat"
+    ? taskKinds.includes("coding") || useOmpAgent ? "omp" : "llama-chat"
     : model.provider.toLowerCase().includes("anthropic") ? "claude-code"
       : model.provider.toLowerCase().includes("openai") ? "codex"
         : undefined;

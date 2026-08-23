@@ -54,6 +54,7 @@ describe("интерфейс запуска", () => {
 
   it("автоматически выбирает runner по модели и типу задачи", () => {
     expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp" }, ["prompt"], runners)?.id).toBe("llama-chat");
+    expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp" }, ["prompt"], runners, true)?.id).toBe("omp");
     expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp" }, ["coding"], runners)?.id).toBe("omp");
     expect(chooseRunner({ kind: "cloud", provider: "anthropic" }, ["prompt"], runners)?.id).toBe("claude");
     expect(chooseRunner({ kind: "cloud", provider: "openai" }, ["coding"], runners)?.id).toBe("codex");
