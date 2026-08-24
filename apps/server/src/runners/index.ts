@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import type { NormalizedRunResult, RunnerDefinition, RunnerKind, TaskImage } from "@llm-arena/shared";
 import { type OwnedProcess, ProcessSupervisor } from "../process-supervisor.js";
-import { buildClaudeCommand, buildCodexCommand, buildOmpCommand } from "./commands.js";
-import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput } from "./parsers.js";
+import { buildClaudeCommand, buildCodexCommand, buildOmpCommand, buildOpenCodeCommand } from "./commands.js";
+import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput, parseOpenCodeOutput } from "./parsers.js";
 
 export type RunnerInput = {
   definition: RunnerDefinition;
@@ -86,7 +86,7 @@ class CliRunner implements ModelRunner {
       if (inactive) throw new Error(`Runner inactive for ${input.timeoutMs} ms`);
       if (processResult.cancelled || input.signal.aborted) throw new Error("Runner cancelled");
       const parsed = this.parser(stdout, processResult.durationMs, 0);
-      return { ...parsed, exitCode: processResult.exitCode };
+      return { ...parsed, exitCode: processResult.exitCode === 0 ? parsed.exitCode : processResult.exitCode ?? 1 };
     } catch (error) {
       const detail = stderr.trim();
       throw new Error(detail ? `${(error as Error).message}: ${detail}` : (error as Error).message);
@@ -154,6 +154,13 @@ export function createRunner(kind: RunnerKind, supervisor: ProcessSupervisor): M
         (input) => buildCodexCommand(input.definition.exec, input.workspace, input.modelRef, input.reasoningEffort, input.images?.map((image) => image.path)),
         parseCodexOutput,
         true,
+      );
+    case "opencode":
+      return new CliRunner(
+        supervisor,
+        (input) => buildOpenCodeCommand(input.definition.exec, input.workspace, input.modelRef, input.prompt, input.reasoningEffort, input.taskKind ?? "prompt", input.images?.map((image) => image.path)),
+        parseOpenCodeOutput,
+        false,
       );
     default: {
       const exhaustive: never = kind;

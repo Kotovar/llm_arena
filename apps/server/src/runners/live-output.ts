@@ -53,6 +53,11 @@ export function createLiveOutput(kind: RunnerKind) {
     if (kind === "claude-code" && event.type === "result" && typeof event.result === "string") {
       return `${lineBreak()}${event.result}\n`;
     }
+
+    if (kind === "opencode" && event.type === "text") {
+      const part = event.part as Json | undefined;
+      if (part?.type === "text" && typeof part.text === "string") return `${lineBreak()}${part.text}\n`;
+    }
     return "";
   }
 

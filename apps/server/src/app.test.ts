@@ -102,6 +102,34 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("keeps cloud model capabilities enabled", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-cloud-capabilities-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+    const disabled = { toolUse: false, vision: false, reasoning: false };
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/models",
+      payload: { name: "Cloud", kind: "cloud", provider: "opencode", modelRef: "opencode/x-preview-f-free", capabilities: disabled },
+    });
+    const updated = await app.inject({
+      method: "PUT",
+      url: `/api/models/${created.json().id}/capabilities`,
+      payload: { capabilities: disabled, mmprojFilename: null },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json().capabilities).toEqual({ toolUse: true, vision: true, reasoning: true });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().capabilities).toEqual({ toolUse: true, vision: true, reasoning: true });
+    expect(store.getActiveModel(created.json().id)?.capabilities).toEqual({ toolUse: true, vision: true, reasoning: true });
+    await app.close();
+    store.close();
+  });
+
   it("renames a model without changing its execution identity", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-rename-model-"));
     directories.push(directory);

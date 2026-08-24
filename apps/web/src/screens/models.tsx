@@ -46,11 +46,10 @@ export function ModelsPage() {
   const [filename, setFilename] = useState("");
   const [localName, setLocalName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
-  const [cloudProvider, setCloudProvider] = useState<"anthropic" | "openai">("anthropic");
+  const [cloudProvider, setCloudProvider] = useState<"anthropic" | "openai" | "opencode">("anthropic");
   const [cloudModelRef, setCloudModelRef] = useState("");
   const [localCapabilities, setLocalCapabilities] = useState<Capabilities>({ toolUse: false, vision: false, reasoning: false });
   const [localMmprojFilename, setLocalMmprojFilename] = useState("");
-  const [cloudCapabilities, setCloudCapabilities] = useState<Capabilities>({ toolUse: false, vision: false, reasoning: false });
   const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; title: string; detail: string }>>({});
   const [hardware, setHardware] = useState<Record<string, CalibrationResult>>( {});
 
@@ -70,7 +69,7 @@ export function ModelsPage() {
   });
   const createCloud = useMutation({
     mutationFn: (body: unknown) => api("/models", { method: "POST", body: JSON.stringify(body) }),
-    onSuccess: async () => { setCloudModelRef(""); setCloudCapabilities({ toolUse: false, vision: false, reasoning: false }); await invalidateModels(); },
+    onSuccess: async () => { setCloudModelRef(""); await invalidateModels(); },
   });
   const calibrate = useMutation({
     mutationFn: (id: string) => api<CalibrationResult>(`/profiles/${id}/calibrate`, { method: "POST" }),
@@ -123,7 +122,7 @@ export function ModelsPage() {
   function submitCloud(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    createCloud.mutate({ name: data.get("name"), kind: "cloud", provider: cloudProvider, modelRef: cloudModelRef, capabilities: cloudCapabilities });
+    createCloud.mutate({ name: data.get("name"), kind: "cloud", provider: cloudProvider, modelRef: cloudModelRef });
   }
 
   function submitRename(event: FormEvent<HTMLFormElement>, modelId: string) {
@@ -131,7 +130,7 @@ export function ModelsPage() {
     rename.mutate({ modelId, name: String(new FormData(event.currentTarget).get("name") ?? "") });
   }
 
-  const cloudOptions = cloudProvider === "anthropic" ? catalog.data?.claude.models ?? [] : catalog.data?.codex.models ?? [];
+  const cloudOptions = cloudProvider === "anthropic" ? catalog.data?.claude.models ?? [] : cloudProvider === "openai" ? catalog.data?.codex.models ?? [] : [];
   const visibleProfiles = latestProfiles(profiles.data ?? []);
   return <Page title="Подключённые модели" eyebrow="Модели" intro="Локальные GGUF выбираются из доверенной папки. Автоматический профиль подгоняет загрузку под GPU через встроенный fit llama.cpp.">
     <div className="model-kind-tabs" role="group" aria-label="Тип подключения">
@@ -180,9 +179,9 @@ export function ModelsPage() {
           {createLocal.error ? <p className="error span-2">{createLocal.error.message}</p> : null}
         </form> : <form onSubmit={submitCloud} className="form-grid">
           <label>Название<input name="name" required /></label>
-          <label>Провайдер<select value={cloudProvider} onChange={(event) => { setCloudProvider(event.target.value as typeof cloudProvider); setCloudModelRef(""); }}><option value="anthropic">Claude Code</option><option value="openai">Codex CLI</option></select></label>
-          <label className="span-2">Модель<input list="cloud-models" value={cloudModelRef} onChange={(event) => setCloudModelRef(event.target.value)} required /><datalist id="cloud-models">{cloudOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</datalist><small>Можно выбрать найденную модель или ввести полный ID.</small></label>
-          <fieldset className="capability-fieldset span-2"><legend>Возможности модели</legend><CapabilityCheckboxes value={cloudCapabilities} onChange={setCloudCapabilities} /></fieldset>
+          <label>Провайдер<select value={cloudProvider} onChange={(event) => { setCloudProvider(event.target.value as typeof cloudProvider); setCloudModelRef(""); }}><option value="anthropic">Claude Code</option><option value="openai">Codex CLI</option><option value="opencode">OpenCode</option></select></label>
+          <label className="span-2">Модель<input list="cloud-models" value={cloudModelRef} onChange={(event) => setCloudModelRef(event.target.value)} placeholder={cloudProvider === "opencode" ? "opencode/nemotron-3-ultra-free" : undefined} required /><datalist id="cloud-models">{cloudOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</datalist><small>{cloudProvider === "opencode" ? <>Введите ID из <code>opencode models</code>, например <code>opencode/nemotron-3-ultra-free</code>.</> : "Можно выбрать найденную модель или ввести полный ID."}</small></label>
+          <small className="span-2">Tools, Vision и Reasoning для облачных моделей включаются автоматически.</small>
           <button className="primary" disabled={createCloud.isPending}>{createCloud.isPending ? "Подключаем…" : "Подключить"}</button>{createCloud.error ? <p className="error">{createCloud.error.message}</p> : null}
         </form>}
       </Panel>
@@ -193,7 +192,7 @@ export function ModelsPage() {
         return <details className="model-card" key={model.id}><summary className="model-card-summary"><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
           <form className="model-rename" onSubmit={(event) => submitRename(event, model.id)}><label>Название в результатах<input name="name" defaultValue={model.name} required /></label><button className="primary" disabled={rename.isPending && rename.variables?.modelId === model.id}>{rename.isPending && rename.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить название"}</button></form>
           {rename.error && rename.variables?.modelId === model.id ? <p className="error">{rename.error.message}</p> : null}
-          <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} />
+          {model.kind === "local-gguf" ? <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} /> : null}
           {saveCapabilities.error && saveCapabilities.variables?.modelId === model.id ? <p className="error">{saveCapabilities.error.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для omp-local</span> : null}</div>

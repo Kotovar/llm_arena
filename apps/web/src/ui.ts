@@ -23,6 +23,7 @@ export function cloudProviderCatalogKind(provider: string) {
   const normalized = provider.toLowerCase();
   if (normalized.includes("anthropic") || normalized.includes("claude")) return "claude";
   if (normalized.includes("openai") || normalized.includes("codex")) return "codex";
+  if (normalized.includes("opencode")) return "opencode";
   return undefined;
 }
 
@@ -36,6 +37,7 @@ export function chooseRunner(
     ? taskKinds.includes("coding") || useOmpAgent ? model.capabilities.toolUse ? "omp" : undefined : "llama-chat"
     : cloudProviderCatalogKind(model.provider) === "claude" ? "claude-code"
       : cloudProviderCatalogKind(model.provider) === "codex" ? "codex"
+        : cloudProviderCatalogKind(model.provider) === "opencode" ? "opencode"
         : undefined;
   if (!kind) return undefined;
   const matching = runners.filter((runner) => runner.kind === kind);
@@ -163,6 +165,18 @@ export function ompUnavailableReason(hasOmpRunner: boolean, supportsTools: boole
   if (!supportsTools) return "Недоступно: отметьте Tools в возможностях модели.";
   if (!hasOmpRunner) return "Недоступно: OMP не настроен.";
   return undefined;
+}
+
+export function launchModeNote({ kind, resultMode, usingOmpAgent, ompUnavailable }: {
+  kind: Model["kind"] | undefined;
+  resultMode: "text" | "web";
+  usingOmpAgent: boolean;
+  ompUnavailable?: string | undefined;
+}) {
+  if (kind === "cloud" && resultMode === "web") return "Готовое web-приложение будет создано выбранным CLI.";
+  if (usingOmpAgent) return "OMP: skills, расширения и настроенные MCP.";
+  if (ompUnavailable) return ompUnavailable;
+  return resultMode === "web" ? "Изолированный OMP: без skills, расширений и MCP." : "Ответ модели без рабочей директории";
 }
 
 export function runProgress(total: number, statuses: string[]) {

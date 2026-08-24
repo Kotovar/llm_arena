@@ -2,17 +2,18 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import type {
-  CreateBenchmark,
-  CreateExecutionProfile,
-  CreateModel,
-  CreateRun,
-  CreateTask,
-  ModelCapabilities,
-  Review,
-  RunStatus,
-  TaskImage,
-  TaskRevision,
+import {
+  cloudModelCapabilities,
+  type CreateBenchmark,
+  type CreateExecutionProfile,
+  type CreateModel,
+  type CreateRun,
+  type CreateTask,
+  type ModelCapabilities,
+  type Review,
+  type RunStatus,
+  type TaskImage,
+  type TaskRevision,
 } from "@llm-arena/shared";
 
 type TaskRow = {
@@ -156,14 +157,8 @@ function parseCapabilities(value: string): ModelCapabilities {
   }
 }
 
-function hasBuiltInReasoning(kind: ModelRow["kind"], provider: string): boolean {
-  if (kind !== "cloud") return false;
-  const normalized = provider.toLowerCase();
-  return normalized.includes("openai") || normalized.includes("codex") || normalized.includes("anthropic") || normalized.includes("claude");
-}
-
 function mapModel(row: ModelRow) {
-  const capabilities = parseCapabilities(row.capabilities_json);
+  const capabilities = row.kind === "cloud" ? cloudModelCapabilities : parseCapabilities(row.capabilities_json);
   return {
     id: row.id,
     name: row.name,
@@ -172,7 +167,7 @@ function mapModel(row: ModelRow) {
     modelRef: row.model_ref,
     path: row.path,
     alias: row.alias,
-    capabilities: hasBuiltInReasoning(row.kind, row.provider) ? { ...capabilities, reasoning: true } : capabilities,
+    capabilities,
     mmprojPath: row.mmproj_path,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -434,9 +429,10 @@ export function createStore(filename: string) {
     createModel(input: StoredModelInput) {
       const id = randomUUID();
       const createdAt = now();
+      const capabilities = input.kind === "cloud" ? cloudModelCapabilities : input.capabilities ?? defaultModelCapabilities;
       sqlite
         .prepare("INSERT INTO models (id, name, kind, provider, model_ref, path, alias, capabilities_json, mmproj_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(input.capabilities ?? defaultModelCapabilities), input.mmprojPath ?? null, createdAt, createdAt);
+        .run(id, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(capabilities), input.mmprojPath ?? null, createdAt, createdAt);
       return mapModel(one<ModelRow>("SELECT * FROM models WHERE id = ?", id)!);
     },
     getModel(id: string) {
@@ -461,9 +457,10 @@ export function createStore(filename: string) {
       const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NULL", id);
       if (!row) throw new Error("Model not found");
       const updatedAt = now();
+      const nextCapabilities = row.kind === "cloud" ? cloudModelCapabilities : capabilities;
       sqlite.prepare("UPDATE models SET capabilities_json = ?, mmproj_path = ?, updated_at = ? WHERE id = ?")
-        .run(JSON.stringify(capabilities), mmprojPath, updatedAt, id);
-      return mapModel({ ...row, capabilities_json: JSON.stringify(capabilities), mmproj_path: mmprojPath, updated_at: updatedAt });
+        .run(JSON.stringify(nextCapabilities), mmprojPath, updatedAt, id);
+      return mapModel({ ...row, capabilities_json: JSON.stringify(nextCapabilities), mmproj_path: mmprojPath, updated_at: updatedAt });
     },
     archiveModel(id: string) {
       const timestamp = now();

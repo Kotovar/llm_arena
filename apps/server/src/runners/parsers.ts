@@ -145,6 +145,55 @@ export function parseCodexOutput(output: string, totalMs: number, startupMs: num
   };
 }
 
+export function parseOpenCodeOutput(output: string, totalMs: number, startupMs: number): NormalizedRunResult {
+  const events = lines(output);
+  const failure = events.findLast((event) => event.type === "error")?.error;
+  if (failure) {
+    const failureObject = failure as Json;
+    const failureMessage = failureObject.message;
+    const nestedMessage = (failureObject.data as Json | undefined)?.message;
+    const detail = typeof failure === "string"
+      ? failure
+      : typeof failureMessage === "string"
+        ? failureMessage
+        : typeof nestedMessage === "string"
+          ? nestedMessage
+        : "OpenCode run failed";
+    throw new Error(detail);
+  }
+  const finished = events.filter((event) => event.type === "step_finish");
+  const usage = finished.reduce<{ input: number; cached: number; output: number }>((sum, event) => {
+    const tokens = ((event.part as Json | undefined)?.tokens ?? {}) as Json;
+    const cache = (tokens.cache ?? {}) as Json;
+    return {
+      input: sum.input + (typeof tokens.input === "number" ? tokens.input : 0),
+      cached: sum.cached + (typeof cache.read === "number" ? cache.read : 0),
+      output: sum.output + (typeof tokens.output === "number" ? tokens.output : 0),
+    };
+  }, { input: 0, cached: 0, output: 0 });
+  const messages = events.filter((event) => event.type === "text").flatMap((event) => {
+    const part = event.part as Json | undefined;
+    return part?.type === "text" && typeof part.text === "string" ? [part.text] : [];
+  });
+  const session = events.find((event) => typeof event.sessionID === "string");
+  const resultMetrics = metrics(totalMs, startupMs);
+  resultMetrics.inputTokens = runnerNumber(usage.input, "tokens");
+  resultMetrics.cachedInputTokens = runnerNumber(usage.cached, "tokens");
+  resultMetrics.outputTokens = runnerNumber(usage.output, "tokens");
+  resultMetrics.modelRequests = runnerNumber(finished.length, "requests");
+  resultMetrics.generationTokensPerSecond = estimatedNumber(
+    usage.output > 0 && totalMs > 0 ? usage.output / (totalMs / 1_000) : undefined,
+    "tokens/s",
+  );
+  return {
+    finalAnswer: messages.at(-1) ?? "",
+    exitCode: finished.length ? 0 : 1,
+    sessionId: typeof session?.sessionID === "string" ? session.sessionID : null,
+    requestId: null,
+    metrics: resultMetrics,
+  };
+}
+
 export function parseLlamaResponse(response: unknown, totalMs: number, startupMs: number): NormalizedRunResult {
   if (!response || typeof response !== "object") throw new Error("llama.cpp returned a non-object response");
   const root = response as Json;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -7,6 +7,7 @@ const runners = [
   { id: "omp", name: "OMP", kind: "omp", exec: ["omp"], envPassthrough: [] },
   { id: "claude", name: "Claude Code", kind: "claude-code", exec: ["claude"], envPassthrough: [] },
   { id: "codex", name: "Codex CLI", kind: "codex", exec: ["codex"], envPassthrough: [] },
+  { id: "opencode", name: "OpenCode", kind: "opencode", exec: ["opencode"], envPassthrough: [] },
 ];
 
 describe("интерфейс запуска", () => {
@@ -18,6 +19,11 @@ describe("интерфейс запуска", () => {
       { label: "Результат", value: "Текстовый ответ" },
     ]);
     expect(launchSummary({ modelName: "Ornith", taskCount: 2, runnerName: "OMP", resultMode: "web" })[3]).toEqual({ label: "Результат", value: "Web-приложение" });
+  });
+
+  it("не приписывает OMP облачным CLI-запускам", () => {
+    expect(launchModeNote({ kind: "cloud", resultMode: "web", usingOmpAgent: false })).toBe("Готовое web-приложение будет создано выбранным CLI.");
+    expect(launchModeNote({ kind: "local-gguf", resultMode: "web", usingOmpAgent: false })).toBe("Изолированный OMP: без skills, расширений и MCP.");
   });
 
   it("сохраняет метаданные coding-задания при изменении текста промпта", () => {
@@ -62,9 +68,11 @@ describe("интерфейс запуска", () => {
     expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["coding"], runners)).toBeUndefined();
     expect(chooseRunner({ kind: "cloud", provider: "anthropic", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners)?.id).toBe("claude");
     expect(chooseRunner({ kind: "cloud", provider: "openai", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["coding"], runners)?.id).toBe("codex");
+    expect(chooseRunner({ kind: "cloud", provider: "OpenCode", capabilities: { toolUse: true, vision: true, reasoning: true } }, ["coding"], runners)?.id).toBe("opencode");
     expect(chooseRunner({ kind: "cloud", provider: "Claude Code", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners)?.id).toBe("claude");
     expect(chooseRunner({ kind: "cloud", provider: "openai", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners.filter((runner) => runner.kind !== "codex"))).toBeUndefined();
     expect(cloudProviderCatalogKind("Codex CLI")).toBe("codex");
+    expect(cloudProviderCatalogKind("OpenCode")).toBe("opencode");
   });
 
   it("предпочитает runner, отмеченный в конфигурации по умолчанию", () => {

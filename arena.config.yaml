@@ -34,6 +34,11 @@ runners:
     kind: codex
     default: true
     exec: [fish, -lc, "codexp $argv", "--"]
+  - id: opencode
+    name: OpenCode
+    kind: opencode
+    default: true
+    exec: [opencode]
 fixtures:
   - id: web-app
     name: Готовое web-приложение

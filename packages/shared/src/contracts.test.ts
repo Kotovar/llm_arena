@@ -2,19 +2,31 @@ import { describe, expect, it } from "vitest";
 import { createModelSchema, createRunSchema, createTaskSchema, llamaProfileSchema, measuredSchema, reviewSchema, runnerDefinitionSchema } from "./index.js";
 
 describe("model capabilities", () => {
-  it("defaults omitted model capabilities to disabled", () => {
+  it("enables every capability for cloud models", () => {
     const model = createModelSchema.parse({
       name: "Plain cloud model",
       kind: "cloud",
       provider: "openai",
       modelRef: "plain-model",
+      capabilities: { toolUse: false, vision: false, reasoning: false },
     });
 
     expect(model.capabilities).toEqual({
-      toolUse: false,
-      vision: false,
-      reasoning: false,
+      toolUse: true,
+      vision: true,
+      reasoning: true,
     });
+  });
+
+  it("rejects an OpenCode display name in place of a provider/model ID", () => {
+    const result = createModelSchema.safeParse({
+      name: "Nemotron 3 Ultra Free",
+      kind: "cloud",
+      provider: "opencode",
+      modelRef: "Nemotron 3 Ultra Free",
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 

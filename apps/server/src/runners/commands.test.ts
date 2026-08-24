@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildClaudeCommand, buildCodexCommand, buildOmpCommand } from "./commands.js";
+import { buildClaudeCommand, buildCodexCommand, buildOmpCommand, buildOpenCodeCommand } from "./commands.js";
 
 const direct = ["agent"];
 
@@ -66,5 +66,28 @@ describe("verified non-interactive commands", () => {
     const command = buildCodexCommand(direct, "/tmp/work", "codex-model", "xhigh", ["/tmp/reference.png"]);
 
     expect(command.slice(-5)).toEqual(["-m", "codex-model", "--image", "/tmp/reference.png", "-"]);
+  });
+
+  it("builds OpenCode JSON mode for an isolated coding task", () => {
+    expect(buildOpenCodeCommand(direct, "/tmp/work", "provider/model", "Do it", "high", "coding", ["/tmp/a.png"])).toEqual([
+      "agent",
+      "run",
+      "--format",
+      "json",
+      "--dir",
+      "/tmp/work",
+      "--model",
+      "provider/model",
+      "--variant",
+      "high",
+      "--auto",
+      "--file",
+      "/tmp/a.png",
+      "Do it",
+    ]);
+  });
+
+  it("does not auto-approve an OpenCode prompt task", () => {
+    expect(buildOpenCodeCommand(direct, "/tmp/work", "provider/model", "Answer", null, "prompt")).not.toContain("--auto");
   });
 });

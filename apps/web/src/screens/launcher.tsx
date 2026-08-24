@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Page, Panel, Status, useData } from "../shell.js";
 import type { Benchmark, Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
-import { chooseRunner, cloudProviderCatalogKind, initializeTaskSelection, latestProfiles, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel, updateTaskSelection } from "../ui.js";
+import { chooseRunner, cloudProviderCatalogKind, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel, updateTaskSelection } from "../ui.js";
 
 export function Launcher() {
   const tasks = useData<Task[]>("tasks", "/tasks");
@@ -66,6 +66,7 @@ export function Launcher() {
   });
   const allTaskIds = tasks.data?.map((task) => task.currentRevision.id) ?? [];
   const summary = launchSummary({ modelName: selectedModel?.name, taskCount: selectedTasks.length, runnerName: selectedRunner?.name, resultMode });
+  const modeNote = launchModeNote({ kind: selectedModel?.kind, resultMode, usingOmpAgent, ompUnavailable });
 
   return <Page title="Запустить проверку модели" eyebrow="Новый запуск" intro="Выберите модель, один или несколько промптов. Остальные параметры приложение подберёт автоматически.">
     <section className="launch-card" data-empty-models={models.data?.length === 0}>
@@ -85,13 +86,7 @@ export function Launcher() {
             <label><input type="radio" name="localPromptMode" checked={usingOmpAgent} onChange={() => { setUseOmpAgent(true); setRunnerOverride(""); }} disabled={!ompRunner || !selectedModel?.capabilities.toolUse} />OMP-среда</label>
           </fieldset> : null}
         </div>
-        <span className="launch-mode-note">{usingOmpAgent
-          ? "OMP: skills, расширения и настроенные MCP."
-          : ompUnavailable
-            ? ompUnavailable
-          : resultMode === "web"
-            ? "Изолированный OMP: без skills, расширений и MCP."
-            : "Ответ модели без рабочей директории"}</span>
+        <span className="launch-mode-note">{modeNote}</span>
       </div>
       <details className="advanced"><summary>Дополнительные настройки</summary><label>Способ запуска<select value={runnerChoices.some((runner) => runner.id === runnerOverride) ? runnerOverride : ""} onChange={(event) => { const runner = runnerChoices.find((item) => item.id === event.currentTarget.value); setUseOmpAgent(isLocalModel && runner?.kind === "omp"); setRunnerOverride(event.currentTarget.value); }}><option value="">Автоматически: {automaticRunner?.name ?? "не определён"}</option>{runnerChoices.map((runner) => <option key={runner.id} value={runner.id}>{runner.name}</option>)}</select></label></details>
       <div className="launch-footer"><dl className="launch-summary" aria-label="Параметры запуска">{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl><div className="launch-action"><div><strong>{selectedTasks.length ? promptCountLabel(selectedTasks.length) : "Выберите хотя бы один промпт"}</strong><small>{imageError ?? (selectedRunner ? `через ${selectedRunner.name}` : "Добавьте модель и промпт")}</small></div><button className="primary launch-button" onClick={() => launch.mutate()} disabled={launch.isPending || !selectedModel || !selectedTasks.length || !selectedRunner || Boolean(imageError)}>{launch.isPending ? "Создаём запуск…" : "Запустить"}<span>→</span></button></div></div>

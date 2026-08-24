@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput } from "./parsers.js";
+import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput, parseOpenCodeOutput } from "./parsers.js";
 
 describe("runner output parsers", () => {
   it("extracts OMP final text and cumulative assistant usage", () => {
@@ -63,6 +63,40 @@ describe("runner output parsers", () => {
     expect(result.metrics.inputTokens.value).toBe(30);
     expect(result.metrics.cachedInputTokens.value).toBe(3);
     expect(result.metrics.generationTokensPerSecond).toMatchObject({ value: 5, source: "estimated" });
+  });
+
+  it("extracts OpenCode final text and cumulative step usage", () => {
+    const output = [
+      JSON.stringify({ type: "step_start", sessionID: "opencode-session", part: { type: "step-start" } }),
+      JSON.stringify({ type: "text", sessionID: "opencode-session", part: { type: "text", text: "First" } }),
+      JSON.stringify({ type: "step_finish", sessionID: "opencode-session", part: { type: "step-finish", tokens: { input: 12, output: 7, reasoning: 0, cache: { read: 40, write: 0 } } } }),
+      JSON.stringify({ type: "text", sessionID: "opencode-session", part: { type: "text", text: "Done" } }),
+      JSON.stringify({ type: "step_finish", sessionID: "opencode-session", part: { type: "step-finish", tokens: { input: 8, output: 3, reasoning: 0, cache: { read: 60, write: 0 } } } }),
+    ].join("\n");
+
+    const result = parseOpenCodeOutput(output, 2_000, 0);
+    expect(result).toMatchObject({ finalAnswer: "Done", sessionId: "opencode-session" });
+    expect(result.metrics.inputTokens.value).toBe(20);
+    expect(result.metrics.outputTokens.value).toBe(10);
+    expect(result.metrics.cachedInputTokens.value).toBe(100);
+    expect(result.metrics.modelRequests.value).toBe(2);
+    expect(result.metrics.generationTokensPerSecond).toMatchObject({ value: 5, source: "estimated" });
+  });
+
+  it("rejects an OpenCode terminal error event", () => {
+    const output = JSON.stringify({ type: "error", sessionID: "opencode-session", error: { message: "Provider unavailable" } });
+
+    expect(() => parseOpenCodeOutput(output, 100, 0)).toThrow("Provider unavailable");
+  });
+
+  it("surfaces an OpenCode nested error message", () => {
+    const output = JSON.stringify({
+      type: "error",
+      sessionID: "opencode-session",
+      error: { name: "UnknownError", data: { message: "Unexpected server error. Check server logs for details.", ref: "err_8b04a183" } },
+    });
+
+    expect(() => parseOpenCodeOutput(output, 100, 0)).toThrow("Unexpected server error. Check server logs for details.");
   });
 
   it("uses llama.cpp server timings as native throughput", () => {

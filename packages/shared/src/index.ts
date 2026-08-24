@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const taskKindSchema = z.enum(["prompt", "coding"]);
 export const runStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled"]);
-export const runnerKindSchema = z.enum(["llama-chat", "omp", "claude-code", "codex"]);
+export const runnerKindSchema = z.enum(["llama-chat", "omp", "claude-code", "codex", "opencode"]);
 export const resultShaSchema = z.string().trim().regex(/^[0-9a-f]{40,64}$/i, "Invalid result SHA");
 export const selectResultVersionSchema = z.object({ resultSha: resultShaSchema }).strict();
 export const previewResultVersionSchema = z.object({ resultSha: resultShaSchema.optional() }).strict();
@@ -66,6 +66,7 @@ export const modelCapabilitiesSchema = z.object({
   reasoning: z.boolean().default(false),
 }).strict();
 const defaultModelCapabilities = { toolUse: false, vision: false, reasoning: false };
+export const cloudModelCapabilities = { toolUse: true, vision: true, reasoning: true };
 export const createModelSchema = z
   .object({
     name: z.string().trim().min(1).max(160),
@@ -80,7 +81,11 @@ export const createModelSchema = z
     if (value.kind === "local-gguf" && (!value.path || !value.alias)) {
       context.addIssue({ code: "custom", message: "Local GGUF models require path and alias" });
     }
-  });
+    if (value.kind === "cloud" && value.provider.toLowerCase() === "opencode" && !/^[^/\s]+\/[^/\s]+$/u.test(value.modelRef)) {
+      context.addIssue({ code: "custom", message: "OpenCode models require a provider/model ID" });
+    }
+  })
+  .transform((value) => value.kind === "cloud" ? { ...value, capabilities: cloudModelCapabilities } : value);
 
 export const renameModelSchema = z.object({
   name: z.string().trim().min(1).max(160),

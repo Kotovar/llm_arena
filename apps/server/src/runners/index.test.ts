@@ -74,6 +74,87 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_t
     expect(result.sessionId).toBe("fake-thread");
   });
 
+  it("sends an OpenCode coding prompt positionally and parses JSONL", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
+    directories.push(root);
+    const script = join(root, "fake-opencode.mjs");
+    writeFileSync(
+      script,
+      `const prompt = process.argv.at(-1);
+const automatic = process.argv.includes("--auto");
+console.log(JSON.stringify({type:"text",sessionID:"fake-session",part:{type:"text",text:prompt + ":" + (automatic ? "auto" : "manual")}}));
+console.log(JSON.stringify({type:"step_finish",sessionID:"fake-session",part:{type:"step-finish",tokens:{input:2,output:1,reasoning:0,cache:{read:0,write:0}}}}));`,
+    );
+    const runner = createRunner("opencode", new ProcessSupervisor("runner-test", 100));
+
+    const result = await runner.run({
+      definition: { id: "fake", name: "Fake", kind: "opencode", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
+      prompt: "Fix it",
+      workspace: root,
+      modelRef: "provider/model",
+      taskKind: "coding",
+      taskDataDir: root,
+      timeoutMs: 2_000,
+      signal: new AbortController().signal,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+    });
+
+    expect(result.finalAnswer).toBe("Fix it:auto");
+    expect(result.sessionId).toBe("fake-session");
+  });
+
+  it("fails an incomplete OpenCode JSONL result even when the process exits cleanly", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
+    directories.push(root);
+    const script = join(root, "incomplete-opencode.mjs");
+    writeFileSync(script, 'console.log(JSON.stringify({type:"text",sessionID:"fake-session",part:{type:"text",text:"Partial"}}));');
+    const runner = createRunner("opencode", new ProcessSupervisor("runner-test", 100));
+
+    const result = await runner.run({
+      definition: { id: "fake", name: "Fake", kind: "opencode", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
+      prompt: "Fix it",
+      workspace: root,
+      modelRef: "provider/model",
+      taskKind: "coding",
+      taskDataDir: root,
+      timeoutMs: 2_000,
+      signal: new AbortController().signal,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+    });
+
+    expect(result.finalAnswer).toBe("Partial");
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("does not mark a signal-terminated OpenCode runner successful", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
+    directories.push(root);
+    const script = join(root, "signal-opencode.mjs");
+    writeFileSync(
+      script,
+      `process.stdout.write('{"type":"text","sessionID":"fake-session","part":{"type":"text","text":"Done"}}\\n{"type":"step_finish","sessionID":"fake-session","part":{"type":"step-finish","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}\\n', () => process.kill(process.pid, "SIGTERM"));`,
+    );
+    const runner = createRunner("opencode", new ProcessSupervisor("runner-test", 100));
+
+    const result = await runner.run({
+      definition: { id: "fake", name: "Fake", kind: "opencode", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
+      prompt: "Fix it",
+      workspace: root,
+      modelRef: "provider/model",
+      taskKind: "coding",
+      taskDataDir: root,
+      timeoutMs: 2_000,
+      signal: new AbortController().signal,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+    });
+
+    expect(result.finalAnswer).toBe("Done");
+    expect(result.exitCode).toBe(1);
+  });
+
   it("uses isolated OMP state without disabling prompt-agent capabilities", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
     directories.push(root);

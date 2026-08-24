@@ -22,4 +22,10 @@ describe("readable runner output", () => {
     expect(live.push('{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"При')).toBe("");
     expect(live.push('вет"}}\n')).toBe("Привет");
   });
+
+  it("shows completed OpenCode text events", () => {
+    const live = createLiveOutput("opencode");
+
+    expect(live.push(JSON.stringify({ type: "text", sessionID: "session-1", part: { type: "text", text: "Готово" } }) + "\n")).toBe("Готово\n");
+  });
 });
