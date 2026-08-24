@@ -39,7 +39,7 @@ export function chooseRunner(
         : undefined;
   if (!kind) return undefined;
   const matching = runners.filter((runner) => runner.kind === kind);
-  return matching.find((runner) => runner.default) ?? matching[0] ?? runners[0];
+  return matching.find((runner) => runner.default) ?? matching[0];
 }
 
 export function initializeTaskSelection(current: string[] | null, taskIds: string[]) {

@@ -63,6 +63,7 @@ describe("интерфейс запуска", () => {
     expect(chooseRunner({ kind: "cloud", provider: "anthropic", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners)?.id).toBe("claude");
     expect(chooseRunner({ kind: "cloud", provider: "openai", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["coding"], runners)?.id).toBe("codex");
     expect(chooseRunner({ kind: "cloud", provider: "Claude Code", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners)?.id).toBe("claude");
+    expect(chooseRunner({ kind: "cloud", provider: "openai", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners.filter((runner) => runner.kind !== "codex"))).toBeUndefined();
     expect(cloudProviderCatalogKind("Codex CLI")).toBe("codex");
   });
 

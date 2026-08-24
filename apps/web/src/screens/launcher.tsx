@@ -35,9 +35,11 @@ export function Launcher() {
   const ompRunner = runners.data?.find((runner) => runner.kind === "omp");
   const usingOmpAgent = isLocalModel && useOmpAgent && Boolean(ompRunner) && Boolean(selectedModel?.capabilities.toolUse);
   const ompUnavailable = isLocalModel ? ompUnavailableReason(Boolean(ompRunner), Boolean(selectedModel?.capabilities.toolUse)) : undefined;
-  const runnerChoices = (runners.data ?? []).filter((runner) => (runner.kind !== "omp" || selectedModel?.capabilities.toolUse) && (!hasImages || runner.kind !== "claude-code"));
-  const automaticRunner = selectedModel ? chooseRunner(selectedModel, [resultMode === "web" ? "coding" : "prompt"], runnerChoices, usingOmpAgent) : undefined;
-  const selectedRunner = runnerChoices.find((runner) => runner.id === runnerOverride) ?? automaticRunner;
+  const automaticRunner = selectedModel ? chooseRunner(selectedModel, [resultMode === "web" ? "coding" : "prompt"], runners.data ?? [], usingOmpAgent) : undefined;
+  const runnerChoices = automaticRunner && (!hasImages || automaticRunner.kind !== "claude-code")
+    ? (runners.data ?? []).filter((runner) => runner.kind === automaticRunner.kind)
+    : [];
+  const selectedRunner = runnerChoices.find((runner) => runner.id === runnerOverride) ?? runnerChoices.find((runner) => runner.id === automaticRunner?.id);
   const cloudProvider = cloudProviderCatalogKind(selectedModel?.provider ?? "");
   const providerCatalog = cloudProvider === "claude" ? catalog.data?.claude : cloudProvider === "codex" ? catalog.data?.codex : undefined;
   const effectiveModelRef = selectedModel?.kind === "cloud" ? cloudModelRef || selectedModel.modelRef : selectedModel?.modelRef ?? "";
@@ -46,7 +48,7 @@ export function Launcher() {
   const effectiveEffort = reasoningOptions.length ? reasoningEffort || modelOption?.defaultEffort || "" : "";
   const imageError = hasImages && !selectedModel?.capabilities.vision
     ? "У выбранной модели не отмечена поддержка изображений."
-    : hasImages && selectedRunner?.kind === "claude-code"
+    : hasImages && automaticRunner?.kind === "claude-code"
       ? "Claude Code пока не поддерживает прикреплённые изображения в Arena."
       : undefined;
   const launch = useMutation({

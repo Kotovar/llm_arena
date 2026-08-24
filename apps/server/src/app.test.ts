@@ -74,10 +74,30 @@ describe("REST API", () => {
       url: `/api/models/${model.id}/capabilities`,
       payload: { capabilities: { toolUse: false, vision: true, reasoning: false }, mmprojFilename: null },
     });
+    const unusedProjector = await app.inject({
+      method: "PUT",
+      url: `/api/models/${model.id}/capabilities`,
+      payload: { capabilities: { toolUse: false, vision: false, reasoning: false }, mmprojFilename: "mmproj-Vision.gguf" },
+    });
+    writeFileSync(join(modelsRoot, "NoVision.gguf"), "model");
+    const invalidConnection = await app.inject({
+      method: "POST",
+      url: "/api/local-models",
+      payload: {
+        filename: "NoVision.gguf",
+        name: "No vision",
+        profileName: "Automatic",
+        profile: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 },
+        capabilities: { toolUse: false, vision: false, reasoning: false },
+        mmprojFilename: "mmproj-Vision.gguf",
+      },
+    });
 
     expect(updated.statusCode).toBe(200);
     expect(updated.json()).toMatchObject({ capabilities: { toolUse: true, vision: true, reasoning: true }, mmprojPath: join(modelsRoot, "mmproj-Vision.gguf") });
     expect(missingProjector.statusCode).toBe(400);
+    expect(unusedProjector.statusCode).toBe(400);
+    expect(invalidConnection.statusCode).toBe(400);
     await app.close();
     store.close();
   });

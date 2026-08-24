@@ -127,6 +127,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     for (const image of task.images) taskImagePath(config.dataDir, image);
     return task;
   };
+  const resolveVisionProjector = (capabilities: { vision: boolean }, mmprojFilename: string | null) => {
+    if (mmprojFilename && !capabilities.vision) throw new Error("Vision projector requires vision capability");
+    const mmprojPath = mmprojFilename ? resolveLocalModelFile(effectiveModelDirectory(), mmprojFilename) : null;
+    if (capabilities.vision && !mmprojPath) throw new Error("Vision models require a projector GGUF file");
+    return mmprojPath;
+  };
   const buildExternalLauncher = (modelId: string, profileName: string, port: number) => {
     const model = store.getActiveModel(modelId);
     if (!model || model.kind !== "local-gguf" || !model.path || !model.alias) throw new Error("Local model not found");
@@ -236,8 +242,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.post("/api/local-models", async (request, reply) => {
     const input = parse(connectLocalModelSchema, request.body);
     const path = resolveLocalModelFile(effectiveModelDirectory(), input.filename);
-    const mmprojPath = input.mmprojFilename ? resolveLocalModelFile(effectiveModelDirectory(), input.mmprojFilename) : null;
-    if (input.capabilities.vision && !mmprojPath) throw new Error("Vision models require a projector GGUF file");
+    const mmprojPath = resolveVisionProjector(input.capabilities, input.mmprojFilename);
     if (store.listModels().some((model) => model.path === path)) throw new Error("Model file is already connected");
     const alias = modelAlias(input.filename);
     const model = store.createModel({ name: input.name, kind: "local-gguf", provider: "llama.cpp", modelRef: alias, path, alias, capabilities: input.capabilities, mmprojPath });
@@ -269,8 +274,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const model = store.getActiveModel(request.params.id);
     if (!model) throw new Error("Model not found");
     if (model.kind !== "local-gguf" && input.mmprojFilename) throw new Error("Only local GGUF models use a projector file");
-    const mmprojPath = input.mmprojFilename ? resolveLocalModelFile(effectiveModelDirectory(), input.mmprojFilename) : null;
-    if (model.kind === "local-gguf" && input.capabilities.vision && !mmprojPath) throw new Error("Vision models require a projector GGUF file");
+    const mmprojPath = model.kind === "local-gguf" ? resolveVisionProjector(input.capabilities, input.mmprojFilename) : null;
     return store.updateModelCapabilities(model.id, input.capabilities, mmprojPath);
   });
   app.delete<{ Params: { id: string } }>("/api/models/:id", async (request, reply) => {
