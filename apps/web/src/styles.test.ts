@@ -23,4 +23,9 @@ describe("responsive result layout", () => {
     expect(css).toMatch(/\.followups\s*>\s*summary/);
     expect(css).toMatch(/\.followup-item\s*>\s*summary/);
   });
+
+  it("aligns the model connection link with the model select on desktop", () => {
+    expect(css).toMatch(/\.launch-step\s*>\s*a\s*\{[^}]*align-self:\s*start;[^}]*margin-top:\s*38px/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*\.launch-step\s*>\s*a\s*\{[^}]*margin-top:\s*0/);
+  });
 });
