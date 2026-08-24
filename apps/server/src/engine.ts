@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { FixtureManifest, LlamaProfile } from "@llm-arena/shared";
+import type { FixtureManifest, LlamaProfile, TaskImage } from "@llm-arena/shared";
 import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { LlamaCppServerManager } from "./llama-server.js";
@@ -15,13 +15,14 @@ import type { ArenaStore } from "./store.js";
 import { completedResultVersions } from "./result-versions.js";
 import { readGpuInfo, startGpuSampler, type GpuInfo } from "./system-metrics.js";
 import { buildTaskPrompt } from "./task-prompt.js";
+import { taskImagePath } from "./task-images.js";
 
 type RunEvent = { type: string; runId: string; taskRunId?: string; data?: unknown };
 
 type EngineRuntime = {
   createLlamaManager: () => {
     start(
-      model: { path: string; alias: string },
+      model: { path: string; alias: string; mmprojPath?: string | null },
       profile: LlamaProfile,
       logs: { stdout(text: string): void; stderr(text: string): void },
     ): Promise<{ baseUrl: string; stop(): Promise<void> }>;
@@ -29,6 +30,24 @@ type EngineRuntime = {
   fetch: (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number }>;
   readGpuInfo: (executable: string) => GpuInfo;
 };
+
+function assertModelCapabilities(
+  model: { name: string; kind: "local-gguf" | "cloud"; capabilities: { toolUse: boolean; vision: boolean; reasoning: boolean }; mmprojPath: string | null },
+  runnerKind: ArenaConfig["runners"][number]["kind"],
+  reasoningEffort: string | null,
+  images: readonly TaskImage[],
+): void {
+  if (reasoningEffort !== null && !model.capabilities.reasoning) throw new Error(`${model.name} is not configured for reasoning`);
+  if (runnerKind === "omp" && !model.capabilities.toolUse) throw new Error(`${model.name} is not configured for tool use`);
+  if (!images.length) return;
+  if (!model.capabilities.vision) throw new Error(`${model.name} is not configured for vision`);
+  if (runnerKind === "claude-code") throw new Error("Claude Code image attachments are not supported yet");
+  if (model.kind === "local-gguf" && !model.mmprojPath) throw new Error(`${model.name} is missing its vision projector`);
+}
+
+function runnerImages(dataDir: string, images: readonly TaskImage[]) {
+  return images.map((image) => ({ path: taskImagePath(dataDir, image), mimeType: image.mimeType }));
+}
 
 export class BenchmarkEngine {
   readonly #controllers = new Map<string, AbortController>();
@@ -137,6 +156,7 @@ export class BenchmarkEngine {
       throw new Error(`${definition.kind} cannot run a local GGUF model`);
     }
     const selectedModel = { ...model, modelRef: run.model_ref ?? model.modelRef };
+    assertModelCapabilities(model, definition.kind, run.reasoning_effort, benchmark.tasks.flatMap((task) => task.images));
 
     const runRoot = join(this.config.dataDir, "runs", run.id);
     mkdirSync(runRoot, { recursive: true });
@@ -156,7 +176,7 @@ export class BenchmarkEngine {
       if (model.kind === "local-gguf") {
         const manager = new LlamaCppServerManager(this.config.llamaServer.executable, this.config.llamaServer.startupTimeoutMs, this.supervisor);
         backend = await manager.start(
-          { path: model.path!, alias: model.alias! },
+          { path: model.path!, alias: model.alias!, mmprojPath: model.mmprojPath },
           profile!.parameters,
           {
             stdout: (text) => appendFileSync(backendStdout, text),
@@ -194,6 +214,7 @@ export class BenchmarkEngine {
           const result = await this.#runAgent({
             definition,
             prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
+            images: runnerImages(this.config.dataDir, effectiveTask.images),
             taskKind: effectiveTask.kind,
             useOmpAgent: run.use_omp_agent === 1,
             workspace: prepared.workspace,
@@ -249,7 +270,7 @@ export class BenchmarkEngine {
     const model = this.store.getModel(run.model_id);
     const definition = this.config.runners.find((item) => item.id === run.runner_id);
     if (!model || !definition) throw new Error("Saved model or runner is unavailable");
-    const snapshot = JSON.parse(taskRun.snapshot_json) as { task: { kind: "prompt" | "coding" }; fixture?: FixtureManifest; profile?: { parameters: LlamaProfile } };
+    const snapshot = JSON.parse(taskRun.snapshot_json) as { task: { kind: "prompt" | "coding"; images?: TaskImage[] }; fixture?: FixtureManifest; profile?: { parameters: LlamaProfile } };
     const workspace = join(taskRun.artifact_path, "workspace");
     const gitDir = join(taskRun.artifact_path, "control", "baseline.git");
     const baseVersion = completedResultVersions(taskRun).at(-1);
@@ -269,12 +290,14 @@ export class BenchmarkEngine {
     const prompt = snapshot.task.kind === "coding"
       ? buildTaskPrompt(followup.prompt, snapshot.fixture?.instructions)
       : `${previous ? `Предыдущий ответ:\n${previous}\n\n` : ""}Дополнительный запрос:\n${followup.prompt}`;
+    const images = snapshot.task.images ?? [];
+    assertModelCapabilities(model, definition.kind, run.reasoning_effort, images);
     let backend: Awaited<ReturnType<LlamaCppServerManager["start"]>> | undefined;
     try {
       if (model.kind === "local-gguf") {
         if (!snapshot.profile || !model.path || !model.alias) throw new Error("Local follow-up requires the saved execution profile");
         backend = await new LlamaCppServerManager(this.config.llamaServer.executable, this.config.llamaServer.startupTimeoutMs, this.supervisor).start(
-          { path: model.path, alias: model.alias },
+          { path: model.path, alias: model.alias, mmprojPath: model.mmprojPath },
           snapshot.profile.parameters,
           { stdout: (text) => appendFileSync(stdoutPath, text), stderr: (text) => appendFileSync(stderrPath, text) },
           run.reasoning_effort,
@@ -283,6 +306,7 @@ export class BenchmarkEngine {
       const result = await this.#runAgent({
         definition,
         prompt,
+        images: runnerImages(this.config.dataDir, images),
         taskKind: snapshot.task.kind,
         useOmpAgent: run.use_omp_agent === 1,
         workspace,
@@ -314,7 +338,7 @@ export class BenchmarkEngine {
   }
 
   async #runAgent(input: {
-    definition: ArenaConfig["runners"][number]; prompt: string; workspace: string; modelRef: string; reasoningEffort: string | null;
+    definition: ArenaConfig["runners"][number]; prompt: string; images: Array<{ path: string; mimeType: TaskImage["mimeType"] }>; workspace: string; modelRef: string; reasoningEffort: string | null;
     taskKind: "prompt" | "coding"; useOmpAgent: boolean; taskDataDir: string; timeoutMs: number; signal: AbortSignal; baseUrl?: string; runId: string; taskRunId: string;
     stdoutPath: string; stderrPath: string; displayPath: string;
   }) {
@@ -325,6 +349,7 @@ export class BenchmarkEngine {
     return createRunner(input.definition.kind, this.supervisor).run({
       definition: input.definition,
       prompt: input.prompt,
+      images: input.images,
       workspace: input.workspace,
       modelRef: input.modelRef,
       reasoningEffort: input.reasoningEffort,
@@ -459,7 +484,7 @@ export class BenchmarkEngine {
     let server: Awaited<ReturnType<typeof manager.start>> | undefined;
     try {
       server = await manager.start(
-        { path: model.path, alias: model.alias },
+        { path: model.path, alias: model.alias, mmprojPath: model.mmprojPath },
         profile.parameters,
         { stdout: (text) => appendFileSync(log, text), stderr: (text) => appendFileSync(log, text) },
       );
@@ -512,7 +537,7 @@ export class BenchmarkEngine {
         if (!profile || !model.path || !model.alias) throw new Error("Local model requires an execution profile");
         const manager = new LlamaCppServerManager(this.config.llamaServer.executable, this.config.llamaServer.startupTimeoutMs, this.supervisor);
         const server = await manager.start(
-          { path: model.path, alias: model.alias },
+          { path: model.path, alias: model.alias, mmprojPath: model.mmprojPath },
           profile.parameters,
           { stdout: (text) => appendFileSync(stdoutPath, text), stderr: (text) => appendFileSync(stderrPath, text) },
         );

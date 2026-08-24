@@ -6,12 +6,26 @@ export const runnerKindSchema = z.enum(["llama-chat", "omp", "claude-code", "cod
 export const resultShaSchema = z.string().trim().regex(/^[0-9a-f]{40,64}$/i, "Invalid result SHA");
 export const selectResultVersionSchema = z.object({ resultSha: resultShaSchema }).strict();
 export const previewResultVersionSchema = z.object({ resultSha: resultShaSchema.optional() }).strict();
+export const imageMimeTypeSchema = z.enum(["image/png", "image/jpeg", "image/webp"]);
+export const taskImageSchema = z.object({
+  id: z.string().regex(/^[0-9a-f]{64}$/i),
+  filename: z.string().trim().min(1).max(255),
+  mimeType: imageMimeTypeSchema,
+  sizeBytes: z.number().int().positive().max(20 * 1024 * 1024),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/i),
+}).strict();
+export const taskImageUploadSchema = z.object({
+  filename: z.string().trim().min(1).max(255),
+  mimeType: imageMimeTypeSchema,
+  dataBase64: z.string().trim().min(1),
+}).strict();
 
 const taskBaseSchema = z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(4_000).optional(),
   prompt: z.string().trim().min(1),
   tags: z.array(z.string().trim().min(1).max(64)).default([]),
+  images: z.array(taskImageSchema).max(8).default([]),
 });
 
 export const createTaskSchema = z.discriminatedUnion("kind", [
@@ -46,6 +60,12 @@ export const createBenchmarkSchema = z.object({
 });
 
 export const modelKindSchema = z.enum(["local-gguf", "cloud"]);
+export const modelCapabilitiesSchema = z.object({
+  toolUse: z.boolean().default(false),
+  vision: z.boolean().default(false),
+  reasoning: z.boolean().default(false),
+}).strict();
+const defaultModelCapabilities = { toolUse: false, vision: false, reasoning: false };
 export const createModelSchema = z
   .object({
     name: z.string().trim().min(1).max(160),
@@ -54,6 +74,7 @@ export const createModelSchema = z
     modelRef: z.string().trim().min(1),
     path: z.string().trim().min(1).optional(),
     alias: z.string().trim().min(1).optional(),
+    capabilities: modelCapabilitiesSchema.default(defaultModelCapabilities),
   })
   .superRefine((value, context) => {
     if (value.kind === "local-gguf" && (!value.path || !value.alias)) {
@@ -63,6 +84,11 @@ export const createModelSchema = z
 
 export const renameModelSchema = z.object({
   name: z.string().trim().min(1).max(160),
+}).strict();
+
+export const updateModelCapabilitiesSchema = z.object({
+  capabilities: modelCapabilitiesSchema,
+  mmprojFilename: z.string().trim().min(1).nullable().default(null),
 }).strict();
 
 export const llamaProfileSchema = z.object({
@@ -95,6 +121,8 @@ export const connectLocalModelSchema = z.object({
   name: z.string().trim().min(1).max(160),
   profileName: z.string().trim().min(1).max(160).default("Automatic"),
   profile: llamaProfileSchema,
+  capabilities: modelCapabilitiesSchema.default(defaultModelCapabilities),
+  mmprojFilename: z.string().trim().min(1).nullable().default(null),
 }).strict();
 
 export const createExecutionProfileSchema = z.object({
@@ -197,11 +225,13 @@ export const runnerDefinitionSchema = z.object({
   env: z.record(z.string(), z.string()).default({}),
 });
 
-export type CreateTask = z.infer<typeof createTaskSchema>;
+export type CreateTask = z.input<typeof createTaskSchema>;
 export type Task = z.infer<typeof taskSchema>;
 export type TaskRevision = z.infer<typeof taskRevisionSchema>;
 export type CreateBenchmark = z.infer<typeof createBenchmarkSchema>;
 export type CreateModel = z.infer<typeof createModelSchema>;
+export type ModelCapabilities = z.infer<typeof modelCapabilitiesSchema>;
+export type TaskImage = z.infer<typeof taskImageSchema>;
 export type CreateExecutionProfile = z.infer<typeof createExecutionProfileSchema>;
 export type LlamaProfile = z.infer<typeof llamaProfileSchema>;
 export type CreateRun = z.input<typeof createRunSchema>;

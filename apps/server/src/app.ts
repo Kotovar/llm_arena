@@ -5,6 +5,7 @@ import {
   createExecutionProfileSchema,
   connectLocalModelSchema,
   createModelSchema,
+  taskImageUploadSchema,
   renameModelSchema,
   previewResultVersionSchema,
   resultShaSchema,
@@ -13,6 +14,7 @@ import {
   reviewSchema,
   modelDirectorySchema,
   selectResultVersionSchema,
+  updateModelCapabilitiesSchema,
 } from "@llm-arena/shared";
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
@@ -24,6 +26,7 @@ import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
+import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { parseOmpOutput } from "./runners/parsers.js";
@@ -117,8 +120,13 @@ function checksPassed(resultJson: string | null) {
 
 export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike; openWorkspace?: (workspace: string) => Promise<void> }) {
   const { store, config, engine, preview, openWorkspace = openInZed } = options;
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, bodyLimit: 28 * 1024 * 1024 });
   const effectiveModelDirectory = () => store.getSetting("modelDirectory") ?? config.modelDirectory;
+  const parseTask = (body: unknown) => {
+    const task = parse(createTaskSchema, body);
+    for (const image of task.images) taskImagePath(config.dataDir, image);
+    return task;
+  };
   const buildExternalLauncher = (modelId: string, profileName: string, port: number) => {
     const model = store.getActiveModel(modelId);
     if (!model || model.kind !== "local-gguf" || !model.path || !model.alias) throw new Error("Local model not found");
@@ -129,7 +137,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const externalAlias = `${model.alias}-${profile.id.slice(0, 8)}`;
     const argv = buildLlamaServerCommand(
       config.llamaServer.executable,
-      { path: model.path, alias: externalAlias },
+      { path: model.path, alias: externalAlias, mmprojPath: model.mmprojPath },
       profile.parameters,
       port,
       join(config.dataDir, "external-slots"),
@@ -228,16 +236,19 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.post("/api/local-models", async (request, reply) => {
     const input = parse(connectLocalModelSchema, request.body);
     const path = resolveLocalModelFile(effectiveModelDirectory(), input.filename);
+    const mmprojPath = input.mmprojFilename ? resolveLocalModelFile(effectiveModelDirectory(), input.mmprojFilename) : null;
+    if (input.capabilities.vision && !mmprojPath) throw new Error("Vision models require a projector GGUF file");
     if (store.listModels().some((model) => model.path === path)) throw new Error("Model file is already connected");
     const alias = modelAlias(input.filename);
-    const model = store.createModel({ name: input.name, kind: "local-gguf", provider: "llama.cpp", modelRef: alias, path, alias });
+    const model = store.createModel({ name: input.name, kind: "local-gguf", provider: "llama.cpp", modelRef: alias, path, alias, capabilities: input.capabilities, mmprojPath });
     const profile = store.createExecutionProfile({ modelId: model.id, name: input.profileName, parameters: input.profile, calibrated: false, ggufSha256: null });
     return reply.code(201).send({ model, profile });
   });
 
   app.get("/api/tasks", async () => store.listTasks());
-  app.post("/api/tasks", async (request, reply) => reply.code(201).send(store.createTask(parse(createTaskSchema, request.body))));
-  app.patch<{ Params: { id: string } }>("/api/tasks/:id", async (request) => store.updateTask(request.params.id, parse(createTaskSchema, request.body)));
+  app.post("/api/task-images", async (request, reply) => reply.code(201).send(storeTaskImage(config.dataDir, parse(taskImageUploadSchema, request.body))));
+  app.post("/api/tasks", async (request, reply) => reply.code(201).send(store.createTask(parseTask(request.body))));
+  app.patch<{ Params: { id: string } }>("/api/tasks/:id", async (request) => store.updateTask(request.params.id, parseTask(request.body)));
   app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
     store.archiveTask(request.params.id);
     return reply.code(204).send();
@@ -252,6 +263,15 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.patch<{ Params: { id: string } }>("/api/models/:id", async (request) => {
     const { name } = parse(renameModelSchema, request.body);
     return store.renameModel(request.params.id, name);
+  });
+  app.put<{ Params: { id: string } }>("/api/models/:id/capabilities", async (request) => {
+    const input = parse(updateModelCapabilitiesSchema, request.body);
+    const model = store.getActiveModel(request.params.id);
+    if (!model) throw new Error("Model not found");
+    if (model.kind !== "local-gguf" && input.mmprojFilename) throw new Error("Only local GGUF models use a projector file");
+    const mmprojPath = input.mmprojFilename ? resolveLocalModelFile(effectiveModelDirectory(), input.mmprojFilename) : null;
+    if (model.kind === "local-gguf" && input.capabilities.vision && !mmprojPath) throw new Error("Vision models require a projector GGUF file");
+    return store.updateModelCapabilities(model.id, input.capabilities, mmprojPath);
   });
   app.delete<{ Params: { id: string } }>("/api/models/:id", async (request, reply) => {
     const model = store.getModel(request.params.id);

@@ -8,8 +8,10 @@ import type {
   CreateModel,
   CreateRun,
   CreateTask,
+  ModelCapabilities,
   Review,
   RunStatus,
+  TaskImage,
   TaskRevision,
 } from "@llm-arena/shared";
 
@@ -31,6 +33,7 @@ type TaskRevisionRow = {
   prompt: string;
   fixture_id: string | null;
   tags_json: string;
+  images_json: string;
   content_hash: string;
   fixture_hash: string | null;
   created_at: string;
@@ -127,12 +130,40 @@ type ModelRow = {
   model_ref: string;
   path: string | null;
   alias: string | null;
+  capabilities_json: string;
+  mmproj_path: string | null;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
+const defaultModelCapabilities: ModelCapabilities = { toolUse: false, vision: false, reasoning: false };
+type StoredModelInput = Omit<CreateModel, "capabilities"> & {
+  capabilities?: ModelCapabilities;
+  mmprojPath?: string | null;
+};
+
+function parseCapabilities(value: string): ModelCapabilities {
+  try {
+    const parsed = JSON.parse(value) as Partial<ModelCapabilities>;
+    return {
+      toolUse: parsed.toolUse === true,
+      vision: parsed.vision === true,
+      reasoning: parsed.reasoning === true,
+    };
+  } catch {
+    return defaultModelCapabilities;
+  }
+}
+
+function hasBuiltInReasoning(kind: ModelRow["kind"], provider: string): boolean {
+  if (kind !== "cloud") return false;
+  const normalized = provider.toLowerCase();
+  return normalized.includes("openai") || normalized.includes("codex") || normalized.includes("anthropic") || normalized.includes("claude");
+}
+
 function mapModel(row: ModelRow) {
+  const capabilities = parseCapabilities(row.capabilities_json);
   return {
     id: row.id,
     name: row.name,
@@ -141,6 +172,8 @@ function mapModel(row: ModelRow) {
     modelRef: row.model_ref,
     path: row.path,
     alias: row.alias,
+    capabilities: hasBuiltInReasoning(row.kind, row.provider) ? { ...capabilities, reasoning: true } : capabilities,
+    mmprojPath: row.mmproj_path,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -159,11 +192,11 @@ function migrate(sqlite: DatabaseSync): void {
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, current_revision_id TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS task_revisions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL, prompt TEXT NOT NULL, fixture_id TEXT, tags_json TEXT NOT NULL, content_hash TEXT NOT NULL, fixture_hash TEXT, created_at TEXT NOT NULL, UNIQUE(task_id, revision));
+    CREATE TABLE IF NOT EXISTS task_revisions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL, prompt TEXT NOT NULL, fixture_id TEXT, tags_json TEXT NOT NULL, images_json TEXT NOT NULL DEFAULT '[]', content_hash TEXT NOT NULL, fixture_hash TEXT, created_at TEXT NOT NULL, UNIQUE(task_id, revision));
     CREATE TABLE IF NOT EXISTS benchmarks (id TEXT PRIMARY KEY, current_revision_id TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS benchmark_revisions (id TEXT PRIMARY KEY, benchmark_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, content_hash TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(benchmark_id, revision));
     CREATE TABLE IF NOT EXISTS benchmark_revision_tasks (benchmark_revision_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(benchmark_revision_id, task_revision_id));
-    CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, capabilities_json TEXT NOT NULL DEFAULT '{"toolUse":false,"vision":false,"reasoning":false}', mmproj_path TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, benchmark_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
@@ -191,9 +224,19 @@ function migrate(sqlite: DatabaseSync): void {
   if (!taskRunColumns.some((column) => column.name === "selected_followup_id")) {
     sqlite.exec("ALTER TABLE task_runs ADD COLUMN selected_followup_id TEXT");
   }
+  const taskRevisionColumns = sqlite.prepare("PRAGMA table_info(task_revisions)").all() as Array<{ name: string }>;
+  if (!taskRevisionColumns.some((column) => column.name === "images_json")) {
+    sqlite.exec("ALTER TABLE task_revisions ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'");
+  }
   const modelColumns = sqlite.prepare("PRAGMA table_info(models)").all() as Array<{ name: string }>;
   if (!modelColumns.some((column) => column.name === "archived_at")) {
     sqlite.exec("ALTER TABLE models ADD COLUMN archived_at TEXT");
+  }
+  if (!modelColumns.some((column) => column.name === "capabilities_json")) {
+    sqlite.exec("ALTER TABLE models ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{\"toolUse\":false,\"vision\":false,\"reasoning\":false}'");
+  }
+  if (!modelColumns.some((column) => column.name === "mmproj_path")) {
+    sqlite.exec("ALTER TABLE models ADD COLUMN mmproj_path TEXT");
   }
 }
 
@@ -205,6 +248,7 @@ function mapTaskRevision(row: TaskRevisionRow): TaskRevision {
     name: row.name,
     prompt: row.prompt,
     tags: JSON.parse(row.tags_json) as string[],
+    images: JSON.parse(row.images_json) as TaskImage[],
     contentHash: row.content_hash,
     fixtureHash: row.fixture_hash,
     createdAt: row.created_at,
@@ -262,8 +306,11 @@ export function createStore(filename: string) {
   function writeTaskRevision(taskId: string, revision: number, input: CreateTask): TaskRevision {
     const createdAt = now();
     const id = randomUUID();
+    const tags = input.tags ?? [];
+    const images = input.images ?? [];
+    const normalizedInput = { ...input, tags, images };
     sqlite
-      .prepare("INSERT INTO task_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .prepare("INSERT INTO task_revisions (id, task_id, revision, name, description, kind, prompt, fixture_id, tags_json, images_json, content_hash, fixture_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(
         id,
         taskId,
@@ -273,8 +320,9 @@ export function createStore(filename: string) {
         input.kind,
         input.prompt,
         input.kind === "coding" ? input.fixtureId : null,
-        JSON.stringify(input.tags),
-        hash(input),
+        JSON.stringify(tags),
+        JSON.stringify(images),
+        hash(normalizedInput),
         null,
         createdAt,
       );
@@ -383,12 +431,12 @@ export function createStore(filename: string) {
         currentRevision: getBenchmarkRevision(row.current_revision_id)!,
       }));
     },
-    createModel(input: CreateModel) {
+    createModel(input: StoredModelInput) {
       const id = randomUUID();
       const createdAt = now();
       sqlite
-        .prepare("INSERT INTO models (id, name, kind, provider, model_ref, path, alias, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, createdAt, createdAt);
+        .prepare("INSERT INTO models (id, name, kind, provider, model_ref, path, alias, capabilities_json, mmproj_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(input.capabilities ?? defaultModelCapabilities), input.mmprojPath ?? null, createdAt, createdAt);
       return mapModel(one<ModelRow>("SELECT * FROM models WHERE id = ?", id)!);
     },
     getModel(id: string) {
@@ -408,6 +456,14 @@ export function createStore(filename: string) {
       const updatedAt = now();
       sqlite.prepare("UPDATE models SET name = ?, updated_at = ? WHERE id = ?").run(name, updatedAt, id);
       return mapModel({ ...row, name, updated_at: updatedAt });
+    },
+    updateModelCapabilities(id: string, capabilities: ModelCapabilities, mmprojPath: string | null) {
+      const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NULL", id);
+      if (!row) throw new Error("Model not found");
+      const updatedAt = now();
+      sqlite.prepare("UPDATE models SET capabilities_json = ?, mmproj_path = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(capabilities), mmprojPath, updatedAt, id);
+      return mapModel({ ...row, capabilities_json: JSON.stringify(capabilities), mmproj_path: mmprojPath, updated_at: updatedAt });
     },
     archiveModel(id: string) {
       const timestamp = now();

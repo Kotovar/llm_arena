@@ -13,6 +13,75 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("stores task images before a task revision references them", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-image-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const app = buildApp({ store, config });
+    const dataBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JH3sAAAAASUVORK5CYII=";
+    const image = await app.inject({
+      method: "POST",
+      url: "/api/task-images",
+      payload: {
+        filename: "reference.png",
+        mimeType: "image/png",
+        dataBase64,
+      },
+    });
+    const task = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      payload: { name: "Describe", kind: "prompt", prompt: "Describe it", images: [image.json()] },
+    });
+
+    expect(image.statusCode).toBe(201);
+    expect(task.statusCode).toBe(201);
+    expect(task.json().currentRevision.images).toEqual([image.json()]);
+    const forged = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      payload: { name: "Forged", kind: "prompt", prompt: "Describe it", images: [{ id: "f".repeat(64), filename: "missing.png", mimeType: "image/png", sizeBytes: 1, sha256: "f".repeat(64) }] },
+    });
+    const invalid = await app.inject({ method: "POST", url: "/api/task-images", payload: { filename: "bad.png", mimeType: "image/jpeg", dataBase64 } });
+    expect(forged.statusCode).toBe(400);
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
+  it("updates a local model's capabilities through a trusted projector filename", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-model-capabilities-api-"));
+    directories.push(directory);
+    const modelsRoot = join(directory, "models");
+    mkdirSync(modelsRoot);
+    writeFileSync(join(modelsRoot, "Vision.gguf"), "model");
+    writeFileSync(join(modelsRoot, "mmproj-Vision.gguf"), "projector");
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const model = store.createModel({ name: "Vision", kind: "local-gguf", provider: "llama.cpp", modelRef: "vision", path: join(modelsRoot, "Vision.gguf"), alias: "vision" });
+    const app = buildApp({ store, config });
+    store.setSetting("modelDirectory", modelsRoot);
+
+    const updated = await app.inject({
+      method: "PUT",
+      url: `/api/models/${model.id}/capabilities`,
+      payload: { capabilities: { toolUse: true, vision: true, reasoning: true }, mmprojFilename: "mmproj-Vision.gguf" },
+    });
+    const missingProjector = await app.inject({
+      method: "PUT",
+      url: `/api/models/${model.id}/capabilities`,
+      payload: { capabilities: { toolUse: false, vision: true, reasoning: false }, mmprojFilename: null },
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({ capabilities: { toolUse: true, vision: true, reasoning: true }, mmprojPath: join(modelsRoot, "mmproj-Vision.gguf") });
+    expect(missingProjector.statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
   it("renames a model without changing its execution identity", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-rename-model-"));
     directories.push(directory);

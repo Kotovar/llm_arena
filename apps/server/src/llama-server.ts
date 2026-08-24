@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { allocatePort } from "./port.js";
 import { type OwnedProcess, ProcessSupervisor } from "./process-supervisor.js";
 
-type LocalModel = { path: string; alias: string };
+type LocalModel = { path: string; alias: string; mmprojPath?: string | null };
 
 export function buildLlamaServerCommand(
   executable: string,
@@ -26,6 +26,7 @@ export function buildLlamaServerCommand(
     "-ngl",
     String(profile.nGpuLayers),
   ];
+  if (model.mmprojPath) command.push("--mmproj", model.mmprojPath);
   if (profile.fit) command.push("--fit-target", String(profile.fitTargetMiB), "--fit-ctx", String(profile.fitContextMin));
   if (profile.nCpuMoe !== undefined) command.push("--n-cpu-moe", String(profile.nCpuMoe));
   if (reasoningEffort) command.push("--reasoning-effort", reasoningEffort);

@@ -41,6 +41,12 @@ describe("verified non-interactive commands", () => {
     ]);
   });
 
+  it("adds each image as an OMP positional attachment", () => {
+    const command = buildOmpCommand(direct, "/tmp/work", "vision", "Describe it", true, ["/tmp/a.png", "/tmp/b.webp"]);
+
+    expect(command.slice(-3)).toEqual(["@/tmp/a.png", "@/tmp/b.webp", "Describe it"]);
+  });
+
   it("keeps Claude in safe non-interactive stream-json mode", () => {
     const command = buildClaudeCommand(direct, "claude-model", "high", "Do it");
     expect(command).toContain("--no-session-persistence");
@@ -54,5 +60,11 @@ describe("verified non-interactive commands", () => {
     expect(command).toContain("workspace-write");
     expect(command).toContain("model_reasoning_effort=\"xhigh\"");
     expect(command).toContain("--skip-git-repo-check");
+  });
+
+  it("passes image paths to Codex before its stdin prompt marker", () => {
+    const command = buildCodexCommand(direct, "/tmp/work", "codex-model", "xhigh", ["/tmp/reference.png"]);
+
+    expect(command.slice(-5)).toEqual(["-m", "codex-model", "--image", "/tmp/reference.png", "-"]);
   });
 });

@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { createRunSchema, createTaskSchema, llamaProfileSchema, measuredSchema, reviewSchema, runnerDefinitionSchema } from "./index.js";
+import { createModelSchema, createRunSchema, createTaskSchema, llamaProfileSchema, measuredSchema, reviewSchema, runnerDefinitionSchema } from "./index.js";
+
+describe("model capabilities", () => {
+  it("defaults omitted model capabilities to disabled", () => {
+    const model = createModelSchema.parse({
+      name: "Plain cloud model",
+      kind: "cloud",
+      provider: "openai",
+      modelRef: "plain-model",
+    });
+
+    expect(model.capabilities).toEqual({
+      toolUse: false,
+      vision: false,
+      reasoning: false,
+    });
+  });
+});
 
 describe("llama.cpp profile", () => {
   it("accepts a complete automatic fitting profile", () => {
@@ -34,6 +51,25 @@ describe("llama.cpp profile", () => {
 });
 
 describe("task input", () => {
+  it("keeps ordered image descriptors on a prompt task", () => {
+    const image = {
+      id: "b".repeat(64),
+      filename: "reference.png",
+      mimeType: "image/png",
+      sizeBytes: 128,
+      sha256: "b".repeat(64),
+    };
+
+    const task = createTaskSchema.parse({
+      name: "Recreate the reference",
+      kind: "prompt",
+      prompt: "Describe the attached image.",
+      images: [image],
+    });
+
+    expect(task.images).toEqual([image]);
+  });
+
   it("rejects a coding task without a trusted fixture", () => {
     const result = createTaskSchema.safeParse({
       name: "Fix auth",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -30,6 +30,7 @@ describe("интерфейс запуска", () => {
       revision: 2,
       contentHash: "hash",
       tags: ["ui"],
+      images: [],
     };
 
     expect(taskUpdateBody(revision, "Новый текст")).toEqual({
@@ -38,6 +39,7 @@ describe("интерфейс запуска", () => {
       prompt: "Новый текст",
       fixtureId: "fixture-1",
       tags: ["ui"],
+      images: [],
     });
   });
 
@@ -53,11 +55,15 @@ describe("интерфейс запуска", () => {
   });
 
   it("автоматически выбирает runner по модели и типу задачи", () => {
-    expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp" }, ["prompt"], runners)?.id).toBe("llama-chat");
-    expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp" }, ["prompt"], runners, true)?.id).toBe("omp");
-    expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp" }, ["coding"], runners)?.id).toBe("omp");
-    expect(chooseRunner({ kind: "cloud", provider: "anthropic" }, ["prompt"], runners)?.id).toBe("claude");
-    expect(chooseRunner({ kind: "cloud", provider: "openai" }, ["coding"], runners)?.id).toBe("codex");
+    const local = { kind: "local-gguf" as const, provider: "llama.cpp", capabilities: { toolUse: true, vision: false, reasoning: false } };
+    expect(chooseRunner(local, ["prompt"], runners)?.id).toBe("llama-chat");
+    expect(chooseRunner(local, ["prompt"], runners, true)?.id).toBe("omp");
+    expect(chooseRunner(local, ["coding"], runners)?.id).toBe("omp");
+    expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["coding"], runners)).toBeUndefined();
+    expect(chooseRunner({ kind: "cloud", provider: "anthropic", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners)?.id).toBe("claude");
+    expect(chooseRunner({ kind: "cloud", provider: "openai", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["coding"], runners)?.id).toBe("codex");
+    expect(chooseRunner({ kind: "cloud", provider: "Claude Code", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners)?.id).toBe("claude");
+    expect(cloudProviderCatalogKind("Codex CLI")).toBe("codex");
   });
 
   it("предпочитает runner, отмеченный в конфигурации по умолчанию", () => {
@@ -66,7 +72,7 @@ describe("интерфейс запуска", () => {
       { id: "codex-proxy", name: "Codex CLI (proxy)", kind: "codex", exec: ["codexp"], envPassthrough: [], default: true },
     ];
 
-    expect(chooseRunner({ kind: "cloud", provider: "openai" }, ["prompt"], configured as typeof runners)?.id).toBe("codex-proxy");
+    expect(chooseRunner({ kind: "cloud", provider: "openai", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], configured as typeof runners)?.id).toBe("codex-proxy");
   });
 
   it("показывает статусы запуска на русском", () => {
@@ -114,8 +120,22 @@ describe("интерфейс запуска", () => {
     expect(modelOptionLabel({ id: "gpt-5.6-sol", name: "GPT-5.6-Sol" })).toBe("GPT-5.6-Sol");
   });
 
-  it("предлагает поддерживаемые llama.cpp уровни обдумывания локальной модели", () => {
-    expect(reasoningEffortsForModel("local-gguf")).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+  it("предлагает уровни обдумывания только моделям с этой возможностью", () => {
+    expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: false } })).toEqual([]);
+    expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: true } })).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(reasoningEffortsForModel({ kind: "cloud", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["low", "high"])).toEqual([]);
+    expect(reasoningEffortsForModel({ kind: "cloud", capabilities: { toolUse: false, vision: false, reasoning: true } }, ["low", "high"])).toEqual(["low", "high"]);
+  });
+
+  it("показывает только vision-проекторы и объясняет недоступность OMP", () => {
+    expect(visionProjectorFiles([
+      { filename: "Ornith-1.5-9B-Q4_K_M.gguf" },
+      { filename: "mmproj-Ornith-1.5-9B-f16.gguf" },
+    ]).map((file) => file.filename)).toEqual(["mmproj-Ornith-1.5-9B-f16.gguf"]);
+    expect(ompUnavailableReason(true, false)).toBe("Недоступно: отметьте Tools в возможностях модели.");
+    expect(ompUnavailableReason(false, false)).toBe("Недоступно: отметьте Tools в возможностях модели.");
+    expect(ompUnavailableReason(false, true)).toBe("Недоступно: OMP не настроен.");
+    expect(ompUnavailableReason(true, true)).toBeUndefined();
   });
 
   it("считает понятный прогресс набора промптов", () => {

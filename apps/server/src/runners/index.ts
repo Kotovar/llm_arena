@@ -1,4 +1,5 @@
-import type { NormalizedRunResult, RunnerDefinition, RunnerKind } from "@llm-arena/shared";
+import { readFileSync } from "node:fs";
+import type { NormalizedRunResult, RunnerDefinition, RunnerKind, TaskImage } from "@llm-arena/shared";
 import { type OwnedProcess, ProcessSupervisor } from "../process-supervisor.js";
 import { buildClaudeCommand, buildCodexCommand, buildOmpCommand } from "./commands.js";
 import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput } from "./parsers.js";
@@ -8,6 +9,7 @@ export type RunnerInput = {
   prompt: string;
   workspace: string;
   modelRef: string;
+  images?: Array<Pick<TaskImage, "mimeType"> & { path: string }>;
   reasoningEffort?: string | null;
   taskKind?: "prompt" | "coding";
   useOmpAgent?: boolean;
@@ -104,7 +106,16 @@ class LlamaChatRunner implements ModelRunner {
     const response = await fetch(`${input.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: input.modelRef, messages: [{ role: "user", content: input.prompt }], stream: false }),
+      body: JSON.stringify({
+        model: input.modelRef,
+        messages: [{
+          role: "user",
+          content: input.images?.length
+            ? [{ type: "text", text: input.prompt }, ...input.images.map((image) => ({ type: "image_url", image_url: { url: `data:${image.mimeType};base64,${readFileSync(image.path).toString("base64")}` } }))]
+            : input.prompt,
+        }],
+        stream: false,
+      }),
       signal: input.signal,
     });
     const body: unknown = await response.json();
@@ -122,7 +133,7 @@ export function createRunner(kind: RunnerKind, supervisor: ProcessSupervisor): M
     case "omp":
       return new CliRunner(
         supervisor,
-        (input) => buildOmpCommand(input.definition.exec, input.workspace, input.modelRef, input.prompt, input.useOmpAgent ?? input.taskKind === "prompt"),
+        (input) => buildOmpCommand(input.definition.exec, input.workspace, input.modelRef, input.prompt, input.useOmpAgent ?? input.taskKind === "prompt", input.images?.map((image) => image.path)),
         parseOmpOutput,
         false,
         (input) => ({
@@ -140,7 +151,7 @@ export function createRunner(kind: RunnerKind, supervisor: ProcessSupervisor): M
     case "codex":
       return new CliRunner(
         supervisor,
-        (input) => buildCodexCommand(input.definition.exec, input.workspace, input.modelRef, input.reasoningEffort),
+        (input) => buildCodexCommand(input.definition.exec, input.workspace, input.modelRef, input.reasoningEffort, input.images?.map((image) => image.path)),
         parseCodexOutput,
         true,
       );

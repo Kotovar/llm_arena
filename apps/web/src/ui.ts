@@ -19,17 +19,25 @@ export function runIsActive(run: { status: string; activityStatus?: string }) {
   return status === "pending" || status === "running" || status === "running-followup";
 }
 
+export function cloudProviderCatalogKind(provider: string) {
+  const normalized = provider.toLowerCase();
+  if (normalized.includes("anthropic") || normalized.includes("claude")) return "claude";
+  if (normalized.includes("openai") || normalized.includes("codex")) return "codex";
+  return undefined;
+}
+
 export function chooseRunner(
-  model: Pick<Model, "kind" | "provider">,
+  model: Pick<Model, "kind" | "provider" | "capabilities">,
   taskKinds: Task["currentRevision"]["kind"][],
   runners: Runner[],
   useOmpAgent = false,
 ) {
   const kind = model.kind === "local-gguf"
-    ? taskKinds.includes("coding") || useOmpAgent ? "omp" : "llama-chat"
-    : model.provider.toLowerCase().includes("anthropic") ? "claude-code"
-      : model.provider.toLowerCase().includes("openai") ? "codex"
+    ? taskKinds.includes("coding") || useOmpAgent ? model.capabilities.toolUse ? "omp" : undefined : "llama-chat"
+    : cloudProviderCatalogKind(model.provider) === "claude" ? "claude-code"
+      : cloudProviderCatalogKind(model.provider) === "codex" ? "codex"
         : undefined;
+  if (!kind) return undefined;
   const matching = runners.filter((runner) => runner.kind === kind);
   return matching.find((runner) => runner.default) ?? matching[0] ?? runners[0];
 }
@@ -53,12 +61,13 @@ export function launchSummary({ modelName, taskCount, runnerName, resultMode }: 
   ];
 }
 
-export function taskUpdateBody(revision: Task["currentRevision"], prompt: string) {
+export function taskUpdateBody(revision: Task["currentRevision"], prompt: string, images = revision.images) {
   return {
     name: revision.name,
     kind: revision.kind,
     prompt,
     tags: revision.tags,
+    images,
     ...(revision.kind === "coding" ? { fixtureId: revision.fixtureId } : {}),
   };
 }
@@ -141,8 +150,19 @@ export function modelOptionLabel(option: { id: string; name: string }) {
   return option.name;
 }
 
-export function reasoningEffortsForModel(kind?: Model["kind"], cloudEfforts: string[] = []) {
-  return kind === "local-gguf" ? ["minimal", "low", "medium", "high", "xhigh", "max"] : cloudEfforts;
+export function reasoningEffortsForModel(model?: Pick<Model, "kind" | "capabilities">, cloudEfforts: string[] = []) {
+  if (!model?.capabilities.reasoning) return [];
+  return model.kind === "local-gguf" ? ["minimal", "low", "medium", "high", "xhigh", "max"] : cloudEfforts;
+}
+
+export function visionProjectorFiles<T extends { filename: string }>(files: T[]) {
+  return files.filter((file) => file.filename.toLowerCase().includes("mmproj"));
+}
+
+export function ompUnavailableReason(hasOmpRunner: boolean, supportsTools: boolean) {
+  if (!supportsTools) return "Недоступно: отметьте Tools в возможностях модели.";
+  if (!hasOmpRunner) return "Недоступно: OMP не настроен.";
+  return undefined;
 }
 
 export function runProgress(total: number, statuses: string[]) {

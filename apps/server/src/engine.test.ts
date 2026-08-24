@@ -84,7 +84,7 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "answer", tags: [] });
     const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", modelRef: "gpt-selected" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", modelRef: "gpt-selected", reasoningEffort: "high" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("engine-test", 100));
 
     await engine.processNext();
@@ -94,6 +94,32 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(taskRun?.status).toBe("completed");
     expect(JSON.parse(taskRun?.result_json ?? "{}").finalAnswer).toContain("-m gpt-selected");
     expect(JSON.parse(taskRun?.snapshot_json ?? "{}").model.modelRef).toBe("gpt-selected");
+    await engine.stop();
+    store.close();
+  });
+
+  it("rejects image tasks for a model not declared vision-capable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-vision-gate-"));
+    directories.push(root);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, "-e", ""], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({
+      name: "Describe",
+      kind: "prompt",
+      prompt: "Describe it",
+      tags: [],
+      images: [{ id: "a".repeat(64), filename: "reference.png", mimeType: "image/png", sizeBytes: 1, sha256: "a".repeat(64) }],
+    });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Text only", kind: "cloud", provider: "openai", modelRef: "text-only" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("vision-gate-test", 100));
+
+    await engine.processNext();
+
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", error: "Text only is not configured for vision" });
     await engine.stop();
     store.close();
   });
@@ -225,7 +251,7 @@ console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
     const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
-    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model" });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
     const request = { benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" as const, useOmpAgent: true };
     const run = store.createRun(request);
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("web-omp-engine-test", 100));
@@ -261,7 +287,7 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web", kind: "prompt", prompt: "Сделай страницу", tags: [] });
     const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
-    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-test" });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-test", capabilities: { toolUse: false, vision: false, reasoning: true } });
     const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web", reasoningEffort: "high" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("followup-engine-test", 100));
     await engine.processNext();

@@ -3,7 +3,35 @@ import { useState, type FormEvent } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import type { AppSettings, CalibrationResult, ExternalLauncher, LlamaParameters, LocalModelFile, Model, ModelCatalog, Profile, Runner } from "../types.js";
-import { chooseRunner, defaultLocalProfile, formatDuration, latestProfiles } from "../ui.js";
+import { chooseRunner, defaultLocalProfile, formatDuration, latestProfiles, visionProjectorFiles } from "../ui.js";
+
+type Capabilities = Model["capabilities"];
+
+function CapabilityCheckboxes({ value, onChange }: { value: Capabilities; onChange: (value: Capabilities) => void }) {
+  return <div className="capability-options">
+    <label><input type="checkbox" checked={value.toolUse} onChange={(event) => onChange({ ...value, toolUse: event.currentTarget.checked })} />Tools<small>Можно запускать через OMP-среду с инструментами.</small></label>
+    <label><input type="checkbox" checked={value.vision} onChange={(event) => onChange({ ...value, vision: event.currentTarget.checked })} />Vision<small>Принимает прикреплённые изображения.</small></label>
+    <label><input type="checkbox" checked={value.reasoning} onChange={(event) => onChange({ ...value, reasoning: event.currentTarget.checked })} />Reasoning<small>Позволяет выбрать уровень обдумывания.</small></label>
+  </div>;
+}
+
+function ModelCapabilitiesForm({ model, files, pending, save }: { model: Model; files: LocalModelFile[]; pending: boolean; save: (input: { modelId: string; capabilities: Capabilities; mmprojFilename: string | null }) => void }) {
+  const [capabilities, setCapabilities] = useState(model.capabilities);
+  const [mmprojFilename, setMmprojFilename] = useState(model.mmprojPath?.split("/").at(-1) ?? "");
+  return <form className="capabilities-form" onSubmit={(event) => { event.preventDefault(); save({ modelId: model.id, capabilities, mmprojFilename: model.kind === "local-gguf" && capabilities.vision ? mmprojFilename || null : null }); }}>
+    <fieldset className="capability-fieldset"><legend>Возможности модели</legend>
+      <CapabilityCheckboxes value={capabilities} onChange={setCapabilities} />
+      {model.kind === "local-gguf" && capabilities.vision ? <label>Vision-проектор <code>mmproj</code>
+        <select value={mmprojFilename} onChange={(event) => setMmprojFilename(event.currentTarget.value)} required>
+          <option value="">Выберите отдельный файл mmproj</option>
+          {visionProjectorFiles(files).map((file) => <option key={file.filename} value={file.filename}>{file.filename}</option>)}
+        </select>
+        <small>Это отдельный GGUF-файл для обработки изображений, не основная модель. llama.cpp получит его через <code>--mmproj</code>.</small>
+      </label> : null}
+    </fieldset>
+    <button className="primary" disabled={pending || (model.kind === "local-gguf" && capabilities.vision && !mmprojFilename)}>{pending ? "Сохраняем возможности…" : "Сохранить возможности"}</button>
+  </form>;
+}
 
 export function ModelsPage() {
   const client = useQueryClient();
@@ -20,6 +48,9 @@ export function ModelsPage() {
   const [nameTouched, setNameTouched] = useState(false);
   const [cloudProvider, setCloudProvider] = useState<"anthropic" | "openai">("anthropic");
   const [cloudModelRef, setCloudModelRef] = useState("");
+  const [localCapabilities, setLocalCapabilities] = useState<Capabilities>({ toolUse: false, vision: false, reasoning: false });
+  const [localMmprojFilename, setLocalMmprojFilename] = useState("");
+  const [cloudCapabilities, setCloudCapabilities] = useState<Capabilities>({ toolUse: false, vision: false, reasoning: false });
   const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; title: string; detail: string }>>({});
   const [hardware, setHardware] = useState<Record<string, CalibrationResult>>( {});
 
@@ -33,13 +64,13 @@ export function ModelsPage() {
   const createLocal = useMutation({
     mutationFn: (body: unknown) => api("/local-models", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: async () => {
-      setFilename(""); setLocalName(""); setNameTouched(false);
+      setFilename(""); setLocalName(""); setNameTouched(false); setLocalCapabilities({ toolUse: false, vision: false, reasoning: false }); setLocalMmprojFilename("");
       await invalidateModels();
     },
   });
   const createCloud = useMutation({
     mutationFn: (body: unknown) => api("/models", { method: "POST", body: JSON.stringify(body) }),
-    onSuccess: async () => { setCloudModelRef(""); await invalidateModels(); },
+    onSuccess: async () => { setCloudModelRef(""); setCloudCapabilities({ toolUse: false, vision: false, reasoning: false }); await invalidateModels(); },
   });
   const calibrate = useMutation({
     mutationFn: (id: string) => api<CalibrationResult>(`/profiles/${id}/calibrate`, { method: "POST" }),
@@ -55,6 +86,10 @@ export function ModelsPage() {
   });
   const rename = useMutation({
     mutationFn: ({ modelId, name }: { modelId: string; name: string }) => api(`/models/${modelId}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+    onSuccess: invalidateModels,
+  });
+  const saveCapabilities = useMutation({
+    mutationFn: ({ modelId, capabilities, mmprojFilename }: { modelId: string; capabilities: Capabilities; mmprojFilename: string | null }) => api(`/models/${modelId}/capabilities`, { method: "PUT", body: JSON.stringify({ capabilities, mmprojFilename }) }),
     onSuccess: invalidateModels,
   });
   const testModel = useMutation({
@@ -82,13 +117,13 @@ export function ModelsPage() {
       cacheReuse: Number(data.get("cacheReuse")),
       fit: false,
     };
-    createLocal.mutate({ filename, name: localName, profileName: profileMode === "auto" ? "Automatic" : "Manual", profile: profileMode === "auto" ? automatic : manual });
+    createLocal.mutate({ filename, name: localName, profileName: profileMode === "auto" ? "Automatic" : "Manual", profile: profileMode === "auto" ? automatic : manual, capabilities: localCapabilities, mmprojFilename: localCapabilities.vision ? localMmprojFilename || null : null });
   }
 
   function submitCloud(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    createCloud.mutate({ name: data.get("name"), kind: "cloud", provider: cloudProvider, modelRef: cloudModelRef });
+    createCloud.mutate({ name: data.get("name"), kind: "cloud", provider: cloudProvider, modelRef: cloudModelRef, capabilities: cloudCapabilities });
   }
 
   function submitRename(event: FormEvent<HTMLFormElement>, modelId: string) {
@@ -114,6 +149,16 @@ export function ModelsPage() {
             <small>Путь не вводится вручную: сервер проверяет файл и не разрешает выход из настроенной папки.</small>
           </label>
           <label className="span-2">Название в результатах<input value={localName} onChange={(event) => { setLocalName(event.currentTarget.value); setNameTouched(true); }} placeholder="Например, Gemma 4 E4B" required /></label>
+          <fieldset className="capability-fieldset span-2"><legend>Возможности модели</legend>
+            <CapabilityCheckboxes value={localCapabilities} onChange={setLocalCapabilities} />
+            {localCapabilities.vision ? <label>Vision-проектор <code>mmproj</code>
+              <select value={localMmprojFilename} onChange={(event) => setLocalMmprojFilename(event.currentTarget.value)} required>
+                <option value="">Выберите отдельный файл mmproj</option>
+                {visionProjectorFiles(files.data ?? []).map((file) => <option key={file.filename} value={file.filename}>{file.filename}</option>)}
+              </select>
+              <small>Это отдельный GGUF-файл для обработки изображений, не повторный выбор основной модели.</small>
+            </label> : null}
+          </fieldset>
           <fieldset className="profile-mode span-2"><legend>Профиль запуска</legend>
             <label className={profileMode === "auto" ? "selected" : ""}><input type="radio" checked={profileMode === "auto"} onChange={() => setProfileMode("auto")} /><strong>Автоматически</strong><small>Максимум GPU с резервом 750 MiB, контекст не ниже 4096, Flash Attention и GPU-слои подбирает llama.cpp.</small></label>
             <label className={profileMode === "manual" ? "selected" : ""}><input type="radio" checked={profileMode === "manual"} onChange={() => setProfileMode("manual")} /><strong>Вручную</strong><small>Точные параметры для сравнения или переноса в другую связку.</small></label>
@@ -129,7 +174,7 @@ export function ModelsPage() {
             <label>Micro-batch<input name="ubatchSize" type="number" min="1" defaultValue="512" required /><small>Физический пакет; уменьшите при нехватке VRAM.</small></label>
             <label>Повторное использование KV<input name="cacheReuse" type="number" min="0" defaultValue="256" required /><small>Сколько токенов кеша пытаться переиспользовать.</small></label>
           </div></details> : null}
-          <button className="primary span-2" disabled={createLocal.isPending || !filename}>{createLocal.isPending ? "Подключаем…" : "Подключить модель"}</button>
+          <button className="primary span-2" disabled={createLocal.isPending || !filename || (localCapabilities.vision && !localMmprojFilename)}>{createLocal.isPending ? "Подключаем…" : "Подключить модель"}</button>
           {files.error ? <p className="error span-2">Не удалось прочитать папку: {files.error.message}. Изменить путь можно в Настройках.</p> : null}
           {files.data && !files.data.length ? <p className="empty span-2">В папке нет GGUF-файлов.</p> : null}
           {createLocal.error ? <p className="error span-2">{createLocal.error.message}</p> : null}
@@ -137,6 +182,7 @@ export function ModelsPage() {
           <label>Название<input name="name" required /></label>
           <label>Провайдер<select value={cloudProvider} onChange={(event) => { setCloudProvider(event.target.value as typeof cloudProvider); setCloudModelRef(""); }}><option value="anthropic">Claude Code</option><option value="openai">Codex CLI</option></select></label>
           <label className="span-2">Модель<input list="cloud-models" value={cloudModelRef} onChange={(event) => setCloudModelRef(event.target.value)} required /><datalist id="cloud-models">{cloudOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</datalist><small>Можно выбрать найденную модель или ввести полный ID.</small></label>
+          <fieldset className="capability-fieldset span-2"><legend>Возможности модели</legend><CapabilityCheckboxes value={cloudCapabilities} onChange={setCloudCapabilities} /></fieldset>
           <button className="primary" disabled={createCloud.isPending}>{createCloud.isPending ? "Подключаем…" : "Подключить"}</button>{createCloud.error ? <p className="error">{createCloud.error.message}</p> : null}
         </form>}
       </Panel>
@@ -147,6 +193,8 @@ export function ModelsPage() {
         return <details className="model-card" key={model.id}><summary className="model-card-summary"><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
           <form className="model-rename" onSubmit={(event) => submitRename(event, model.id)}><label>Название в результатах<input name="name" defaultValue={model.name} required /></label><button className="primary" disabled={rename.isPending && rename.variables?.modelId === model.id}>{rename.isPending && rename.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить название"}</button></form>
           {rename.error && rename.variables?.modelId === model.id ? <p className="error">{rename.error.message}</p> : null}
+          <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} />
+          {saveCapabilities.error && saveCapabilities.variables?.modelId === model.id ? <p className="error">{saveCapabilities.error.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для omp-local</span> : null}</div>
             <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div></dl>

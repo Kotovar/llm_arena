@@ -50,6 +50,53 @@ describe("task revisions", () => {
     expect(store.getTaskRevision(first.currentRevision.id)?.prompt).toBe("Explain quicksort");
     expect(second.currentRevision.contentHash).not.toBe(first.currentRevision.contentHash);
   });
+
+  it("keeps each revision's image list immutable", () => {
+    const store = testStore();
+    const image = {
+      id: "a".repeat(64),
+      filename: "reference.png",
+      mimeType: "image/png" as const,
+      sizeBytes: 128,
+      sha256: "a".repeat(64),
+    };
+    const first = store.createTask({ name: "Describe", kind: "prompt", prompt: "First", tags: [], images: [image] });
+    const second = store.updateTask(first.id, { name: "Describe", kind: "prompt", prompt: "Second", tags: [], images: [] });
+
+    expect(store.getTaskRevision(first.currentRevision.id)?.images).toEqual([image]);
+    expect(second.currentRevision.images).toEqual([]);
+  });
+});
+
+describe("model capabilities", () => {
+  it("recognizes reasoning for Codex and Claude even in pre-capabilities records", () => {
+    const store = testStore();
+
+    const codex = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-5.6" });
+    const claude = store.createModel({ name: "Claude", kind: "cloud", provider: "anthropic", modelRef: "sonnet" });
+
+    expect(store.getModel(codex.id)?.capabilities.reasoning).toBe(true);
+    expect(store.getModel(claude.id)?.capabilities.reasoning).toBe(true);
+  });
+
+  it("persists capabilities and a resolved vision projector", () => {
+    const store = testStore();
+    const model = store.createModel({
+      name: "Vision model",
+      kind: "local-gguf",
+      provider: "llama.cpp",
+      modelRef: "vision",
+      path: "/models/vision.gguf",
+      alias: "vision",
+      capabilities: { toolUse: true, vision: true, reasoning: true },
+      mmprojPath: "/models/mmproj-vision.gguf",
+    });
+
+    expect(store.getModel(model.id)).toMatchObject({
+      capabilities: { toolUse: true, vision: true, reasoning: true },
+      mmprojPath: "/models/mmproj-vision.gguf",
+    });
+  });
 });
 
 describe("benchmark revisions", () => {

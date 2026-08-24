@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
+import { storeTaskImage } from "./task-images.js";
 
 const directories: string[] = [];
 
@@ -42,5 +43,20 @@ describe("local GGUF discovery", () => {
 
   it("derives a stable server-owned alias", () => {
     expect(modelAlias("Gemma 4-E4B_it-Q4_K_M.gguf")).toBe("gemma-4-e4b-it-q4-k-m");
+  });
+});
+
+describe("task image storage", () => {
+  it("stores a content-addressed image only after validating its MIME type", () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-task-images-"));
+    directories.push(root);
+    const dataBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JH3sAAAAASUVORK5CYII=";
+
+    const image = storeTaskImage(root, { filename: "reference.png", mimeType: "image/png", dataBase64 });
+    const duplicate = storeTaskImage(root, { filename: "duplicate.png", mimeType: "image/png", dataBase64 });
+
+    expect(image).toMatchObject({ id: image.sha256, filename: "reference.png", mimeType: "image/png" });
+    expect(duplicate.id).toBe(image.id);
+    expect(() => storeTaskImage(root, { filename: "reference.png", mimeType: "image/jpeg", dataBase64 })).toThrow("MIME type");
   });
 });

@@ -10,7 +10,16 @@ export type Task = {
     revision: number;
     contentHash: string;
     tags: string[];
+    images: TaskImage[];
   };
+};
+
+export type TaskImage = {
+  id: string;
+  filename: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  sizeBytes: number;
+  sha256: string;
 };
 
 export type Benchmark = {
@@ -33,6 +42,8 @@ export type Model = {
   modelRef: string;
   path: string | null;
   alias: string | null;
+  capabilities: { toolUse: boolean; vision: boolean; reasoning: boolean };
+  mmprojPath: string | null;
 };
 
 export type LlamaParameters = {

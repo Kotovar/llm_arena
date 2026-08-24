@@ -12,36 +12,68 @@ import { RunDetail, RunsPage } from "./screens/results.js";
 import { SettingsPage } from "./screens/settings.js";
 import { Empty, Page, Panel, Shell, useData } from "./shell.js";
 import { ToastProvider } from "./toast.js";
-import type { Task } from "./types.js";
+import type { Task, TaskImage } from "./types.js";
 import { taskUpdateBody } from "./ui.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2_000, retry: 1 } } });
 
+function dataBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Не удалось прочитать изображение"));
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadTaskImages(files: File[]): Promise<TaskImage[]> {
+  const images: TaskImage[] = [];
+  for (const file of files) {
+    images.push(await api<TaskImage>("/task-images", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, mimeType: file.type, dataBase64: await dataBase64(file) }),
+    }));
+  }
+  return images;
+}
+
 function TasksPage() {
   const client = useQueryClient();
   const tasks = useData<Task[]>("tasks", "/tasks");
-  const [editing, setEditing] = useState<{ taskId: string; prompt: string } | null>(null);
+  const [editing, setEditing] = useState<{ taskId: string; prompt: string; images: TaskImage[]; files: File[] } | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
   const create = useMutation({ mutationFn: (body: unknown) => api("/tasks", { method: "POST", body: JSON.stringify(body) }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
   const update = useMutation({ mutationFn: ({ id, body }: { id: string; body: unknown }) => api(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) }), onSuccess: () => { setEditing(null); return client.invalidateQueries({ queryKey: ["tasks"] }); } });
   const remove = useMutation({ mutationFn: (id: string) => api(`/tasks/${id}`, { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    create.mutate({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt") });
-    event.currentTarget.reset();
+    try {
+      setUploading(true);
+      await create.mutateAsync({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt"), images: await uploadTaskImages(files) });
+      event.currentTarget.reset();
+      setFiles([]);
+    } finally {
+      setUploading(false);
+    }
   }
   return <Page title="Подготовленные промпты" eyebrow="Промпты" intro="Добавьте задания, на которых хотите сравнивать модели. История старых запусков не изменится после редактирования.">
     <div className="two-col"><Panel title="Добавить промпт"><form onSubmit={submit} className="form-grid">
       <label className="span-2">Название<input name="name" required /></label>
       <label className="span-2">Текст промпта<textarea name="prompt" rows={8} required /></label>
-      <button className="primary">Добавить</button>{create.error ? <p className="error">{create.error.message}</p> : null}
+      <label className="span-2">Референс-изображения<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { setFiles(Array.from(event.currentTarget.files ?? []).slice(0, 8)); }} /><small>До 8 PNG, JPEG или WebP; они станут частью неизменяемой версии промпта.</small></label>
+      {files.length ? <ul className="image-attachments span-2">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => setFiles((current) => current.filter((_, position) => position !== index))}>Убрать</button></li>)}</ul> : null}
+      <button className="primary" disabled={create.isPending || uploading}>{uploading || create.isPending ? "Загружаем…" : "Добавить"}</button>{create.error ? <p className="error">{create.error.message}</p> : null}
     </form></Panel>
     <Panel title={`Промптов: ${tasks.data?.length ?? 0}`}><div className="stack">{tasks.data?.map((task) => <article className="item prompt-item" key={task.id}>
-      <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span><h3>{task.currentRevision.name}</h3><p>{task.currentRevision.prompt}</p></div><div className="item-actions"><button type="button" onClick={() => setEditing({ taskId: task.id, prompt: task.currentRevision.prompt })}>Редактировать</button><button type="button" className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></div>
-      {editing && editing.taskId === task.id ? <form className="prompt-editor" onSubmit={(event) => { event.preventDefault(); const prompt = editing.prompt.trim(); if (prompt) update.mutate({ id: task.id, body: taskUpdateBody(task.currentRevision, prompt) }); }}>
+      <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span><h3>{task.currentRevision.name}</h3><p>{task.currentRevision.prompt}</p>{task.currentRevision.images.length ? <small className="task-image-summary">Изображения: {task.currentRevision.images.map((image) => image.filename).join(", ")}</small> : null}</div><div className="item-actions"><button type="button" onClick={() => setEditing({ taskId: task.id, prompt: task.currentRevision.prompt, images: task.currentRevision.images, files: [] })}>Редактировать</button><button type="button" className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></div>
+      {editing && editing.taskId === task.id ? <form className="prompt-editor" onSubmit={async (event) => { event.preventDefault(); const prompt = editing.prompt.trim(); if (!prompt) return; try { setUploading(true); await update.mutateAsync({ id: task.id, body: taskUpdateBody(task.currentRevision, prompt, [...editing.images, ...await uploadTaskImages(editing.files)]) }); } finally { setUploading(false); } }}>
         <label>Новая версия текста<textarea autoFocus rows={10} value={editing.prompt} onChange={(event) => setEditing((current) => current ? { ...current, prompt: event.currentTarget.value } : current)} required /></label>
-        <div className="prompt-editor-footer"><small>Запуски с предыдущей версией останутся без изменений.</small><div className="prompt-editor-actions"><button type="button" onClick={() => setEditing(null)} disabled={update.isPending}>Отмена</button><button className="primary" disabled={update.isPending || !editing.prompt.trim()}>{update.isPending ? "Сохраняем…" : "Сохранить версию"}</button></div></div>
+        <label>Добавить изображения<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => setEditing((current) => current ? { ...current, files: Array.from(event.currentTarget.files ?? []).slice(0, 8 - current.images.length) } : current)} /><small>До 8 изображений в версии промпта.</small></label>
+        {editing.images.length || editing.files.length ? <ul className="image-attachments">{editing.images.map((image) => <li key={image.id}><span>{image.filename}</span><button type="button" onClick={() => setEditing((current) => current ? { ...current, images: current.images.filter((item) => item.id !== image.id) } : current)}>Убрать</button></li>)}{editing.files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => setEditing((current) => current ? { ...current, files: current.files.filter((_, position) => position !== index) } : current)}>Убрать</button></li>)}</ul> : null}
+        <div className="prompt-editor-footer"><small>Запуски с предыдущей версией останутся без изменений.</small><div className="prompt-editor-actions"><button type="button" onClick={() => setEditing(null)} disabled={update.isPending || uploading}>Отмена</button><button className="primary" disabled={update.isPending || uploading || !editing.prompt.trim()}>{uploading || update.isPending ? "Загружаем…" : "Сохранить версию"}</button></div></div>
         {update.error ? <p className="error">{update.error.message}</p> : null}
       </form> : null}
     </article>)}{!tasks.data?.length ? <Empty>Промптов пока нет. Добавьте первый слева.</Empty> : null}</div></Panel></div>

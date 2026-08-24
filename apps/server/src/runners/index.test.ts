@@ -11,6 +11,39 @@ afterEach(() => {
 });
 
 describe("CLI runner", () => {
+  it("sends local task images as OpenAI-compatible content parts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
+    directories.push(root);
+    const imagePath = join(root, "reference.png");
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const originalFetch = globalThis.fetch;
+    let body: unknown;
+    globalThis.fetch = async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ choices: [{ message: { content: "Seen" } }] }));
+    };
+    try {
+      const result = await createRunner("llama-chat", new ProcessSupervisor("runner-test", 100)).run({
+        definition: { id: "fake", name: "Fake", kind: "llama-chat", exec: [], default: false, env: {}, envPassthrough: [] },
+        prompt: "Describe it",
+        workspace: root,
+        modelRef: "vision",
+        images: [{ path: imagePath, mimeType: "image/png" }],
+        taskDataDir: root,
+        timeoutMs: 2_000,
+        signal: new AbortController().signal,
+        baseUrl: "http://127.0.0.1:8080",
+        onStdout: () => undefined,
+        onStderr: () => undefined,
+      });
+
+      expect(result.finalAnswer).toBe("Seen");
+      expect(body).toMatchObject({ messages: [{ content: [{ type: "text", text: "Describe it" }, { type: "image_url", image_url: { url: expect.stringContaining("data:image/png;base64,") } }] }] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("sends a Codex prompt over stdin and parses the JSONL result", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
     directories.push(root);

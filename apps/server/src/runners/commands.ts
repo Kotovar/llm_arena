@@ -1,4 +1,4 @@
-export function buildOmpCommand(exec: readonly string[], workspace: string, modelAlias: string, prompt: string, useAgentEnvironment = false): string[] {
+export function buildOmpCommand(exec: readonly string[], workspace: string, modelAlias: string, prompt: string, useAgentEnvironment = false, imagePaths: readonly string[] = []): string[] {
   return [
     ...exec,
     "--mode",
@@ -12,6 +12,7 @@ export function buildOmpCommand(exec: readonly string[], workspace: string, mode
     `llama.cpp/${modelAlias}`,
     "--approval-mode",
     "yolo",
+    ...imagePaths.map((path) => `@${path}`),
     prompt,
   ];
 }
@@ -35,7 +36,7 @@ export function buildClaudeCommand(exec: readonly string[], model: string, effor
   ];
 }
 
-export function buildCodexCommand(exec: readonly string[], workspace: string, model: string, effort?: string | null): string[] {
+export function buildCodexCommand(exec: readonly string[], workspace: string, model: string, effort?: string | null, imagePaths: readonly string[] = []): string[] {
   return [
     ...exec,
     "-s",
@@ -53,6 +54,7 @@ export function buildCodexCommand(exec: readonly string[], workspace: string, mo
     ...(effort ? ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
     "-m",
     model,
+    ...imagePaths.flatMap((path) => ["--image", path]),
     "-",
   ];
 }
