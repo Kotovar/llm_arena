@@ -141,6 +141,7 @@ export type GalleryResult = {
   runnerKind?: string;
   useOmpAgent?: boolean;
   featured?: boolean;
+  reviewScore?: number | null;
   selectedVersion: ResultVersion;
   followupPrompts?: string[];
   screenshotUrl: string | null;

@@ -15,6 +15,7 @@ function stopPreview(preview: PreviewState) {
 
 function detailRows(result: GalleryResult) {
   const rows: [string, string][] = [["Модель", result.model.name], ["Версия", versionLabel(result.selectedVersion)]];
+  if (result.reviewScore != null) rows.push(["Моя оценка", `${result.reviewScore}/40`]);
   for (const tag of galleryResultTags(result)) {
     if (tag.startsWith("мышление: ")) rows.push(["Мышление", tag.slice("мышление: ".length)]);
     else rows.push([result.model.kind === "local-gguf" ? "Среда" : "Модель в CLI", tag]);
@@ -48,7 +49,7 @@ function GalleryResultButton({ result, onOpen }: { result: GalleryResult; onOpen
   const tags = galleryResultTags(result);
   return <button type="button" className="gallery-result" onClick={() => onOpen(result)}>
     <Screenshot result={result} className="gallery-shot" />
-    <span className="gallery-result-copy"><strong>{versionLabel(result.selectedVersion)}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
+    <span className="gallery-result-copy"><strong>{versionLabel(result.selectedVersion)}{result.reviewScore != null ? <span className="gallery-score">{result.reviewScore}/40</span> : null}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
     <ResultMetrics metrics={result.metrics} compact />
   </button>;
 }

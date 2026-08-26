@@ -391,6 +391,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           runnerKind: snapshot.runner?.kind,
           useOmpAgent: run.use_omp_agent === 1,
           featured: featured.has(taskRun.id),
+          reviewScore: taskRun.review ? taskRun.review.correctness + taskRun.review.code_quality + taskRun.review.ui_quality + taskRun.review.instruction_following : null,
           selectedVersion,
           followupPrompts: usedFollowups.map((followup) => followup.prompt),
           screenshotUrl: existsSync(join(artifactPath, "preview.png"))

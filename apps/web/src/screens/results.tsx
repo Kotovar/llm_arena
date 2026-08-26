@@ -142,9 +142,20 @@ export function useStopPreviewOnUnmount(preview: PreviewState | undefined) {
 }
 
 function ChecksStrip({ result }: { result: Record<string, unknown> | undefined }) {
-  const checks = resultChecks(result);
+  // ponytail: пройденные проверки — шум, показываем только то, что требует внимания.
+  const checks = resultChecks(result).filter((check) => check.status !== "pass");
   if (!checks.length) return null;
   return <div className="checks">{checks.map((check) => <span key={check.id} className={`check-badge check-${check.status}`}>{check.label}: {checkStatusLabel(check.status)}{check.durationMs === undefined ? null : <small>{formatDuration(check.durationMs)}</small>}</span>)}</div>;
+}
+
+function LogDialog({ title, endpoint, onClose }: { title: string; endpoint: string; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const logs = useQuery({ queryKey: ["log-dialog", endpoint], queryFn: () => apiText(endpoint), staleTime: Infinity });
+  useEffect(() => { if (dialog.current && !dialog.current.open) dialog.current.showModal(); }, []);
+  return <dialog className="gallery-dialog log-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
+    <header><div><span className="mono">Журнал</span><h2>{title}</h2></div><button type="button" className="dialog-close" aria-label="Закрыть журнал" onClick={() => dialog.current?.close()}>✕</button></header>
+    <div className="log-dialog-body">{logs.isPending ? <p>Загружаем журнал…</p> : logs.error ? <p className="error">{logs.error.message}</p> : logs.data?.trim() ? <pre>{logs.data}</pre> : <p className="log-dialog-empty">Пусто — в этот поток ничего не записано.</p>}</div>
+  </dialog>;
 }
 
 export function ResultPreview({ url, onClose, closing, title = "Готовое web-приложение" }: { url: string; onClose: () => void; closing?: boolean; title?: string }) {
@@ -155,7 +166,7 @@ export function ResultPreview({ url, onClose, closing, title = "Готовое w
 type ReviewDraft = { correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; comment: string };
 const reviewCriteria = [
   ["correctness", "Корректность"],
-  ["codeQuality", "Качество кода"],
+  ["codeQuality", "Удобство"],
   ["uiQuality", "Визуал"],
   ["instructionFollowing", "Следование заданию"],
 ] as const;
@@ -213,6 +224,7 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
   const [hoveredScore, setHoveredScore] = useState<{ key: string; value: number } | null>(null);
   const [saved, setSaved] = useState(Boolean(taskRun.review));
   const [shotMissing, setShotMissing] = useState(false);
+  const [logView, setLogView] = useState<{ title: string; endpoint: string }>();
   const toast = useToast();
   const previewUrl = activePreview?.taskRunId === taskRun.id && activePreview.resultSha === activeVersion.resultSha ? activePreview.url : undefined;
   const showShot = Boolean(result?.previewImage) && Boolean(activeVersion.resultSha) && !shotMissing;
@@ -260,7 +272,6 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
   const isSelectedFinal = activeVersion.resultSha === taskRun.selectedVersion?.resultSha;
   const canUseVersion = activeVersion.status === "completed" && Boolean(activeVersion.resultSha);
   const logsPath = activeVersion.type === "followup" ? `/followups/${activeVersion.followupId!}/logs` : `/task-runs/${taskRun.id}/logs`;
-  const logsHref = `/api${logsPath}`;
   const errorDetailsPath = activeVersion.type === "followup" ? `/followups/${activeVersion.followupId!}/error-details` : `/task-runs/${taskRun.id}/error-details`;
   return <article className="result-card">
     <header>
@@ -283,8 +294,9 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
     <ChecksStrip result={result} />
     {snapshot.fixture?.preview && canUseVersion ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => closePreview.mutate()} closing={closePreview.isPending} /> : <section className={showShot ? "preview-cta with-shot" : "preview-cta"}>{showShot ? <img className="preview-shot" src={`/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(activeVersion.resultSha!)}`} alt={`Снимок web-приложения: ${activeVersion.label}`} loading="lazy" onError={() => setShotMissing(true)} /> : null}<div><span className="mono">Версия готова</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Preview-сервер один: текущий preview будет остановлен перед запуском этой SHA-версии." : "Откроем зафиксированные файлы выбранной SHA-версии."}</p></div><button className="primary" onClick={() => preview.mutate(activeVersion.resultSha!)} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
     {preview.error ? <p className="error">{preview.error.message}</p> : null}
-    {result?.finalAnswer ? <details className="answer-surface" open><summary><span className="mono">{activeVersion.label}</span><strong>Ответ модели</strong></summary><pre className="answer">{String(result.finalAnswer)}</pre></details> : null}
-    <div className="actions">{result?.finalAnswer ? <button onClick={() => void copyAnswer()}>Копировать ответ</button> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>Изменения версии</button><a href={logsHref} target="_blank" rel="noreferrer">Сырые логи ↗</a><a href={`${logsHref}?stream=stderr`} target="_blank" rel="noreferrer">Ошибки ↗</a></div>
+    {result?.finalAnswer ? <details className="answer-surface"><summary><span className="mono">{activeVersion.label}</span><strong>Ответ модели</strong></summary><pre className="answer">{String(result.finalAnswer)}</pre></details> : null}
+    <div className="actions">{result?.finalAnswer ? <button onClick={() => void copyAnswer()}>Копировать ответ</button> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (artifact !== undefined) { setArtifact(undefined); return; } if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>{artifact === undefined ? "Изменения версии" : "Скрыть изменения"}</button><button onClick={() => setLogView({ title: "Сырые логи", endpoint: logsPath })}>Сырые логи</button><button onClick={() => setLogView({ title: "Ошибки", endpoint: `${logsPath}?stream=stderr` })}>Ошибки</button></div>
+    {logView ? <LogDialog key={logView.endpoint} title={logView.title} endpoint={logView.endpoint} onClose={() => setLogView(undefined)} /> : null}
     {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{zedErrorWorkspace ? <><code>{zedErrorWorkspace}</code><button onClick={() => void copyWorkspacePath(zedErrorWorkspace)}>Скопировать путь</button></> : null}</div> : null}
     {artifact !== undefined ? <pre className="artifact">{artifact || "Нет данных"}</pre> : null}
     {taskRun.status === "completed" ? <details className="followups"><summary><strong>Уточнения ({followups.length})</strong>{hasActiveFollowup ? <span className="chip">Выполняется</span> : null}</summary><div className="followups-content">{followups.length ? <div className="followup-list">{followups.map((item) => <FollowupResult key={item.id} followup={item} cancelPending={cancelFollowup.isPending} onCancel={() => cancelFollowup.mutate(item.id)} />)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" disabled={hasActiveFollowup || addFollowup.isPending}>{hasActiveFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></div></details> : null}
