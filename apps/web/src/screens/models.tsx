@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api } from "../api.js";
+import { useConfirm } from "../confirm.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import type { AppSettings, CalibrationResult, ExternalLauncher, LlamaParameters, LocalModelFile, Model, ModelCatalog, Profile, Runner } from "../types.js";
 import { chooseRunner, defaultLocalProfile, formatDuration, latestProfiles, visionProjectorFiles } from "../ui.js";
@@ -53,6 +54,7 @@ function ModelCapabilitiesForm({ model, files, pending, save }: { model: Model; 
 
 export function ModelsPage() {
   const client = useQueryClient();
+  const { confirm, view: confirmView } = useConfirm();
   const models = useData<Model[]>("models", "/models");
   const profiles = useData<Profile[]>("profiles", "/profiles");
   const runners = useData<Runner[]>("runners", "/runners");
@@ -227,11 +229,12 @@ export function ModelsPage() {
             {activate.error && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? <p className="error">{activate.error.message}</p> : null}
             <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending && calibrate.variables === profile.id}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : profile.parameters.fit ? "Проверить автоконфигурацию" : "Проверить профиль"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name}>{activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button></div>
           </section>; })}
-          <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button>{checking ? <span className="check-badge"><span className="spinner" />Ждём ответ модели…</span> : diagnostics[model.id] ? <span className={diagnostics[model.id]?.ok ? "check-badge check-pass" : "check-badge check-fail"}>{diagnostics[model.id]?.ok ? "✓" : "✕"} {diagnostics[model.id]?.title}</span> : <small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small>}<button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { if (window.confirm(`Отключить «${model.name}»? Результаты прошлых запусков останутся, файл модели не удаляется.`)) disconnect.mutate(model.id); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
+          <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button>{checking ? <span className="check-badge"><span className="spinner" />Ждём ответ модели…</span> : diagnostics[model.id] ? <span className={diagnostics[model.id]?.ok ? "check-badge check-pass" : "check-badge check-fail"}>{diagnostics[model.id]?.ok ? "✓" : "✕"} {diagnostics[model.id]?.title}</span> : <small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small>}<button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { confirm({ title: "Отключить модель?", body: `«${model.name}» пропадёт из списка. Результаты прошлых запусков останутся, файл модели не удаляется.`, action: "Отключить", onConfirm: () => disconnect.mutate(model.id) }); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
           {diagnostics[model.id]?.detail ? <p className="model-check-detail">{diagnostics[model.id]?.detail}</p> : null}
           {disconnect.error && disconnect.variables === model.id ? <p className="error">{disconnect.error.message}</p> : null}
         </div></details>;
       })}{!models.data?.length ? <Empty>Пока нет подключённых моделей.</Empty> : null}</div></Panel>
     </div>
+  {confirmView}
   </Page>;
 }

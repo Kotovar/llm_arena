@@ -62,6 +62,11 @@ type RunSummaryRow = RunRow & {
   review_score: number | null;
   review_possible: number | null;
   reviewed_count: number;
+  correctness_sum: number | null;
+  code_quality_sum: number | null;
+  ui_quality_sum: number | null;
+  instruction_following_sum: number | null;
+  visual_reviewed_count: number;
   generation_tps: number | null;
   generation_samples: number;
   task_count: number;
@@ -594,6 +599,11 @@ export function createStore(filename: string) {
                SUM(reviews.correctness + reviews.code_quality + reviews.ui_quality + reviews.instruction_following) AS review_score,
                SUM(CASE WHEN reviews.task_run_id IS NULL THEN 0 WHEN reviews.ui_quality = 0 THEN 30 ELSE 40 END) AS review_possible,
                COUNT(reviews.task_run_id) AS reviewed_count,
+               SUM(reviews.correctness) AS correctness_sum,
+               SUM(reviews.code_quality) AS code_quality_sum,
+               SUM(reviews.ui_quality) AS ui_quality_sum,
+               SUM(reviews.instruction_following) AS instruction_following_sum,
+               COUNT(NULLIF(reviews.ui_quality, 0)) AS visual_reviewed_count,
                AVG(json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value')) AS generation_tps,
                COUNT(json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value')) AS generation_samples,
                COUNT(task_runs.id) AS task_count

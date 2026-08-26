@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, matchesPromptQuery, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -257,6 +257,24 @@ describe("подписи списка запусков", () => {
     expect(reviewPossible(prompt)).toBe(30);
     expect(reviewSummary([coding, prompt], 2)).toEqual({ earned: 61, possible: 70, reviewed: 2, total: 2 });
     expect(formatReviewSummary(reviewSummary([prompt], 1))).toBe("27/30 · оценено 1 из 1");
+  });
+
+  it("сообщает только о запусках, закончившихся между опросами", () => {
+    const before = [{ id: "a", status: "running" }, { id: "b", status: "completed" }];
+    const after = [{ id: "a", status: "completed" }, { id: "b", status: "completed" }];
+    expect(finishedSince(before, after).map((run) => run.id)).toEqual(["a"]);
+    expect(finishedSince(after, after)).toEqual([]);
+    // Уточнение в уже завершённом запуске тоже считается активностью.
+    expect(finishedSince([{ id: "c", status: "completed", activityStatus: "running-followup" }], [{ id: "c", status: "completed" }]).map((run) => run.id)).toEqual(["c"]);
+  });
+
+  it("ищет промпт по названию и тексту", () => {
+    const task = { currentRevision: { name: "2D-аквариум", prompt: "Сделай симуляцию рыбок" } };
+    expect(matchesPromptQuery(task, "")).toBe(true);
+    expect(matchesPromptQuery(task, "  ")).toBe(true);
+    expect(matchesPromptQuery(task, "АКВА")).toBe(true);
+    expect(matchesPromptQuery(task, "рыбок")).toBe(true);
+    expect(matchesPromptQuery(task, "часы")).toBe(false);
   });
 
   it("подписывает, при каких условиях измерена скорость", () => {

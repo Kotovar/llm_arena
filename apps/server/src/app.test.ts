@@ -995,9 +995,12 @@ describe("REST API", () => {
 
     const response = await app.inject({ method: "GET", url: "/api/leaderboard" });
     expect(response.statusCode).toBe(200);
-    const entries = response.json() as Array<{ modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null }>;
+    const entries = response.json() as Array<{ modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null; criteria: Record<string, number | null> }>;
 
     expect(entries.find((entry) => entry.modelId === scored.id)).toMatchObject({ modelName: "Scored Model", runCount: 2, reviewedTaskRunCount: 3, scorePercent: 80 });
+    // Разбивка по критериям: визуал усредняется только по задачам, где он применялся.
+    expect(entries.find((entry) => entry.modelId === scored.id)?.criteria).toEqual({ correctness: 8, codeQuality: 8, uiQuality: 8, instructionFollowing: 8 });
+    expect(entries.find((entry) => entry.modelId === unscored.id)?.criteria).toEqual({ correctness: null, codeQuality: null, uiQuality: null, instructionFollowing: null });
     expect(entries.find((entry) => entry.modelId === archived.id)).toMatchObject({ modelName: "Archived Model", runCount: 1, reviewedTaskRunCount: 1, scorePercent: 70 });
     expect(entries.find((entry) => entry.modelId === unscored.id)).toMatchObject({ modelName: "Unscored Model", runCount: 1, reviewedTaskRunCount: 0, scorePercent: null });
     // Убывание по среднему баллу, неоценённые — в хвосте.

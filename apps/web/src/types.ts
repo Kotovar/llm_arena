@@ -82,7 +82,15 @@ export type ExternalLauncher = {
 };
 
 export type Runner = { id: string; name: string; kind: string; exec: string[]; default?: boolean };
-export type LeaderboardEntry = { modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null; generationTokensPerSecond: number | null };
+export type LeaderboardEntry = {
+  modelId: string;
+  modelName: string;
+  runCount: number;
+  reviewedTaskRunCount: number;
+  scorePercent: number | null;
+  generationTokensPerSecond: number | null;
+  criteria: { correctness: number | null; codeQuality: number | null; uiQuality: number | null; instructionFollowing: number | null };
+};
 export type Fixture = { id: string; name: string; checks: Array<{ id: string; label: string }>; preview?: unknown };
 export type ModelOption = { id: string; name: string; efforts: string[]; defaultEffort: string | null };
 export type ModelCatalog = { claude: { models: ModelOption[] }; codex: { models: ModelOption[] } };

@@ -14,6 +14,15 @@ export function statusLabel(status: string) {
   return statusLabels[status] ?? status;
 }
 
+/**
+ * Запуски, которые закончились между двумя опросами: по ним стоит сообщить,
+ * потому что пользователь мог уйти с их страницы.
+ */
+export function finishedSince<T extends { id: string; status: string; activityStatus?: string }>(before: readonly T[], after: readonly T[]): T[] {
+  const wasActive = new Set(before.filter(runIsActive).map((run) => run.id));
+  return after.filter((run) => wasActive.has(run.id) && !runIsActive(run));
+}
+
 export function runIsActive(run: { status: string; activityStatus?: string }) {
   const status = run.activityStatus ?? run.status;
   return status === "pending" || status === "running" || status === "running-followup";
@@ -42,6 +51,13 @@ export function chooseRunner(
   if (!kind) return undefined;
   const matching = runners.filter((runner) => runner.kind === kind);
   return matching.find((runner) => runner.default) ?? matching[0];
+}
+
+/** Поиск по названию и тексту промпта: подстрока без учёта регистра. */
+export function matchesPromptQuery(task: { currentRevision: { name: string; prompt: string } }, query: string): boolean {
+  const needle = query.trim().toLocaleLowerCase("ru");
+  if (!needle) return true;
+  return `${task.currentRevision.name}\n${task.currentRevision.prompt}`.toLocaleLowerCase("ru").includes(needle);
 }
 
 export function initializeTaskSelection(current: string[] | null, taskIds: string[]) {

@@ -13,7 +13,7 @@ import { SettingsPage } from "./screens/settings.js";
 import { Empty, Page, Panel, Shell, useData } from "./shell.js";
 import { ToastProvider } from "./toast.js";
 import type { Task, TaskImage } from "./types.js";
-import { taskUpdateBody } from "./ui.js";
+import { matchesPromptQuery, taskUpdateBody } from "./ui.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2_000, retry: 1 } } });
@@ -44,6 +44,7 @@ function TasksPage() {
   const [editing, setEditing] = useState<{ taskId: string; prompt: string; images: TaskImage[]; files: File[] } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [query, setQuery] = useState("");
   const create = useMutation({ mutationFn: (body: unknown) => api("/tasks", { method: "POST", body: JSON.stringify(body) }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
   const update = useMutation({ mutationFn: ({ id, body }: { id: string; body: unknown }) => api(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) }), onSuccess: () => { setEditing(null); return client.invalidateQueries({ queryKey: ["tasks"] }); } });
   const remove = useMutation({ mutationFn: (id: string) => api(`/tasks/${id}`, { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
@@ -60,6 +61,7 @@ function TasksPage() {
       setUploading(false);
     }
   }
+  const found = (tasks.data ?? []).filter((task) => matchesPromptQuery(task, query));
   return <Page title="Подготовленные промпты" eyebrow="Промпты" intro="Добавьте задания, на которых хотите сравнивать модели. История старых запусков не изменится после редактирования.">
     <div className="two-col"><Panel title="Добавить промпт"><form onSubmit={submit} className="form-grid">
       <label className="span-2">Название<input name="name" required /></label>
@@ -68,7 +70,7 @@ function TasksPage() {
       {files.length ? <ul className="image-attachments span-2">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => setFiles((current) => current.filter((_, position) => position !== index))}>Убрать</button></li>)}</ul> : null}
       <button className="primary" disabled={create.isPending || uploading}>{uploading || create.isPending ? "Загружаем…" : "Добавить"}</button>{create.error ? <p className="error">{create.error.message}</p> : null}
     </form></Panel>
-    <Panel title={`Промптов: ${tasks.data?.length ?? 0}`}><div className="stack">{tasks.data?.map((task) => <article className="item prompt-item" key={task.id}>
+    <Panel title={`Промптов: ${found.length} из ${tasks.data?.length ?? 0}`}><label className="prompt-search"><input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск по названию и тексту" aria-label="Поиск промптов" /></label><div className="stack">{found.map((task) => <article className="item prompt-item" key={task.id}>
       <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span><h3>{task.currentRevision.name}</h3>{task.currentRevision.images.length ? <small className="task-image-summary">Изображения: {task.currentRevision.images.map((image) => image.filename).join(", ")}</small> : null}</div><div className="item-actions"><button type="button" onClick={() => setEditing({ taskId: task.id, prompt: task.currentRevision.prompt, images: task.currentRevision.images, files: [] })}>Редактировать</button><button type="button" className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></div>
       <details className="prompt-preview"><summary>Текст промпта</summary><p>{task.currentRevision.prompt}</p></details>
       {editing && editing.taskId === task.id ? <form className="prompt-editor" onSubmit={async (event) => { event.preventDefault(); const prompt = editing.prompt.trim(); if (!prompt) return; try { setUploading(true); await update.mutateAsync({ id: task.id, body: taskUpdateBody(task.currentRevision, prompt, [...editing.images, ...await uploadTaskImages(editing.files)]) }); } finally { setUploading(false); } }}>
@@ -78,7 +80,7 @@ function TasksPage() {
         <div className="prompt-editor-footer"><small>Запуски с предыдущей версией останутся без изменений.</small><div className="prompt-editor-actions"><button type="button" onClick={() => setEditing(null)} disabled={update.isPending || uploading}>Отмена</button><button className="primary" disabled={update.isPending || uploading || !editing.prompt.trim()}>{uploading || update.isPending ? "Загружаем…" : "Сохранить версию"}</button></div></div>
         {update.error ? <p className="error">{update.error.message}</p> : null}
       </form> : null}
-    </article>)}{!tasks.data?.length ? <Empty>Промптов пока нет. Добавьте первый слева.</Empty> : null}</div></Panel></div>
+    </article>)}{!tasks.data?.length ? <Empty>Промптов пока нет. Добавьте первый слева.</Empty> : null}{tasks.data?.length && !found.length ? <Empty>Ничего не нашлось по запросу.</Empty> : null}</div></Panel></div>
   </Page>;
 }
 
@@ -88,17 +90,33 @@ const indexRoute = createRoute({
   path: "/",
   component: Launcher,
   validateSearch: (search: Record<string, unknown>) => ({
-    task: typeof search.task === "string" ? search.task : undefined,
-    mode: search.mode === "text" || search.mode === "web" ? search.mode : undefined,
-  }),
+    ...(typeof search.task === "string" ? { task: search.task } : {}),
+    ...(search.mode === "text" || search.mode === "web" ? { mode: search.mode } : {}),
+  } as { task?: string; mode?: "text" | "web" }),
 });
 const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: "/tasks", component: TasksPage });
 const modelsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/models", component: ModelsPage });
-const runsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs", component: RunsPage });
+const runsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/runs",
+  component: RunsPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.model === "string" ? { model: search.model } : {}),
+    ...(typeof search.status === "string" ? { status: search.status } : {}),
+  } as { model?: string; status?: string }),
+});
 function RunDetailRoute() { const { runId } = runRoute.useParams(); return <RunDetail runId={runId} />; }
 const runRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs/$runId", component: RunDetailRoute });
 const leaderboardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/leaderboard", component: LeaderboardPage });
-const compareRoute = createRoute({ getParentRoute: () => rootRoute, path: "/compare", component: ComparePage });
+const compareRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/compare",
+  component: ComparePage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.left === "string" ? { left: search.left } : {}),
+    ...(typeof search.right === "string" ? { right: search.right } : {}),
+  } as { left?: string; right?: string }),
+});
 const galleryRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gallery", component: GalleryPage });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
 const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, galleryRoute, settingsRoute]);

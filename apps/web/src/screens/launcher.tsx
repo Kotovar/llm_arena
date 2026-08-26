@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { Page, Panel, Status, useData } from "../shell.js";
 import type { Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
-import { chooseRunner, cloudProviderCatalogKind, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel, updateTaskSelection } from "../ui.js";
+import { chooseRunner, cloudProviderCatalogKind, initializeTaskSelection, matchesPromptQuery, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel, updateTaskSelection } from "../ui.js";
 
 export function Launcher() {
   const tasks = useData<Task[]>("tasks", "/tasks");
@@ -23,6 +23,7 @@ export function Launcher() {
   const [useOmpAgent, setUseOmpAgent] = useState(true);
   const [cloudModelRef, setCloudModelRef] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
+  const [promptQuery, setPromptQuery] = useState("");
   useEffect(() => {
     if (!tasks.data) return;
     // Приходим из результата с «повторить на другой модели»: оставляем только этот промпт.
@@ -40,6 +41,8 @@ export function Launcher() {
   const selectedModel = models.data?.find((model) => model.id === selectedModelId);
   const selected = new Set(selectedTaskIds ?? []);
   const selectedTasks = (tasks.data ?? []).filter((task) => selected.has(task.currentRevision.id));
+  // Поиск прячет строки, но не снимает выбор: отфильтрованный промпт всё равно уйдёт в запуск.
+  const visibleTasks = (tasks.data ?? []).filter((task) => matchesPromptQuery(task, promptQuery));
   const isLocalModel = selectedModel?.kind === "local-gguf";
   const hasImages = selectedTasks.some((task) => task.currentRevision.images.length > 0);
   const ompRunner = runners.data?.find((runner) => runner.kind === "omp");
@@ -77,7 +80,7 @@ export function Launcher() {
   return <Page title="Запустить проверку модели" eyebrow="Новый запуск" intro="Выберите модель, один или несколько промптов. Остальные параметры приложение подберёт автоматически.">
     <section className="launch-card" data-empty-models={models.data?.length === 0}>
       <div className="launch-step" data-ready={Boolean(selectedModel)}><span>1</span><div className="launch-fields"><label>Подключение<select value={selectedModelId} onChange={(event) => { setModelId(event.currentTarget.value); setCloudModelRef(""); setRunnerOverride(""); setUseOmpAgent(true); setReasoningEffort(""); }} disabled={!models.data?.length}><option value="">Выберите модель</option>{models.data?.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>{selectedModel?.kind === "cloud" ? <label>Конкретная модель<select value={effectiveModelRef} onChange={(event) => { setCloudModelRef(event.currentTarget.value); setReasoningEffort(""); }}>{!providerCatalog?.models.some((option) => option.id === selectedModel.modelRef) ? <option value={selectedModel.modelRef}>{selectedModel.modelRef}</option> : null}{providerCatalog?.models.map((option) => <option key={option.id} value={option.id}>{modelOptionLabel(option)}</option>)}</select></label> : null}{reasoningOptions.length ? <label>Уровень обдумывания<select value={effectiveEffort} onChange={(event) => setReasoningEffort(event.currentTarget.value)}><option value="">По умолчанию</option>{reasoningOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select><small>Показывается только для моделей с отмеченной поддержкой reasoning.</small></label> : null}</div><Link to="/models">Подключить модель</Link></div>
-      <div className="launch-step prompt-step" data-ready={selectedTasks.length > 0}><span>2</span><fieldset className="prompt-picker"><legend><strong>Какие промпты запустить</strong><small>{selectedTasks.length} из {tasks.data?.length ?? 0}</small></legend><div className="picker-actions"><button type="button" onClick={() => setSelectedTaskIds(allTaskIds)}>Выбрать все</button><button type="button" onClick={() => setSelectedTaskIds([])}>Снять все</button><Link to="/tasks">Добавить промпт</Link></div><div className="prompt-options">{tasks.data?.map((task) => <label key={task.id} className={selected.has(task.currentRevision.id) ? "selected" : ""}><input type="checkbox" checked={selected.has(task.currentRevision.id)} onChange={(event) => { const checked = event.currentTarget.checked; setSelectedTaskIds((current) => updateTaskSelection(current, task.currentRevision.id, checked)); }} /><span><strong>{task.currentRevision.name}</strong><small>{task.currentRevision.prompt}</small></span></label>)}</div>{!tasks.data?.length ? <p className="empty">Сначала добавьте промпт.</p> : null}</fieldset></div>
+      <div className="launch-step prompt-step" data-ready={selectedTasks.length > 0}><span>2</span><fieldset className="prompt-picker"><legend><strong>Какие промпты запустить</strong><small>{selectedTasks.length} из {tasks.data?.length ?? 0}</small></legend><div className="picker-actions"><input type="search" value={promptQuery} onChange={(event) => setPromptQuery(event.currentTarget.value)} placeholder="Поиск" aria-label="Поиск промптов" /><button type="button" onClick={() => setSelectedTaskIds(allTaskIds)}>Выбрать все</button><button type="button" onClick={() => setSelectedTaskIds([])}>Снять все</button><Link to="/tasks">Добавить промпт</Link></div><div className="prompt-options">{visibleTasks.map((task) => <label key={task.id} className={selected.has(task.currentRevision.id) ? "selected" : ""}><input type="checkbox" checked={selected.has(task.currentRevision.id)} onChange={(event) => { const checked = event.currentTarget.checked; setSelectedTaskIds((current) => updateTaskSelection(current, task.currentRevision.id, checked)); }} /><span><strong>{task.currentRevision.name}</strong><small>{task.currentRevision.prompt}</small></span></label>)}</div>{!tasks.data?.length ? <p className="empty">Сначала добавьте промпт.</p> : null}{tasks.data?.length && !visibleTasks.length ? <p className="empty">Ничего не нашлось по запросу.</p> : null}</fieldset></div>
       <div className="launch-step" data-ready={Boolean(selectedRunner)}>
         <span>3</span>
         <div className="launch-fields">

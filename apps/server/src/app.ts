@@ -337,7 +337,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
 
   app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run) })));
   app.get("/api/leaderboard", async () => {
-    const totals = new Map<string, { modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scoreSum: number; possibleSum: number; speedSum: number; speedSamples: number }>();
+    type Totals = {
+      modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number;
+      scoreSum: number; possibleSum: number; speedSum: number; speedSamples: number;
+      correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; visualReviewed: number;
+    };
+    const totals = new Map<string, Totals>();
     for (const run of store.listRuns()) {
       const entry = totals.get(run.model_id) ?? {
         modelId: run.model_id,
@@ -348,6 +353,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         possibleSum: 0,
         speedSum: 0,
         speedSamples: 0,
+        correctness: 0,
+        codeQuality: 0,
+        uiQuality: 0,
+        instructionFollowing: 0,
+        visualReviewed: 0,
       };
       entry.runCount += 1;
       entry.reviewedTaskRunCount += run.reviewed_count;
@@ -355,16 +365,31 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       entry.possibleSum += run.review_possible ?? 0;
       entry.speedSum += (run.generation_tps ?? 0) * run.generation_samples;
       entry.speedSamples += run.generation_samples;
+      entry.correctness += run.correctness_sum ?? 0;
+      entry.codeQuality += run.code_quality_sum ?? 0;
+      entry.uiQuality += run.ui_quality_sum ?? 0;
+      entry.instructionFollowing += run.instruction_following_sum ?? 0;
+      entry.visualReviewed += run.visual_reviewed_count;
       totals.set(run.model_id, entry);
     }
     // Максимум за промпт зависит от типа задачи, поэтому сравниваем долю набранного, а не сырую сумму.
     return [...totals.values()]
-      .map(({ scoreSum, possibleSum, speedSum, speedSamples, ...entry }) => ({
-        ...entry,
-        scorePercent: possibleSum ? Math.round((scoreSum / possibleSum) * 1000) / 10 : null,
-        // Средняя по замерам всех промптов модели: контекст и профиль у них разные, поэтому цифра ориентировочная.
-        generationTokensPerSecond: speedSamples ? Math.round((speedSum / speedSamples) * 10) / 10 : null,
-      }))
+      .map(({ scoreSum, possibleSum, speedSum, speedSamples, correctness, codeQuality, uiQuality, instructionFollowing, visualReviewed, ...entry }) => {
+        // Визуал делим на число задач, где он применялся: у текстовых ответов его нет.
+        const average = (sum: number, count: number) => count ? Math.round((sum / count) * 10) / 10 : null;
+        return {
+          ...entry,
+          scorePercent: possibleSum ? Math.round((scoreSum / possibleSum) * 1000) / 10 : null,
+          // Средняя по замерам всех промптов модели: контекст и профиль у них разные, поэтому цифра ориентировочная.
+          generationTokensPerSecond: speedSamples ? Math.round((speedSum / speedSamples) * 10) / 10 : null,
+          criteria: {
+            correctness: average(correctness, entry.reviewedTaskRunCount),
+            codeQuality: average(codeQuality, entry.reviewedTaskRunCount),
+            uiQuality: average(uiQuality, visualReviewed),
+            instructionFollowing: average(instructionFollowing, entry.reviewedTaskRunCount),
+          },
+        };
+      })
       .sort((a, b) => (b.scorePercent ?? -1) - (a.scorePercent ?? -1));
   });
   app.get("/api/gallery", async () => {
