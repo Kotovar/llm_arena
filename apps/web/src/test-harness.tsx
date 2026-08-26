@@ -26,8 +26,10 @@ export async function renderInApp(ui: ReactNode, path = "/"): Promise<RenderResu
       mode: search.mode === "text" || search.mode === "web" ? search.mode : undefined,
     }),
   });
+  // Заглушки маршрутов, на которые ссылаются экраны: без них <Link> падает.
+  const stub = (path: string) => createRoute({ getParentRoute: () => rootRoute, path, component: () => null, validateSearch: (search: Record<string, unknown>) => search });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute]),
+    routeTree: rootRoute.addChildren([indexRoute, stub("/runs"), stub("/compare"), stub("/tasks"), stub("/models")]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

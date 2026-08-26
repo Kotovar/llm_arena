@@ -297,7 +297,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview }
       <div><span className="mono">Промпт {taskRun.position + 1} · {snapshot.task.kind === "coding" ? "работа с проектом" : "ответ"}</span><h3>{snapshot.task.name}</h3>{taskRun.review ? <div className="saved-score"><strong>{reviewTotal(taskRun.review)}/{reviewPossible(taskRun.review)}</strong>{criteria.map(([key, label]) => <span key={key}>{label}: {key === "codeQuality" ? taskRun.review!.code_quality : key === "uiQuality" ? taskRun.review!.ui_quality : key === "instructionFollowing" ? taskRun.review!.instruction_following : taskRun.review!.correctness}</span>)}</div> : <span className="unrated">Не оценено</span>}</div>
       <div className="version-status"><Status value={activeVersion.status} />{isSelectedFinal ? <span className="final-version">Итоговая версия</span> : null}</div>
     </header>
-    <section className="version-picker" aria-label="Версии результата">
+    {versions.length > 1 ? <section className="version-picker" aria-label="Версии результата">
       <div className="version-picker-head"><div><span className="mono">Версии результата</span><strong>{activeVersion.label}</strong></div>{canUseVersion ? <div className="version-action"><code title={activeVersion.resultSha}>{activeVersion.resultSha!.slice(0, 12)}</code><button className={isSelectedFinal ? "saved" : ""} disabled={isSelectedFinal || selectFinal.isPending} onClick={() => selectFinal.mutate(activeVersion.resultSha!)}>{isSelectedFinal ? "Итоговая версия" : selectFinal.isPending ? "Сохраняем…" : "Сделать итоговой"}</button></div> : null}</div>
       <div className="version-choices">{versions.map((version) => {
         const available = version.status === "completed" && Boolean(version.resultSha);
@@ -305,7 +305,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview }
         const final = version.resultSha === taskRun.selectedVersion?.resultSha;
         return <button key={version.key} className={`version-choice${selected ? " active" : ""}`} aria-pressed={selected} disabled={!available} onClick={() => setActiveVersionKey(version.key)}><span><strong>{version.label}</strong><small>{available ? final ? "Итоговая" : "Готово" : version.status === "completed" ? "Нет сохранённого SHA" : "Недоступно для выбора"}</small></span><Status value={version.status} /></button>;
       })}</div>
-    </section>
+    </section> : null}
     {selectFinal.error ? <p className="error">{selectFinal.error.message}</p> : null}
     {activeVersion.error ? <GenerationError error={activeVersion.error} errorDetails={activeVersion.errorDetails} endpoint={errorDetailsPath} /> : null}
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button className="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>Прервать</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
@@ -337,6 +337,31 @@ function Elapsed({ since }: { since: string | null }) {
   return <span>{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</span>;
 }
 
+type RailItem = { taskRun: TaskRun; name: string; score: string | null };
+
+function railItems(taskRuns: readonly TaskRun[]): RailItem[] {
+  return taskRuns.map((taskRun) => {
+    let name = `Промпт ${taskRun.position + 1}`;
+    try { name = (JSON.parse(taskRun.snapshot_json) as { task?: { name?: string } }).task?.name || name; } catch { /* снапшот битый — остаётся номер */ }
+    return { taskRun, name, score: taskRun.review ? `${reviewTotal(taskRun.review)}/${reviewPossible(taskRun.review)}` : null };
+  });
+}
+
+/** Список промптов запуска: при десятке заданий вертикальная простыня карточек нечитаема. */
+function PromptRail({ items, activeId, reviewed, onSelect }: { items: RailItem[]; activeId: string; reviewed: number; onSelect: (id: string) => void }) {
+  return <nav className="prompt-rail" aria-label="Промпты запуска">
+    <ol>{items.map(({ taskRun, name, score }, index) => <li key={taskRun.id}>
+      <button type="button" className={taskRun.id === activeId ? "rail-item active" : "rail-item"} aria-current={taskRun.id === activeId} onClick={() => onSelect(taskRun.id)}>
+        <span className="rail-number">{index + 1}</span>
+        <span className="rail-name">{name}</span>
+        <span className={`rail-dot status-${taskRun.status}`} title={statusLabel(taskRun.status)} />
+        <span className="rail-score">{score ?? "—"}</span>
+      </button>
+    </li>)}</ol>
+    <footer>Оценено {reviewed} из {items.length}</footer>
+  </nav>;
+}
+
 export function RunDetail({ runId }: { runId: string }) {
   const client = useQueryClient();
   const navigate = useNavigate();
@@ -350,6 +375,7 @@ export function RunDetail({ runId }: { runId: string }) {
   }, [client, live, runId]);
   const runners = useData<Runner[]>("runners", "/runners");
   const [preview, setPreview] = useState<PreviewState>();
+  const [selectedTaskRunId, setSelectedTaskRunId] = useState<string>();
   useStopPreviewOnUnmount(preview);
   const cancel = useMutation({ mutationFn: () => api(`/runs/${runId}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const { confirm, view: confirmView } = useConfirm();
@@ -368,9 +394,20 @@ export function RunDetail({ runId }: { runId: string }) {
   const runningFollowup = activityStatus === "running-followup";
   const isActive = live;
   const scores = reviewSummary(run.data.taskRuns?.map((task) => task.review) ?? [], total);
+  const items = railItems(run.data.taskRuns ?? []);
+  // Пока пользователь не выбрал сам, показываем выполняющийся промпт: за живым запуском удобно следить.
+  const activeId = selectedTaskRunId ?? activeTask?.id ?? items[0]?.taskRun.id;
+  const activeIndex = items.findIndex((item) => item.taskRun.id === activeId);
+  const activeTaskRun = items[activeIndex]?.taskRun;
+  const nextUnrated = items.slice(activeIndex + 1).find((item) => !item.score) ?? items.find((item) => !item.score && item.taskRun.id !== activeId);
+  const step = (delta: number) => { const next = items[activeIndex + delta]; if (next) setSelectedTaskRunId(next.taskRun.id); };
   return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", ompModeLabel(run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? "Выполняется уточнение" : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
     {run.data.error && !hasTaskError ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
-    <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}><div className="stack">{run.data.taskRuns?.map((taskRun) => <TaskResult key={taskRun.id} taskRun={taskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} />)}{isActive && !run.data.taskRuns?.length ? <Empty>Готовим рабочее окружение и запускаем модель…</Empty> : null}</div>{remove.error ? <p className="error">{remove.error.message}</p> : null}</Panel>{confirmView}
+    <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}>{items.length ? <div className="run-split"><PromptRail items={items} activeId={activeId!} reviewed={scores.reviewed} onSelect={setSelectedTaskRunId} />
+      <div className="run-pane">
+        {items.length > 1 ? <div className="prompt-nav"><button type="button" disabled={activeIndex <= 0} onClick={() => step(-1)} aria-label="Предыдущий промпт">←</button><span className="mono">Промпт {activeIndex + 1} из {items.length}</span><button type="button" disabled={activeIndex >= items.length - 1} onClick={() => step(1)} aria-label="Следующий промпт">→</button>{nextUnrated ? <button type="button" onClick={() => setSelectedTaskRunId(nextUnrated.taskRun.id)}>К следующему неоценённому</button> : null}</div> : null}
+        {activeTaskRun ? <TaskResult key={activeTaskRun.id} taskRun={activeTaskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} /> : null}
+      </div></div> : null}{isActive && !items.length ? <Empty>Готовим рабочее окружение и запускаем модель…</Empty> : null}{remove.error ? <p className="error">{remove.error.message}</p> : null}</Panel>{confirmView}
   </Page>;
 }

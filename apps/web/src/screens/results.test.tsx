@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDialogSupport, renderInApp } from "../test-harness.js";
 import type { TaskRun } from "../types.js";
-import { criteriaForKind, TaskResult } from "./results.js";
+import { criteriaForKind, RunDetail, TaskResult } from "./results.js";
 
 installDialogSupport();
 
@@ -157,5 +157,73 @@ describe("условия замера", () => {
     await renderResult();
 
     expect(screen.getByText("контекст 100k · профиль Automatic")).toBeDefined();
+  });
+});
+
+function taskRunAt(position: number, name: string, review?: { correctness: number; code_quality: number; ui_quality: number; instruction_following: number; comment: string }) {
+  return taskRun({
+    id: `task-run-${position}`,
+    position,
+    snapshot_json: JSON.stringify({ task: { id: `rev-${position}`, taskId: `task-${position}`, name, kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: [], images: [] } }),
+    ...(review ? { review } : {}),
+  });
+}
+
+describe("панель версий", () => {
+  it("не показывается, когда версия одна", async () => {
+    await renderResult();
+    expect(screen.queryByLabelText("Версии результата")).toBeNull();
+  });
+
+  it("появляется, как только есть уточнение", async () => {
+    await renderResult(taskRun({
+      followups: [{ id: "followup-1", position: 1, prompt: "Поправь", status: "completed", result_json: JSON.stringify({ finalAnswer: "Ок", artifacts: { baselineSha: "b".repeat(40), resultSha: "c".repeat(40) } }), error: null, started_at: null, finished_at: null }],
+    }));
+    expect(screen.getByLabelText("Версии результата")).toBeDefined();
+  });
+});
+
+describe("список промптов запуска", () => {
+  const run = {
+    id: "run-1",
+    status: "completed",
+    snapshot_json: JSON.stringify({ tasks: [{}, {}, {}], model: { name: "Модель" } }),
+    runner_id: "codex",
+    result_mode: "web",
+    use_omp_agent: 0,
+    error: null,
+    taskRuns: [
+      taskRunAt(0, "Аквариум", { correctness: 9, code_quality: 8, ui_quality: 7, instruction_following: 10, comment: "" }),
+      taskRunAt(1, "Часы"),
+      taskRunAt(2, "Таймер"),
+    ],
+  };
+
+  beforeEach(() => {
+    fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/runs/") ? run : []), { status: 200, headers: { "content-type": "application/json" } }));
+  });
+
+  it("показывает один промпт за раз и переключает по клику", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<RunDetail runId="run-1" />);
+
+    expect(await screen.findByRole("heading", { level: 3, name: "Аквариум" })).toBeDefined();
+    expect(screen.queryByRole("heading", { level: 3, name: "Часы" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Часы/u }));
+
+    expect(await screen.findByRole("heading", { level: 3, name: "Часы" })).toBeDefined();
+    expect(screen.queryByRole("heading", { level: 3, name: "Аквариум" })).toBeNull();
+  });
+
+  it("ведёт к следующему неоценённому промпту", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    await user.click(screen.getByRole("button", { name: "К следующему неоценённому" }));
+
+    expect(await screen.findByRole("heading", { level: 3, name: "Часы" })).toBeDefined();
+    expect(screen.getByText("Оценено 1 из 3")).toBeDefined();
   });
 });
