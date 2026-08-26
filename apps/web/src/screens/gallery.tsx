@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import type { GalleryMetrics, GalleryResult, ResultVersion } from "../types.js";
-import { formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, plural } from "../ui.js";
+import { formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, measurementConditions, plural } from "../ui.js";
 import { ResultPreview } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
@@ -15,7 +15,9 @@ function stopPreview(preview: PreviewState) {
 
 function detailRows(result: GalleryResult) {
   const rows: [string, string][] = [["Модель", result.model.name], ["Версия", versionLabel(result.selectedVersion)]];
-  if (result.reviewScore != null) rows.push(["Моя оценка", `${result.reviewScore}/40`]);
+  if (result.reviewScore != null) rows.push(["Моя оценка", `${result.reviewScore}/${result.reviewPossible ?? 40}`]);
+  const conditions = result.profile ? measurementConditions({ name: result.profile.name, parameters: { context: result.profile.context } }) : undefined;
+  if (conditions) rows.push(["Условия замера", conditions]);
   for (const tag of galleryResultTags(result)) {
     if (tag.startsWith("мышление: ")) rows.push(["Мышление", tag.slice("мышление: ".length)]);
     else rows.push([result.model.kind === "local-gguf" ? "Среда" : "Модель в CLI", tag]);
@@ -49,7 +51,7 @@ function GalleryResultButton({ result, onOpen }: { result: GalleryResult; onOpen
   const tags = galleryResultTags(result);
   return <button type="button" className="gallery-result" onClick={() => onOpen(result)}>
     <Screenshot result={result} className="gallery-shot" />
-    <span className="gallery-result-copy"><strong>{versionLabel(result.selectedVersion)}{result.reviewScore != null ? <span className="gallery-score">{result.reviewScore}/40</span> : null}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
+    <span className="gallery-result-copy"><strong>{versionLabel(result.selectedVersion)}{result.reviewScore != null ? <span className="gallery-score">{result.reviewScore}/{result.reviewPossible ?? 40}</span> : null}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
     <ResultMetrics metrics={result.metrics} compact />
   </button>;
 }
@@ -104,7 +106,7 @@ export function GalleryPage() {
   const gallery = useData<GalleryResult[]>("gallery", "/gallery");
   const [opened, setOpened] = useState<GalleryResult>();
   const matrix = galleryMatrix(gallery.data ?? []);
-  return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея" intro="Итоговые версии web-результатов. Каждая ячейка привязана к своему result SHA, preview открывается по клику.">
+  return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея" intro="Итоговые web-результаты.">
     {gallery.isPending ? <Empty>Загружаем выбранные результаты…</Empty> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
     {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty>Пока нет успешных web-результатов с выбранной версией. Запустите web-задачу и выберите итоговую версию на странице результата.</Empty> : null}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -29,6 +29,7 @@ describe("интерфейс запуска", () => {
   it("сохраняет метаданные coding-задания при изменении текста промпта", () => {
     const revision: Task["currentRevision"] = {
       id: "revision-1",
+      taskId: "task-1",
       name: "Исправить форму",
       kind: "coding",
       prompt: "Старый текст",
@@ -246,6 +247,22 @@ describe("подписи списка запусков", () => {
   it("показывает оценку запуска только когда она есть", () => {
     expect(runListScore({ reviewed_count: 0 })).toBe("Не оценено");
     expect(runListScore({ review_score: 33, reviewed_count: 1, task_count: 2 })).toBe("33/40");
+    expect(runListScore({ review_score: 24, review_possible: 30, reviewed_count: 1, task_count: 2 })).toBe("24/30");
+  });
+
+  it("не засчитывает визуал текстовому ответу", () => {
+    const coding = { correctness: 9, code_quality: 8, ui_quality: 7, instruction_following: 10 };
+    const prompt = { correctness: 9, code_quality: 8, ui_quality: 0, instruction_following: 10 };
+    expect(reviewPossible(coding)).toBe(40);
+    expect(reviewPossible(prompt)).toBe(30);
+    expect(reviewSummary([coding, prompt], 2)).toEqual({ earned: 61, possible: 70, reviewed: 2, total: 2 });
+    expect(formatReviewSummary(reviewSummary([prompt], 1))).toBe("27/30 · оценено 1 из 1");
+  });
+
+  it("подписывает, при каких условиях измерена скорость", () => {
+    expect(measurementConditions(undefined)).toBeUndefined();
+    expect(measurementConditions({ name: "Automatic", parameters: { context: "auto" } })).toBe("контекст авто · профиль Automatic");
+    expect(measurementConditions({ name: "Quality", parameters: { context: 102_400 } })).toBe("контекст 100k · профиль Quality");
   });
 });
 

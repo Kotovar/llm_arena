@@ -186,7 +186,8 @@ export const normalizedRunResultSchema = z.object({
   metrics: normalizedMetricsSchema,
 });
 
-const scoreSchema = z.number().int().min(1).max(10);
+// 0 — критерий не применялся к этой задаче (например, визуал у текстового ответа).
+const scoreSchema = z.number().int().min(0).max(10);
 export const reviewSchema = z.object({
   correctness: scoreSchema,
   codeQuality: scoreSchema,

@@ -81,9 +81,11 @@ describe("benchmark engine", () => {
     const result = await engine.calibrate(profile.id);
 
     expect(result).toMatchObject({
-      profile: { name: "Automatic", calibrated: true, revision: 2 },
+      profile: { id: profile.id, name: "Automatic", calibrated: true, revision: 1 },
       gpu: { name: "NVIDIA GeForce RTX 5080", freeMiB: 14853 },
     });
+    // Проверка не меняет параметры, поэтому новой ревизии профиля быть не должно.
+    expect(store.listExecutionProfiles(profile.modelId)).toHaveLength(1);
     expect({ starts, stops, warmups }).toEqual({ starts: 1, stops: 1, warmups: 1 });
     await engine.stop();
     store.close();

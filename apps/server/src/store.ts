@@ -71,7 +71,10 @@ type RunRow = {
 
 type RunSummaryRow = RunRow & {
   review_score: number | null;
+  review_possible: number | null;
   reviewed_count: number;
+  generation_tps: number | null;
+  generation_samples: number;
   task_count: number;
 };
 
@@ -557,6 +560,10 @@ export function createStore(filename: string) {
           }
         : undefined;
     },
+    markProfileCalibrated(id: string) {
+      sqlite.prepare("UPDATE execution_profiles SET calibrated = 1 WHERE id = ?").run(id);
+      return this.getExecutionProfile(id);
+    },
     listExecutionProfiles(modelId?: string) {
       const rows = modelId
         ? all<{ id: string }>("SELECT id FROM execution_profiles WHERE model_id = ? ORDER BY created_at", modelId)
@@ -597,7 +604,10 @@ export function createStore(filename: string) {
       return all<RunSummaryRow>(`
         SELECT benchmark_runs.*,
                SUM(reviews.correctness + reviews.code_quality + reviews.ui_quality + reviews.instruction_following) AS review_score,
+               SUM(CASE WHEN reviews.task_run_id IS NULL THEN 0 WHEN reviews.ui_quality = 0 THEN 30 ELSE 40 END) AS review_possible,
                COUNT(reviews.task_run_id) AS reviewed_count,
+               AVG(json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value')) AS generation_tps,
+               COUNT(json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value')) AS generation_samples,
                COUNT(task_runs.id) AS task_count
         FROM benchmark_runs
         LEFT JOIN task_runs ON task_runs.benchmark_run_id = benchmark_runs.id

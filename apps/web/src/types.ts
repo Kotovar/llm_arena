@@ -2,6 +2,7 @@ export type Task = {
   id: string;
   currentRevision: {
     id: string;
+    taskId: string;
     name: string;
     description?: string;
     kind: "prompt" | "coding";
@@ -93,7 +94,7 @@ export type ExternalLauncher = {
 };
 
 export type Runner = { id: string; name: string; kind: string; exec: string[]; default?: boolean };
-export type LeaderboardEntry = { modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; avgScore: number | null };
+export type LeaderboardEntry = { modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null; generationTokensPerSecond: number | null };
 export type Fixture = { id: string; name: string; checks: Array<{ id: string; label: string }>; preview?: unknown };
 export type ModelOption = { id: string; name: string; efforts: string[]; defaultEffort: string | null };
 export type ModelCatalog = { claude: { models: ModelOption[] }; codex: { models: ModelOption[] } };
@@ -138,10 +139,12 @@ export type GalleryResult = {
   prompt: { id: string; name: string; prompt: string };
   model: { id: string; name: string; kind?: Model["kind"]; modelRef?: string };
   reasoningEffort?: string | null;
+  profile?: { name: string; context: number | "auto" } | null;
   runnerKind?: string;
   useOmpAgent?: boolean;
   featured?: boolean;
   reviewScore?: number | null;
+  reviewPossible?: number | null;
   selectedVersion: ResultVersion;
   followupPrompts?: string[];
   screenshotUrl: string | null;
@@ -186,6 +189,7 @@ export type Run = {
   error: string | null;
   errorDetails?: GenerationErrorDetails | null;
   review_score?: number | null;
+  review_possible?: number | null;
   reviewed_count?: number;
   task_count?: number;
   taskRuns?: TaskRun[];

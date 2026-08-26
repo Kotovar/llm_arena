@@ -83,7 +83,15 @@ function TasksPage() {
 }
 
 const rootRoute = createRootRoute({ component: Shell });
-const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: Launcher });
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/",
+  component: Launcher,
+  validateSearch: (search: Record<string, unknown>) => ({
+    task: typeof search.task === "string" ? search.task : undefined,
+    mode: search.mode === "text" || search.mode === "web" ? search.mode : undefined,
+  }),
+});
 const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: "/tasks", component: TasksPage });
 const modelsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/models", component: ModelsPage });
 const runsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs", component: RunsPage });

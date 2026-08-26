@@ -177,7 +177,34 @@ describe("run queue", () => {
     store.createTaskRun(run.id, second.currentRevision.id, 1, ".data/run/two", { task: second.currentRevision });
     store.saveReview(firstRun.id, { correctness: 9, codeQuality: 8, uiQuality: 7, instructionFollowing: 10, comment: "Good" });
 
-    expect(store.listRuns()[0]).toMatchObject({ review_score: 34, reviewed_count: 1, task_count: 2 });
+    expect(store.listRuns()[0]).toMatchObject({ review_score: 34, review_possible: 40, reviewed_count: 1, task_count: 2 });
+  });
+
+  it("averages generation speed only over tasks that measured it", () => {
+    const store = testStore();
+    const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });
+    const other = store.createTask({ name: "Second", kind: "prompt", prompt: "Two", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id, other.currentRevision.id] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const measured = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/one", { task: task.currentRevision });
+    const unmeasured = store.createTaskRun(run.id, other.currentRevision.id, 1, ".data/run/two", { task: other.currentRevision });
+    store.saveTaskRunResult(measured.id, { metrics: { generationTokensPerSecond: { value: 60 } } }, "completed");
+    store.saveTaskRunResult(unmeasured.id, { finalAnswer: "Done" }, "completed");
+
+    expect(store.listRuns()[0]).toMatchObject({ generation_tps: 60, generation_samples: 1, task_count: 2 });
+  });
+
+  it("drops the visual criterion from the maximum when it was not applied", () => {
+    const store = testStore();
+    const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });
+    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/one", { task: task.currentRevision });
+    store.saveReview(taskRun.id, { correctness: 9, codeQuality: 8, uiQuality: 0, instructionFollowing: 10, comment: "" });
+
+    expect(store.listRuns()[0]).toMatchObject({ review_score: 27, review_possible: 30, reviewed_count: 1 });
   });
 
   it("claims pending runs in FIFO order", () => {

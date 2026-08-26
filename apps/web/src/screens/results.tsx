@@ -5,7 +5,7 @@ import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Status, useData } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, Runner, Task, TaskRun } from "../types.js";
-import { checkStatusLabel, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, ompModeLabel, promptCountLabel, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, shouldFollowOutput, statusLabel } from "../ui.js";
+import { checkStatusLabel, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
@@ -118,8 +118,8 @@ function resultVersions(taskRun: TaskRun): DisplayVersion[] {
   ];
 }
 
-function MetricStrip({ result }: { result: Record<string, unknown> | undefined }) {
-  return <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Сумма новых входных токенов во всех обращениях агента к модели"><span>Новый вход</span><strong>{metric(result, "inputTokens")}</strong></div><div title="Токены контекста, повторно использованные из кеша"><span>Из кеша</span><strong>{metric(result, "cachedInputTokens")}</strong></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div><div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong></div></div>;
+function MetricStrip({ result, conditions }: { result: Record<string, unknown> | undefined; conditions?: string | undefined }) {
+  return <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Сумма новых входных токенов во всех обращениях агента к модели"><span>Новый вход</span><strong>{metric(result, "inputTokens")}</strong></div><div title="Токены контекста, повторно использованные из кеша"><span>Из кеша</span><strong>{metric(result, "cachedInputTokens")}</strong></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div><div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong>{conditions ? <small>{conditions}</small> : null}</div></div>;
 }
 
 export function usePreviewHeartbeat(active: boolean) {
@@ -171,6 +171,11 @@ const reviewCriteria = [
   ["instructionFollowing", "Следование заданию"],
 ] as const;
 
+/** У текстового ответа нечего оценивать визуально, поэтому критерий выпадает вместе со своими десятью баллами. */
+function criteriaForKind(kind: "prompt" | "coding"): ReadonlyArray<readonly [keyof Omit<ReviewDraft, "comment">, string]> {
+  return kind === "coding" ? reviewCriteria : reviewCriteria.filter(([key]) => key !== "uiQuality");
+}
+
 function initialReview(taskRun: TaskRun): ReviewDraft {
   return taskRun.review ? {
     correctness: taskRun.review.correctness,
@@ -209,7 +214,7 @@ type PreviewState = { taskRunId: string; resultSha: string; url: string };
 
 function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { taskRun: TaskRun; runId: string; preview: PreviewState | undefined; onPreview: (preview: PreviewState | undefined) => void }) {
   const client = useQueryClient();
-  const snapshot = JSON.parse(taskRun.snapshot_json) as { task: Task["currentRevision"]; fixture?: Fixture };
+  const snapshot = JSON.parse(taskRun.snapshot_json) as { task: Task["currentRevision"]; fixture?: Fixture; profile?: { name: string; parameters: { context: number | "auto" } } };
   const versions = resultVersions(taskRun);
   const selectedKey = versions.find((version) => version.resultSha === taskRun.selectedVersion?.resultSha)?.key;
   const [activeVersionKey, setActiveVersionKey] = useState<string>();
@@ -257,7 +262,7 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
     void api("/preview", { method: "DELETE" }).finally(() => onPreview(undefined));
   }, [activePreview?.resultSha, activePreview?.taskRunId, activeVersion.resultSha, taskRun.id]);
   const zedErrorWorkspace = (zed.error as (Error & { data?: { workspace?: string } }) | null)?.data?.workspace;
-  function rate(event: FormEvent<HTMLFormElement>) { event.preventDefault(); review.mutate(draft); }
+  function rate(event: FormEvent<HTMLFormElement>) { event.preventDefault(); review.mutate(snapshot.task.kind === "coding" ? draft : { ...draft, uiQuality: 0 }); }
   function updateScore(key: keyof Omit<ReviewDraft, "comment">, value: number) { setDraft((current) => ({ ...current, [key]: value })); setSaved(false); review.reset(); }
   async function copyAnswer() {
     try { await navigator.clipboard.writeText(String(result?.finalAnswer ?? "")); toast("Скопировано"); }
@@ -268,14 +273,15 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
     catch { toast("Не удалось скопировать", "error"); }
   }
   function sendFollowup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = event.currentTarget; const prompt = String(new FormData(form).get("prompt") ?? "").trim(); if (prompt) addFollowup.mutate(prompt, { onSuccess: () => form.reset() }); }
-  const draftTotal = draft.correctness + draft.codeQuality + draft.uiQuality + draft.instructionFollowing;
+  const criteria = criteriaForKind(snapshot.task.kind);
+  const draftTotal = criteria.reduce((sum, [key]) => sum + draft[key], 0);
   const isSelectedFinal = activeVersion.resultSha === taskRun.selectedVersion?.resultSha;
   const canUseVersion = activeVersion.status === "completed" && Boolean(activeVersion.resultSha);
   const logsPath = activeVersion.type === "followup" ? `/followups/${activeVersion.followupId!}/logs` : `/task-runs/${taskRun.id}/logs`;
   const errorDetailsPath = activeVersion.type === "followup" ? `/followups/${activeVersion.followupId!}/error-details` : `/task-runs/${taskRun.id}/error-details`;
   return <article className="result-card">
     <header>
-      <div><span className="mono">Промпт {taskRun.position + 1} · {snapshot.task.kind === "coding" ? "работа с проектом" : "ответ"}</span><h3>{snapshot.task.name}</h3>{taskRun.review ? <div className="saved-score"><strong>{reviewTotal(taskRun.review)}/40</strong>{reviewCriteria.map(([key, label]) => <span key={key}>{label}: {key === "codeQuality" ? taskRun.review!.code_quality : key === "uiQuality" ? taskRun.review!.ui_quality : key === "instructionFollowing" ? taskRun.review!.instruction_following : taskRun.review!.correctness}</span>)}</div> : <span className="unrated">Не оценено</span>}</div>
+      <div><span className="mono">Промпт {taskRun.position + 1} · {snapshot.task.kind === "coding" ? "работа с проектом" : "ответ"}</span><h3>{snapshot.task.name}</h3>{taskRun.review ? <div className="saved-score"><strong>{reviewTotal(taskRun.review)}/{reviewPossible(taskRun.review)}</strong>{criteria.map(([key, label]) => <span key={key}>{label}: {key === "codeQuality" ? taskRun.review!.code_quality : key === "uiQuality" ? taskRun.review!.ui_quality : key === "instructionFollowing" ? taskRun.review!.instruction_following : taskRun.review!.correctness}</span>)}</div> : <span className="unrated">Не оценено</span>}</div>
       <div className="version-status"><Status value={activeVersion.status} />{isSelectedFinal ? <span className="final-version">Итоговая версия</span> : null}</div>
     </header>
     <section className="version-picker" aria-label="Версии результата">
@@ -290,17 +296,17 @@ function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { tas
     {selectFinal.error ? <p className="error">{selectFinal.error.message}</p> : null}
     {activeVersion.error ? <GenerationError error={activeVersion.error} errorDetails={activeVersion.errorDetails} endpoint={errorDetailsPath} /> : null}
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button className="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>Прервать</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
-    {result ? <MetricStrip result={result} /> : null}
+    {result ? <MetricStrip result={result} conditions={measurementConditions(snapshot.profile)} /> : null}
     <ChecksStrip result={result} />
     {snapshot.fixture?.preview && canUseVersion ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => closePreview.mutate()} closing={closePreview.isPending} /> : <section className={showShot ? "preview-cta with-shot" : "preview-cta"}>{showShot ? <img className="preview-shot" src={`/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(activeVersion.resultSha!)}`} alt={`Снимок web-приложения: ${activeVersion.label}`} loading="lazy" onError={() => setShotMissing(true)} /> : null}<div><span className="mono">Версия готова</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Preview-сервер один: текущий preview будет остановлен перед запуском этой SHA-версии." : "Откроем зафиксированные файлы выбранной SHA-версии."}</p></div><button className="primary" onClick={() => preview.mutate(activeVersion.resultSha!)} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
     {preview.error ? <p className="error">{preview.error.message}</p> : null}
     {result?.finalAnswer ? <details className="answer-surface"><summary><span className="mono">{activeVersion.label}</span><strong>Ответ модели</strong></summary><pre className="answer">{String(result.finalAnswer)}</pre></details> : null}
-    <div className="actions">{result?.finalAnswer ? <button onClick={() => void copyAnswer()}>Копировать ответ</button> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (artifact !== undefined) { setArtifact(undefined); return; } if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>{artifact === undefined ? "Изменения версии" : "Скрыть изменения"}</button><button onClick={() => setLogView({ title: "Сырые логи", endpoint: logsPath })}>Сырые логи</button><button onClick={() => setLogView({ title: "Ошибки", endpoint: `${logsPath}?stream=stderr` })}>Ошибки</button></div>
+    <div className="actions"><Link to="/" search={{ task: snapshot.task.taskId, mode: snapshot.task.kind === "coding" ? "web" as const : "text" as const }}>Повторить на другой модели</Link>{result?.finalAnswer ? <button onClick={() => void copyAnswer()}>Копировать ответ</button> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (artifact !== undefined) { setArtifact(undefined); return; } if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>{artifact === undefined ? "Изменения версии" : "Скрыть изменения"}</button><button onClick={() => setLogView({ title: "Сырые логи", endpoint: logsPath })}>Сырые логи</button><button onClick={() => setLogView({ title: "Ошибки", endpoint: `${logsPath}?stream=stderr` })}>Ошибки</button></div>
     {logView ? <LogDialog key={logView.endpoint} title={logView.title} endpoint={logView.endpoint} onClose={() => setLogView(undefined)} /> : null}
     {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{zedErrorWorkspace ? <><code>{zedErrorWorkspace}</code><button onClick={() => void copyWorkspacePath(zedErrorWorkspace)}>Скопировать путь</button></> : null}</div> : null}
     {artifact !== undefined ? <pre className="artifact">{artifact || "Нет данных"}</pre> : null}
     {taskRun.status === "completed" ? <details className="followups"><summary><strong>Уточнения ({followups.length})</strong>{hasActiveFollowup ? <span className="chip">Выполняется</span> : null}</summary><div className="followups-content">{followups.length ? <div className="followup-list">{followups.map((item) => <FollowupResult key={item.id} followup={item} cancelPending={cancelFollowup.isPending} onCancel={() => cancelFollowup.mutate(item.id)} />)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" disabled={hasActiveFollowup || addFollowup.isPending}>{hasActiveFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></div></details> : null}
-    {taskRun.status === "completed" || taskRun.review ? <form className="review" onSubmit={rate}><div className="review-heading"><div><span className="mono">Моя оценка</span><strong>Оцените результат по четырём критериям</strong></div><output>{draftTotal}/40</output></div>{reviewCriteria.map(([key, label]) => <fieldset className="score-control" key={key}><legend>{label}<output>{draft[key]}/10</output></legend><div className="score-scale" onMouseLeave={() => setHoveredScore(null)}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <label key={value} title={`${value} из 10`} onMouseEnter={() => setHoveredScore({ key, value })}><input type="radio" name={`${taskRun.id}-${key}`} value={value} checked={draft[key] === value} onChange={() => updateScore(key, value)} /><span aria-hidden="true" className={value <= (hoveredScore?.key === key ? hoveredScore.value : draft[key]) ? `score-cell ${hoveredScore?.key === key ? "hovered" : "on"}` : "score-cell"}>{value}</span><span className="visually-hidden">{label}: {value} из 10</span></label>)}</div></fieldset>)}<label className="comment">Комментарий<input value={draft.comment} onChange={(event) => { setDraft((current) => ({ ...current, comment: event.currentTarget.value })); setSaved(false); review.reset(); }} /></label><button className={saved ? "saved" : ""} disabled={review.isPending}>{reviewSaveLabel(review.isPending, saved)}</button>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form> : null}
+    {taskRun.status === "completed" || taskRun.review ? <form className="review" onSubmit={rate}><div className="review-heading"><div><span className="mono">Моя оценка</span><strong>Оцените результат по {criteria.length === 4 ? "четырём" : "трём"} критериям</strong></div><output>{draftTotal}/{criteria.length * 10}</output></div>{criteria.map(([key, label]) => <fieldset className="score-control" key={key}><legend>{label}<output>{draft[key]}/10</output></legend><div className="score-scale" onMouseLeave={() => setHoveredScore(null)}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <label key={value} title={`${value} из 10`} onMouseEnter={() => setHoveredScore({ key, value })}><input type="radio" name={`${taskRun.id}-${key}`} value={value} checked={draft[key] === value} onChange={() => updateScore(key, value)} /><span aria-hidden="true" className={value <= (hoveredScore?.key === key ? hoveredScore.value : draft[key]) ? `score-cell ${hoveredScore?.key === key ? "hovered" : "on"}` : "score-cell"}>{value}</span><span className="visually-hidden">{label}: {value} из 10</span></label>)}</div></fieldset>)}<label className="comment">Комментарий<input value={draft.comment} onChange={(event) => { setDraft((current) => ({ ...current, comment: event.currentTarget.value })); setSaved(false); review.reset(); }} /></label><button className={saved ? "saved" : ""} disabled={review.isPending}>{reviewSaveLabel(review.isPending, saved)}</button>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form> : null}
   </article>;
 }
 

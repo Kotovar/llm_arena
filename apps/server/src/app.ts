@@ -89,6 +89,7 @@ type GallerySnapshot = {
   model?: { name?: string; modelRef?: string };
   reasoningEffort?: string | null;
   runner?: { kind?: string };
+  profile?: { name?: string; parameters?: { context?: number | "auto" } };
 };
 
 function parseGallerySnapshot(json: string): GallerySnapshot | undefined {
@@ -339,7 +340,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
 
   app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run) })));
   app.get("/api/leaderboard", async () => {
-    const totals = new Map<string, { modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scoreSum: number }>();
+    const totals = new Map<string, { modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scoreSum: number; possibleSum: number; speedSum: number; speedSamples: number }>();
     for (const run of store.listRuns()) {
       const entry = totals.get(run.model_id) ?? {
         modelId: run.model_id,
@@ -347,15 +348,27 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         runCount: 0,
         reviewedTaskRunCount: 0,
         scoreSum: 0,
+        possibleSum: 0,
+        speedSum: 0,
+        speedSamples: 0,
       };
       entry.runCount += 1;
       entry.reviewedTaskRunCount += run.reviewed_count;
       entry.scoreSum += run.review_score ?? 0;
+      entry.possibleSum += run.review_possible ?? 0;
+      entry.speedSum += (run.generation_tps ?? 0) * run.generation_samples;
+      entry.speedSamples += run.generation_samples;
       totals.set(run.model_id, entry);
     }
+    // Максимум за промпт зависит от типа задачи, поэтому сравниваем долю набранного, а не сырую сумму.
     return [...totals.values()]
-      .map(({ scoreSum, ...entry }) => ({ ...entry, avgScore: entry.reviewedTaskRunCount ? scoreSum / entry.reviewedTaskRunCount : null }))
-      .sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
+      .map(({ scoreSum, possibleSum, speedSum, speedSamples, ...entry }) => ({
+        ...entry,
+        scorePercent: possibleSum ? Math.round((scoreSum / possibleSum) * 1000) / 10 : null,
+        // Средняя по замерам всех промптов модели: контекст и профиль у них разные, поэтому цифра ориентировочная.
+        generationTokensPerSecond: speedSamples ? Math.round((speedSum / speedSamples) * 10) / 10 : null,
+      }))
+      .sort((a, b) => (b.scorePercent ?? -1) - (a.scorePercent ?? -1));
   });
   app.get("/api/gallery", async () => {
     const featured = new Set(store.listGalleryFeatured().map((item) => item.task_run_id));
@@ -388,10 +401,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
             modelRef: snapshot.model?.modelRef || run.model_ref || undefined,
           },
           reasoningEffort: snapshot.reasoningEffort ?? null,
+          profile: snapshot.profile?.name ? { name: snapshot.profile.name, context: snapshot.profile.parameters?.context ?? "auto" } : null,
           runnerKind: snapshot.runner?.kind,
           useOmpAgent: run.use_omp_agent === 1,
           featured: featured.has(taskRun.id),
           reviewScore: taskRun.review ? taskRun.review.correctness + taskRun.review.code_quality + taskRun.review.ui_quality + taskRun.review.instruction_following : null,
+          reviewPossible: taskRun.review ? (taskRun.review.ui_quality === 0 ? 30 : 40) : null,
           selectedVersion,
           followupPrompts: usedFollowups.map((followup) => followup.prompt),
           screenshotUrl: existsSync(join(artifactPath, "preview.png"))

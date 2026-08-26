@@ -1005,11 +1005,11 @@ describe("REST API", () => {
 
     const response = await app.inject({ method: "GET", url: "/api/leaderboard" });
     expect(response.statusCode).toBe(200);
-    const entries = response.json() as Array<{ modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; avgScore: number | null }>;
+    const entries = response.json() as Array<{ modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null }>;
 
-    expect(entries.find((entry) => entry.modelId === scored.id)).toMatchObject({ modelName: "Scored Model", runCount: 2, reviewedTaskRunCount: 3, avgScore: 32 });
-    expect(entries.find((entry) => entry.modelId === archived.id)).toMatchObject({ modelName: "Archived Model", runCount: 1, reviewedTaskRunCount: 1, avgScore: 28 });
-    expect(entries.find((entry) => entry.modelId === unscored.id)).toMatchObject({ modelName: "Unscored Model", runCount: 1, reviewedTaskRunCount: 0, avgScore: null });
+    expect(entries.find((entry) => entry.modelId === scored.id)).toMatchObject({ modelName: "Scored Model", runCount: 2, reviewedTaskRunCount: 3, scorePercent: 80 });
+    expect(entries.find((entry) => entry.modelId === archived.id)).toMatchObject({ modelName: "Archived Model", runCount: 1, reviewedTaskRunCount: 1, scorePercent: 70 });
+    expect(entries.find((entry) => entry.modelId === unscored.id)).toMatchObject({ modelName: "Unscored Model", runCount: 1, reviewedTaskRunCount: 0, scorePercent: null });
     // Убывание по среднему баллу, неоценённые — в хвосте.
     expect(entries.map((entry) => entry.modelId)).toEqual([scored.id, archived.id, unscored.id]);
     await app.close();

@@ -170,15 +170,20 @@ describe("run configuration", () => {
 });
 
 describe("human review", () => {
-  it("requires every score to be between one and ten", () => {
-    const result = reviewSchema.safeParse({
-      correctness: 10,
-      codeQuality: 8,
-      uiQuality: 0,
-      instructionFollowing: 9,
-      comment: "Useful result",
-    });
+  const review = (uiQuality: number) => reviewSchema.safeParse({
+    correctness: 10,
+    codeQuality: 8,
+    uiQuality,
+    instructionFollowing: 9,
+    comment: "Useful result",
+  });
 
-    expect(result.success).toBe(false);
+  it("accepts zero as a criterion that was not applied", () => {
+    expect(review(0).success).toBe(true);
+  });
+
+  it("rejects scores outside the scale", () => {
+    expect(review(-1).success).toBe(false);
+    expect(review(11).success).toBe(false);
   });
 });

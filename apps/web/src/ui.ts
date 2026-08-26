@@ -233,13 +233,30 @@ export type ReviewScores = {
   instruction_following: number;
 };
 
+/** Скорость генерации сравнима только вместе с контекстом и профилем, при которых её измерили. */
+export function measurementConditions(profile?: { name: string; parameters: { context: number | "auto" } }) {
+  if (!profile) return undefined;
+  const context = profile.parameters.context === "auto" ? "контекст авто" : `контекст ${Math.round(profile.parameters.context / 1024)}k`;
+  return `${context} · профиль ${profile.name}`;
+}
+
 export function reviewTotal(review: ReviewScores) {
   return review.correctness + review.code_quality + review.ui_quality + review.instruction_following;
 }
 
+/** Ноль означает, что критерий не применялся: он не должен утягивать сумму вниз. */
+export function reviewPossible(review: ReviewScores) {
+  return review.ui_quality === 0 ? 30 : 40;
+}
+
 export function reviewSummary(reviews: Array<ReviewScores | undefined>, total: number) {
   const saved = reviews.filter((review): review is ReviewScores => Boolean(review));
-  return { earned: saved.reduce((sum, review) => sum + reviewTotal(review), 0), possible: saved.length * 40, reviewed: saved.length, total };
+  return {
+    earned: saved.reduce((sum, review) => sum + reviewTotal(review), 0),
+    possible: saved.reduce((sum, review) => sum + reviewPossible(review), 0),
+    reviewed: saved.length,
+    total,
+  };
 }
 
 export function formatReviewSummary(summary?: ReturnType<typeof reviewSummary>) {
@@ -311,9 +328,9 @@ export function runModelName(run: { model_id: string; snapshot_json: string | nu
   return run.model_id.slice(0, 8);
 }
 
-export function runListScore(run: { review_score?: number | null; reviewed_count?: number; task_count?: number }) {
+export function runListScore(run: { review_score?: number | null; review_possible?: number | null; reviewed_count?: number; task_count?: number }) {
   if (!run.reviewed_count) return "Не оценено";
-  return `${run.review_score ?? 0}/${run.reviewed_count * 40}`;
+  return `${run.review_score ?? 0}/${run.review_possible ?? run.reviewed_count * 40}`;
 }
 
 export function ompModeLabel(useOmpAgent: number) {

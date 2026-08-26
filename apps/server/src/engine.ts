@@ -498,14 +498,8 @@ export class BenchmarkEngine {
       appendFileSync(log, `gpu=${gpu.name} usedMiB=${gpu.usedMiB} freeMiB=${gpu.freeMiB}\n`);
       const reserveMiB = profile.parameters.fitTargetMiB ?? this.config.defaults.vramReserveMiB;
       if (profile.parameters.fit && gpu.freeMiB < reserveMiB) throw new Error(`Configured VRAM reserve was not preserved (${gpu.freeMiB}/${reserveMiB} MiB)`);
-      const calibrated = this.store.createExecutionProfile({
-        modelId: profile.modelId,
-        name: profile.name,
-        parameters: profile.parameters,
-        ggufSha256: profile.ggufSha256,
-        calibrated: true,
-      });
-      return { profile: calibrated, gpu };
+      // ponytail: проверка не меняет параметры, поэтому отмечаем текущую ревизию, а не плодим новую.
+      return { profile: this.store.markProfileCalibrated(profile.id), gpu };
     } catch (error) {
       appendFileSync(log, `${(error as Error).message}\n`);
       throw error;
