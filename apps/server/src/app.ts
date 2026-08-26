@@ -26,6 +26,7 @@ import { assertWorkspaceCommit, workspaceVersionDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
+import { readGgufFacts } from "./gguf.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ArenaStore } from "./store.js";
@@ -271,7 +272,15 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/benchmarks", async () => store.listBenchmarks());
   app.post("/api/benchmarks", async (request, reply) => reply.code(201).send(store.createBenchmark(parse(createBenchmarkSchema, request.body))));
 
-  app.get("/api/models", async () => store.listModels());
+  app.get("/api/models", async () => store.listModels().map((model) => {
+    if (model.kind !== "local-gguf" || !model.path) return model;
+    try {
+      const { sizeBytes, expertCount } = readGgufFacts(model.path);
+      return { ...model, sizeBytes, expertCount };
+    } catch {
+      return model;
+    }
+  }));
   app.get("/api/model-catalog", async () => loadModelCatalog());
   app.post("/api/models", async (request, reply) => reply.code(201).send(store.createModel(parse(createModelSchema, request.body))));
   app.patch<{ Params: { id: string } }>("/api/models/:id", async (request) => {

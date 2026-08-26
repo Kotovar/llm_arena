@@ -1,9 +1,11 @@
 import { lstatSync, readdirSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
+import { readGgufFacts } from "./gguf.js";
 
 export type LocalModelFile = {
   filename: string;
   sizeBytes: number;
+  expertCount: number;
   connectedModelId: string | null;
 };
 
@@ -20,7 +22,8 @@ export function listLocalModelFiles(directory: string, connectedModels: Readonly
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".gguf"))
     .map((entry) => {
       const path = resolveLocalModelFile(directory, entry.name);
-      return { filename: entry.name, sizeBytes: lstatSync(path).size, connectedModelId: connectedModels.get(path) ?? null };
+      const facts = readGgufFacts(path);
+      return { filename: entry.name, sizeBytes: facts.sizeBytes, expertCount: facts.expertCount, connectedModelId: connectedModels.get(path) ?? null };
     })
     .sort((left, right) => left.filename.localeCompare(right.filename, undefined, { sensitivity: "base" }));
 }

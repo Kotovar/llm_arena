@@ -44,6 +44,8 @@ export type Model = {
   alias: string | null;
   capabilities: { toolUse: boolean; vision: boolean; reasoning: boolean };
   mmprojPath: string | null;
+  sizeBytes?: number;
+  expertCount?: number;
 };
 
 export type LlamaParameters = {
@@ -70,7 +72,7 @@ export type Profile = {
   parameters: LlamaParameters;
 };
 
-export type LocalModelFile = { filename: string; sizeBytes: number; connectedModelId: string | null };
+export type LocalModelFile = { filename: string; sizeBytes: number; expertCount: number; connectedModelId: string | null };
 export type AppSettings = {
   modelDirectory: string;
   externalModelId: string | null;

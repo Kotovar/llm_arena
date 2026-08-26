@@ -174,7 +174,8 @@ dl { margin: 0; }dl div { display: grid; grid-template-columns: 130px 1fr; paddi
 .model-drag-handle:active { cursor: grabbing; }
 .model-card-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
 .model-card-copy > strong { font-size: 15px; }
-.model-card-copy > span:last-child { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.model-card-copy > span:not(.mono) { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.model-card-facts { font-size: 12px; }
 .model-card-state { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .expand-label { color: var(--signal); font: 500 12px Inter, ui-sans-serif, system-ui, sans-serif; }
 .model-card-content { padding: 0 15px 15px; border-top: 1px solid var(--line); }

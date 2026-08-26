@@ -7,6 +7,14 @@ import { chooseRunner, defaultLocalProfile, formatDuration, latestProfiles, visi
 
 type Capabilities = Model["capabilities"];
 
+/** Компактная подпись к GGUF: размер файла и тип архитектуры. */
+export function ggufSummary(sizeBytes?: number, expertCount?: number): string {
+  const parts: string[] = [];
+  if (sizeBytes) parts.push(`${(sizeBytes / 1024 ** 3).toFixed(1)} GiB`);
+  if (expertCount !== undefined) parts.push(expertCount > 0 ? `MoE, ${expertCount} экспертов` : "dense");
+  return parts.join(" · ");
+}
+
 export function moveModel<T extends { id: string }>(models: readonly T[], modelId: string, targetId: string): T[] {
   const source = models.findIndex((model) => model.id === modelId);
   const target = models.findIndex((model) => model.id === targetId);
@@ -158,7 +166,7 @@ export function ModelsPage() {
           <label className="span-2">GGUF-файл
             <select value={filename} onChange={(event) => { const next = event.currentTarget.value; setFilename(next); if (!nameTouched) setLocalName(next.replace(/\.gguf$/iu, "")); }} required>
               <option value="">Выберите файл из {settings.data?.modelDirectory ?? "каталога моделей"}</option>
-              {files.data?.map((file) => <option key={file.filename} value={file.filename} disabled={Boolean(file.connectedModelId)}>{file.filename}{file.connectedModelId ? " · уже подключена" : ` · ${(file.sizeBytes / 1024 ** 3).toFixed(1)} GiB`}</option>)}
+              {files.data?.map((file) => <option key={file.filename} value={file.filename} disabled={Boolean(file.connectedModelId)}>{file.filename} · {ggufSummary(file.sizeBytes, file.expertCount)}{file.connectedModelId ? " · уже подключена" : ""}</option>)}
             </select>
             <small>Путь не вводится вручную: сервер проверяет файл и не разрешает выход из настроенной папки.</small>
           </label>
@@ -206,7 +214,7 @@ export function ModelsPage() {
         const runner = chooseRunner(model, ["prompt"], runners.data ?? []);
         const checking = testModel.isPending && testModel.variables?.modelId === model.id;
         const modelProfiles = visibleProfiles.filter((profile) => profile.modelId === model.id);
-        return <details className={draggedModelId === model.id ? "model-card dragging" : "model-card"} key={model.id} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", model.id); setDraggedModelId(model.id); }} onDragEnd={() => setDraggedModelId(null)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); const draggedId = draggedModelId ?? event.dataTransfer.getData("text/plain"); if (draggedId && draggedId !== model.id) reorder.mutate(moveModel(models.data ?? [], draggedId, model.id).map((item) => item.id)); setDraggedModelId(null); }}><summary className="model-card-summary"><span className="model-drag-handle" role="img" aria-label="Перетащите модель, чтобы изменить порядок" title="Перетащите, чтобы изменить порядок">⠿</span><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
+        return <details className={draggedModelId === model.id ? "model-card dragging" : "model-card"} key={model.id} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", model.id); setDraggedModelId(model.id); }} onDragEnd={() => setDraggedModelId(null)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); const draggedId = draggedModelId ?? event.dataTransfer.getData("text/plain"); if (draggedId && draggedId !== model.id) reorder.mutate(moveModel(models.data ?? [], draggedId, model.id).map((item) => item.id)); setDraggedModelId(null); }}><summary className="model-card-summary"><span className="model-drag-handle" role="img" aria-label="Перетащите модель, чтобы изменить порядок" title="Перетащите, чтобы изменить порядок">⠿</span><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span>{model.kind === "local-gguf" && model.sizeBytes ? <span className="model-card-facts">{ggufSummary(model.sizeBytes, model.expertCount)}</span> : null}</span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
           <form className="model-rename" onSubmit={(event) => submitRename(event, model.id)}><label>Название в результатах<input name="name" defaultValue={model.name} required /></label><button className="primary" disabled={rename.isPending && rename.variables?.modelId === model.id}>{rename.isPending && rename.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить название"}</button></form>
           {rename.error && rename.variables?.modelId === model.id ? <p className="error">{rename.error.message}</p> : null}
           {model.kind === "local-gguf" ? <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} /> : null}
