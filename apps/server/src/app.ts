@@ -31,6 +31,7 @@ import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { parseOmpOutput } from "./runners/parsers.js";
+import { readGpuInfo } from "./system-metrics.js";
 
 type EngineLike = {
   wake(): void;
@@ -222,6 +223,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     llamaServer: config.llamaServer.executable,
     nvidiaSmi: config.nvidiaSmi,
   }));
+  app.get("/api/gpu", async () => {
+    try {
+      return readGpuInfo(config.nvidiaSmi);
+    } catch {
+      return null;
+    }
+  });
   app.get("/api/settings", async () => ({
     modelDirectory: effectiveModelDirectory(),
     externalModelId: store.getSetting("externalModelId") || null,
@@ -359,6 +367,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         const model = store.getModel(run.model_id);
         const { artifactPath, baselineSha: _, resultJson, ...selectedVersion } = selected;
         const metrics = galleryMetrics(resultJson);
+        const usedFollowups = taskRun.followups.filter((followup) => followup.position <= selectedVersion.index);
         return [{
           taskRunId: taskRun.id,
           runId: run.id,
@@ -374,6 +383,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           useOmpAgent: run.use_omp_agent === 1,
           featured: featured.has(taskRun.id),
           selectedVersion,
+          followupPrompts: usedFollowups.map((followup) => followup.prompt),
           screenshotUrl: existsSync(join(artifactPath, "preview.png"))
             ? `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(selected.resultSha)}`
             : null,

@@ -140,6 +140,7 @@ export type GalleryResult = {
   useOmpAgent?: boolean;
   featured?: boolean;
   selectedVersion: ResultVersion;
+  followupPrompts?: string[];
   screenshotUrl: string | null;
   metrics?: GalleryMetrics;
 };

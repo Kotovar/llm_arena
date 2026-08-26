@@ -147,7 +147,7 @@ export function ModelsPage() {
 
   const cloudOptions = cloudProvider === "anthropic" ? catalog.data?.claude.models ?? [] : cloudProvider === "openai" ? catalog.data?.codex.models ?? [] : [];
   const visibleProfiles = latestProfiles(profiles.data ?? []);
-  return <Page title="Подключённые модели" eyebrow="Модели" intro="Локальные GGUF выбираются из доверенной папки. Автоматический профиль подгоняет загрузку под GPU через встроенный fit llama.cpp.">
+  return <Page title="Подключённые модели" eyebrow="Модели" intro="Локальные GGUF берутся из доверенной папки. Автопрофиль сам подбирает загрузку под вашу GPU.">
     <div className="model-kind-tabs" role="group" aria-label="Тип подключения">
       <button className={kind === "local-gguf" ? "active" : ""} onClick={() => setKind("local-gguf")}>Локальные GGUF</button>
       <button className={kind === "cloud" ? "active" : ""} onClick={() => setKind("cloud")}>Облачные CLI</button>
@@ -177,16 +177,18 @@ export function ModelsPage() {
             <label className={profileMode === "auto" ? "selected" : ""}><input type="radio" checked={profileMode === "auto"} onChange={() => setProfileMode("auto")} /><strong>Автоматически</strong><small>Максимум GPU с резервом 750 MiB, контекст не ниже 100 000, Flash Attention и GPU-слои подбирает llama.cpp.</small></label>
             <label className={profileMode === "manual" ? "selected" : ""}><input type="radio" checked={profileMode === "manual"} onChange={() => setProfileMode("manual")} /><strong>Вручную</strong><small>Точные параметры для сравнения или переноса в другую связку.</small></label>
           </fieldset>
-          {profileMode === "manual" ? <details className="manual-profile span-2" open><summary>Ручные параметры llama.cpp</summary><div className="form-grid">
-            <label>Контекст<input name="context" type="number" min="100000" step="1024" defaultValue="100000" required /><small>Размер контекста в токенах. Не меньше 100 000; больше — выше расход VRAM.</small></label>
-            <label>GPU-слои<input name="nGpuLayers" defaultValue="all" pattern="all|[0-9]+" required /><small><code>all</code> — все возможные, либо точное число.</small></label>
-            <label>MoE-слои на CPU<input name="nCpuMoe" type="number" min="0" placeholder="не задавать" /><small>Только для MoE. Чем больше, тем меньше VRAM и ниже скорость.</small></label>
-            <label>Flash Attention<select name="flashAttention" defaultValue="auto"><option value="auto">Автоматически</option><option value="on">Включить</option><option value="off">Выключить</option></select></label>
-            <label>K-cache<select name="cacheTypeK" defaultValue="q8_0"><option>q8_0</option><option>q4_0</option><option>f16</option></select><small>q8_0 — качественный баланс памяти.</small></label>
-            <label>V-cache<select name="cacheTypeV" defaultValue="q8_0"><option>q8_0</option><option>q4_0</option><option>f16</option></select></label>
-            <label>Batch<input name="batchSize" type="number" min="1" defaultValue="1024" required /><small>Логический размер обработки промпта.</small></label>
-            <label>Micro-batch<input name="ubatchSize" type="number" min="1" defaultValue="512" required /><small>Физический пакет; уменьшите при нехватке VRAM.</small></label>
-            <label>Повторное использование KV<input name="cacheReuse" type="number" min="0" defaultValue="256" required /><small>Сколько токенов кеша пытаться переиспользовать.</small></label>
+          {profileMode === "manual" ? <details className="manual-profile span-2" open><summary>Ручные параметры llama.cpp</summary>
+            <p className="type-hint">Не хватает VRAM? Понижайте по порядку: точность KV-кеша до <code>q4_0</code>, затем micro-batch, затем контекст. Слои на CPU трогайте последними — они сильнее всего бьют по скорости.</p>
+            <div className="form-grid">
+            <label>Контекст, токенов<input name="context" type="number" min="100000" step="1024" defaultValue="100000" required /><small>Сколько текста модель удерживает за один запуск. Больше контекст — больше VRAM под кеш. Минимум 100 000.</small></label>
+            <label>Слои на видеокарте<input name="nGpuLayers" defaultValue="all" pattern="all|[0-9]+" required /><small><code>all</code> — вся модель в VRAM, самый быстрый вариант. Число — столько слоёв на GPU, остальное считает процессор: влезет в память, но медленнее.</small></label>
+            <label>Точность K-кеша<select name="cacheTypeK" defaultValue="q8_0"><option>q8_0</option><option>q4_0</option><option>f16</option></select><small>KV-кеш — это память внимания, после весов он главный потребитель VRAM. <code>q8_0</code> — вдвое меньше <code>f16</code> почти без потерь, обычно лучший выбор.</small></label>
+            <label>Точность V-кеша<select name="cacheTypeV" defaultValue="q8_0"><option>q8_0</option><option>q4_0</option><option>f16</option></select><small>Вторая половина того же кеша. Держите наравне с K; <code>q4_0</code> экономит ещё вдвое, но на длинном контексте ответы могут поплыть.</small></label>
+            <label>Micro-batch<input name="ubatchSize" type="number" min="1" defaultValue="512" required /><small>Сколько токенов промпта считается за один физический проход. Это пиковый расход VRAM при чтении промпта — уменьшайте первым при нехватке памяти.</small></label>
+            <label>Batch<input name="batchSize" type="number" min="1" defaultValue="1024" required /><small>Логический размер порции промпта, кратный micro-batch. На память влияет слабо, на скорость чтения — заметно.</small></label>
+            <label>Flash Attention<select name="flashAttention" defaultValue="auto"><option value="auto">Автоматически</option><option value="on">Включить</option><option value="off">Выключить</option></select><small>Экономный алгоритм внимания: быстрее и меньше памяти на длинном контексте. «Автоматически» — решает llama.cpp по вашей видеокарте.</small></label>
+            <label>Переиспользование KV, токенов<input name="cacheReuse" type="number" min="0" defaultValue="256" required /><small>Сколько токенов из прошлого запроса брать из кеша вместо повторного расчёта. Ускоряет уточнения, <code>0</code> — считать каждый раз заново.</small></label>
+            <label>Экспертные слои на CPU<input name="nCpuMoe" type="number" min="0" placeholder="не переносить" /><small>Только для MoE-моделей. Переносит часть экспертов в оперативную память: освобождает VRAM ценой скорости. Пусто — всё на видеокарте.</small></label>
           </div></details> : null}
           <button className="primary span-2" disabled={createLocal.isPending || !filename || (localCapabilities.vision && !localMmprojFilename)}>{createLocal.isPending ? "Подключаем…" : "Подключить модель"}</button>
           {files.error ? <p className="error span-2">Не удалось прочитать папку: {files.error.message}. Изменить путь можно в Настройках.</p> : null}

@@ -42,7 +42,7 @@ export function ComparePage() {
   const label = (run: Run) => `${runModelName(run, models.data ?? [])} · ${runners.data?.find((runner) => runner.id === run.runner_id)?.name ?? run.runner_id} · ${formatRelativeTime(run.created_at)}`;
   const runScore = (run?: Run) => formatReviewSummary(run ? reviewSummary(run.taskRuns?.map((task) => task.review) ?? [], run.taskRuns?.length ?? 0) : undefined);
 
-  return <Page title="Сравнение результатов" eyebrow="Сравнение" intro="Промпты сопоставляются по сохранённой версии, поэтому разный порядок и частично разные наборы не искажают сравнение.">
+  return <Page title="Сравнение результатов" eyebrow="Сравнение" intro="Промпты сопоставляются по сохранённой версии — разный порядок и разные наборы сравнению не мешают.">
     {preview ? <ResultPreview url={preview.url} onClose={() => stopPreview.mutate()} closing={stopPreview.isPending} title="Предпросмотр результата" /> : null}
     {startPreview.error ? <p className="error">{startPreview.error.message}</p> : null}
     <div className="compare-pickers"><select value={left} onChange={(event) => setLeft(event.currentTarget.value)} aria-label="Первый запуск"><option value="">Первый запуск</option>{completed.map((run) => <option key={run.id} value={run.id} disabled={run.id === right}>{label(run)}</option>)}</select><span>и</span><select value={right} onChange={(event) => setRight(event.currentTarget.value)} aria-label="Второй запуск"><option value="">Второй запуск</option>{completed.map((run) => <option key={run.id} value={run.id} disabled={run.id === left}>{label(run)}</option>)}</select></div>

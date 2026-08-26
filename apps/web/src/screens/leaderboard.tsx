@@ -5,7 +5,7 @@ export function LeaderboardPage() {
   const leaderboard = useData<LeaderboardEntry[]>("leaderboard", "/leaderboard");
   const ranked = leaderboard.data?.filter((entry) => entry.avgScore !== null) ?? [];
   const unranked = leaderboard.data?.filter((entry) => entry.avgScore === null) ?? [];
-  return <Page title="Лидерборд моделей" eyebrow="Лидерборд" intro="Средний балл считается по оценённым промптам во всех запусках модели (до 40 баллов за промпт).">
+  return <Page title="Лидерборд моделей" eyebrow="Лидерборд" intro="Средний балл по оценённым промптам во всех запусках модели — максимум 40 за промпт.">
     {leaderboard.isPending ? <Empty>Считаем результаты…</Empty> : null}
     {leaderboard.error ? <p className="error">{leaderboard.error.message}</p> : null}
     {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length ? <Empty>Пока нет ни одного запуска.</Empty> : null}
