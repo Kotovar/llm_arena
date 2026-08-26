@@ -172,7 +172,7 @@ const reviewCriteria = [
 ] as const;
 
 /** У текстового ответа нечего оценивать визуально, поэтому критерий выпадает вместе со своими десятью баллами. */
-function criteriaForKind(kind: "prompt" | "coding"): ReadonlyArray<readonly [keyof Omit<ReviewDraft, "comment">, string]> {
+export function criteriaForKind(kind: "prompt" | "coding"): ReadonlyArray<readonly [keyof Omit<ReviewDraft, "comment">, string]> {
   return kind === "coding" ? reviewCriteria : reviewCriteria.filter(([key]) => key !== "uiQuality");
 }
 
@@ -212,7 +212,7 @@ function FollowupResult({ followup, cancelPending, onCancel }: { followup: Follo
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
 
-function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { taskRun: TaskRun; runId: string; preview: PreviewState | undefined; onPreview: (preview: PreviewState | undefined) => void }) {
+export function TaskResult({ taskRun, runId, preview: activePreview, onPreview }: { taskRun: TaskRun; runId: string; preview: PreviewState | undefined; onPreview: (preview: PreviewState | undefined) => void }) {
   const client = useQueryClient();
   const snapshot = JSON.parse(taskRun.snapshot_json) as { task: Task["currentRevision"]; fixture?: Fixture; profile?: { name: string; parameters: { context: number | "auto" } } };
   const versions = resultVersions(taskRun);
