@@ -38,7 +38,8 @@ a { color: var(--signal); text-decoration: none; }
 .activity small { color: var(--muted); font-size: 11px; }
 .activity + .host { margin-top: 0; }
 .host { display: grid; gap: 7px; margin: auto 6px 0; color: var(--muted); font: 12px ui-monospace, monospace; }.host > span:last-child { color: #c0c8d8; }.pulse { display: inline-block; width: 7px; height: 7px; background: var(--good); border-radius: 50%; margin-right: 8px; box-shadow: 0 0 10px var(--good); }
-.content { min-width: 0; width: 100%; max-width: 1720px; margin: 0 auto; padding: 46px 52px 88px; }
+/* Не центрируем: у галереи предела ширины нет, и при центровке остальных страниц левый край скакал бы при переходе между разделами. */
+.content { min-width: 0; width: 100%; max-width: 1720px; padding: 46px 52px 88px; }
 .page-head { max-width: 800px; margin-bottom: 32px; padding-bottom: 24px; border-bottom: 1px solid rgba(66, 83, 121, .55); }.page-head > span, .mono { color: var(--muted); font: 500 12px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .02em; }.page-head h1 { font: 640 clamp(28px, 3vw, 38px)/1.12 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -.022em; margin: 6px 0 10px; }.page-head p { color: var(--muted); max-width: 700px; line-height: 1.6; }
 .panel { min-width: 0; border: 1px solid var(--line); border-radius: 14px; background: linear-gradient(145deg, rgba(27, 37, 60, .96), rgba(17, 25, 43, .98)); padding: 20px; box-shadow: 0 18px 42px rgba(4, 7, 15, .12); }.panel-head { display: flex; justify-content: space-between; align-items: center; gap: 15px; margin-bottom: 18px; }.panel-head h2 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }.panel-head > span, .panel-head > div { display: flex; gap: 8px; align-items: center; }
 .panel-actions > a { padding: 8px 13px; color: #d7dceb; border: 1px solid var(--line-strong); border-radius: 10px; font-size: 13px; }
