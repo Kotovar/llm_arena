@@ -137,7 +137,7 @@ export const createExecutionProfileSchema = z.object({
 });
 
 export const createRunSchema = z.object({
-  taskRevisionIds: z.array(z.string().uuid()).min(1),
+  taskRevisionIds: z.array(z.string().uuid()).min(1).refine((ids) => new Set(ids).size === ids.length, "Prompts must be unique"),
   modelId: z.string().uuid(),
   executionProfileId: z.string().uuid().nullable(),
   runnerId: z.string().trim().min(1),
@@ -180,12 +180,13 @@ export const normalizedRunResultSchema = z.object({
   metrics: normalizedMetricsSchema,
 });
 
-// 0 — критерий не применялся к этой задаче (например, визуал у текстового ответа).
-const scoreSchema = z.number().int().min(0).max(10);
+const scoreSchema = z.number().int().min(1).max(10);
+// Ноль допустим только здесь и означает «критерий не применялся»: у текстового ответа нечего оценивать визуально.
+const visualScoreSchema = z.number().int().min(0).max(10);
 export const reviewSchema = z.object({
   correctness: scoreSchema,
   codeQuality: scoreSchema,
-  uiQuality: scoreSchema,
+  uiQuality: visualScoreSchema,
   instructionFollowing: scoreSchema,
   comment: z.string().trim().max(10_000).default(""),
 });

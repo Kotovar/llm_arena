@@ -15,7 +15,7 @@ export function installDialogSupport(): void {
   dialog.close = function close(this: HTMLDialogElement) { this.open = false; this.dispatchEvent(new Event("close")); };
 }
 
-export async function renderInApp(ui: ReactNode): Promise<RenderResult> {
+export async function renderInApp(ui: ReactNode, path = "/"): Promise<RenderResult & { client: QueryClient }> {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -28,13 +28,16 @@ export async function renderInApp(ui: ReactNode): Promise<RenderResult> {
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([indexRoute]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    history: createMemoryHistory({ initialEntries: [path] }),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await router.load();
-  return render(
-    <QueryClientProvider client={client}>
-      <ToastProvider><RouterProvider router={router as never} /></ToastProvider>
-    </QueryClientProvider>,
-  );
+  return {
+    client,
+    ...render(
+      <QueryClientProvider client={client}>
+        <ToastProvider><RouterProvider router={router as never} /></ToastProvider>
+      </QueryClientProvider>,
+    ),
+  };
 }

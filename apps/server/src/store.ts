@@ -239,10 +239,16 @@ function migrate(sqlite: DatabaseSync): void {
       SELECT benchmark_run_id, task_revision_id, position FROM task_runs
       WHERE benchmark_run_id NOT IN (SELECT run_id FROM run_tasks)
     `);
-    sqlite.exec("ALTER TABLE benchmark_runs DROP COLUMN benchmark_revision_id");
-    sqlite.exec("DROP TABLE IF EXISTS benchmark_revision_tasks");
-    sqlite.exec("DROP TABLE IF EXISTS benchmark_revisions");
-    sqlite.exec("DROP TABLE IF EXISTS benchmarks");
+    // Одной транзакцией: колонка-признак должна исчезать вместе с таблицами, иначе повторный
+    // запуск миграции их уже не увидит и мусор останется навсегда.
+    sqlite.exec(`
+      BEGIN;
+      ALTER TABLE benchmark_runs DROP COLUMN benchmark_revision_id;
+      DROP TABLE IF EXISTS benchmark_revision_tasks;
+      DROP TABLE IF EXISTS benchmark_revisions;
+      DROP TABLE IF EXISTS benchmarks;
+      COMMIT;
+    `);
   }
   const taskRunColumns = sqlite.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>;
   if (!taskRunColumns.some((column) => column.name === "selected_followup_id")) {

@@ -156,6 +156,16 @@ describe("run configuration", () => {
     expect(parsed.useOmpAgent).toBe(false);
   });
 
+  it("rejects the same prompt twice", () => {
+    expect(createRunSchema.safeParse({
+      taskRevisionIds: ["2d2b5de7-7469-48a7-b625-2ff4509fa8a7", "2d2b5de7-7469-48a7-b625-2ff4509fa8a7"],
+      modelId: "62c2acc6-bc4f-4e01-ae65-3cf124d76219",
+      executionProfileId: null,
+      runnerId: "codex-proxy",
+      resultMode: "text",
+    }).success).toBe(false);
+  });
+
   it("requires at least one prompt", () => {
     expect(createRunSchema.safeParse({
       taskRevisionIds: [],
@@ -195,5 +205,12 @@ describe("human review", () => {
   it("rejects scores outside the scale", () => {
     expect(review(-1).success).toBe(false);
     expect(review(11).success).toBe(false);
+  });
+
+  it("allows the not-applied zero only for the visual criterion", () => {
+    const base = { correctness: 10, codeQuality: 8, uiQuality: 7, instructionFollowing: 9, comment: "" };
+    expect(reviewSchema.safeParse({ ...base, correctness: 0 }).success).toBe(false);
+    expect(reviewSchema.safeParse({ ...base, codeQuality: 0 }).success).toBe(false);
+    expect(reviewSchema.safeParse({ ...base, instructionFollowing: 0 }).success).toBe(false);
   });
 });

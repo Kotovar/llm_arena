@@ -146,6 +146,33 @@ describe("run prompts", () => {
 });
 
 describe("run queue", () => {
+  it("removes the legacy benchmark tables together with the column", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-legacy-drop-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const sqlite = new DatabaseSync(filename);
+    sqlite.exec(`
+      CREATE TABLE benchmark_runs (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, benchmark_revision_id TEXT NOT NULL,
+        model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, status TEXT NOT NULL,
+        snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL,
+        result_mode TEXT NOT NULL DEFAULT 'web', model_ref TEXT, reasoning_effort TEXT
+      );
+      CREATE TABLE benchmarks (id TEXT PRIMARY KEY, current_revision_id TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE benchmark_revisions (id TEXT PRIMARY KEY, benchmark_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, content_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE benchmark_revision_tasks (benchmark_revision_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL);
+    `);
+    sqlite.close();
+
+    const store = createStore(filename);
+    const inspect = new DatabaseSync(filename, { readOnly: true });
+    const left = inspect.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'benchmark%'").all() as Array<{ name: string }>;
+
+    expect(left.map((row) => row.name)).toEqual(["benchmark_runs"]);
+    inspect.close();
+    store.close();
+  });
+
   it("moves benchmark prompt links onto the runs themselves", () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-benchmark-"));
     directories.push(directory);

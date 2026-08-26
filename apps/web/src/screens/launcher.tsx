@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { Page, Panel, Status, useData } from "../shell.js";
 import type { Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
@@ -17,6 +17,7 @@ export function Launcher() {
   const [modelId, setModelId] = useState("");
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[] | null>(null);
   const requested = useSearch({ from: "/" });
+  const appliedTask = useRef<string | undefined>(undefined);
   const [resultMode, setResultMode] = useState<"text" | "web">(requested.mode === "text" ? "text" : "web");
   const [runnerOverride, setRunnerOverride] = useState("");
   const [useOmpAgent, setUseOmpAgent] = useState(true);
@@ -25,7 +26,11 @@ export function Launcher() {
   useEffect(() => {
     if (!tasks.data) return;
     // Приходим из результата с «повторить на другой модели»: оставляем только этот промпт.
-    const repeated = requested.task ? tasks.data.find((task) => task.id === requested.task) : undefined;
+    // Применяем один раз на значение: рефетч tasks не должен стирать то, что пользователь выбрал потом.
+    const repeated = requested.task && appliedTask.current !== requested.task
+      ? tasks.data.find((task) => task.id === requested.task)
+      : undefined;
+    appliedTask.current = requested.task;
     if (repeated) { setSelectedTaskIds([repeated.currentRevision.id]); return; }
     setSelectedTaskIds((current) => initializeTaskSelection(current, tasks.data!.map((task) => task.currentRevision.id)));
   }, [tasks.data, requested.task]);

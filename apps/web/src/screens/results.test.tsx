@@ -134,6 +134,24 @@ describe("журнал", () => {
   });
 });
 
+describe("журнал: кэш", () => {
+  it("перечитывает поток при повторном открытии", async () => {
+    const user = userEvent.setup();
+    let body = "первый хвост";
+    fetchMock.mockImplementation(async () => new Response(body, { status: 200 }));
+    await renderResult();
+
+    await user.click(screen.getByRole("button", { name: "Сырые логи" }));
+    expect(await screen.findByText("первый хвост")).toBeDefined();
+    await user.click(screen.getByRole("button", { name: "Закрыть журнал" }));
+
+    body = "второй хвост";
+    await user.click(screen.getByRole("button", { name: "Сырые логи" }));
+
+    expect(await screen.findByText("второй хвост")).toBeDefined();
+  });
+});
+
 describe("условия замера", () => {
   it("подписывает скорость контекстом и профилем", async () => {
     await renderResult();

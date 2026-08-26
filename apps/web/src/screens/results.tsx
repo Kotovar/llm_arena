@@ -150,7 +150,8 @@ function ChecksStrip({ result }: { result: Record<string, unknown> | undefined }
 
 function LogDialog({ title, endpoint, onClose }: { title: string; endpoint: string; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const logs = useQuery({ queryKey: ["log-dialog", endpoint], queryFn: () => apiText(endpoint), staleTime: Infinity });
+  // Лог — снимок на момент открытия: кэш между открытиями показал бы устаревший хвост.
+  const logs = useQuery({ queryKey: ["log-dialog", endpoint], queryFn: () => apiText(endpoint), staleTime: 0, gcTime: 0 });
   useEffect(() => { if (dialog.current && !dialog.current.open) dialog.current.showModal(); }, []);
   return <dialog className="gallery-dialog log-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
     <header><div><span className="mono">Журнал</span><h2>{title}</h2></div><button type="button" className="dialog-close" aria-label="Закрыть журнал" onClick={() => dialog.current?.close()}>✕</button></header>
