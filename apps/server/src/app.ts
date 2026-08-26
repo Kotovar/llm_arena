@@ -57,6 +57,7 @@ const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict(
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
 const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
+const deleteRunsSchema = z.object({ runIds: z.array(z.string().uuid()).min(1) }).strict();
 const externalLauncherQuerySchema = z.object({
   profileName: z.string().trim().min(1),
   port: z.coerce.number().int().min(1).max(65535).default(8080),
@@ -476,13 +477,21 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     store.deleteRuns([run.id]);
     return reply.code(204).send();
   });
-  app.delete("/api/runs", async () => {
-    const terminal = store.listRuns().filter((run) =>
-      run.status !== "pending" && run.status !== "running" && !hasActiveFollowup(run.id));
-    const taskRunIds = terminal.flatMap((run) => store.listTaskRuns(run.id).map((taskRun) => taskRun.id));
+  // Удаление необратимо и уносит файлы запуска, поэтому список обязателен: без него один
+  // случайный DELETE стирал всю историю.
+  app.delete("/api/runs", async (request) => {
+    const { runIds } = parse(deleteRunsSchema, request.body);
+    const runs = runIds.map((id) => {
+      const run = store.getRun(id);
+      if (!run) throw new Error(`Run ${id} not found`);
+      if (run.status === "pending" || run.status === "running") throw new Error(`Run ${id.slice(0, 8)} must be cancelled before deletion`);
+      if (hasActiveFollowup(run.id)) throw new Error(`Run ${id.slice(0, 8)} has an active additional prompt`);
+      return run;
+    });
+    const taskRunIds = runs.flatMap((run) => store.listTaskRuns(run.id).map((taskRun) => taskRun.id));
     await preview?.removeTaskRunPreviews?.(taskRunIds);
-    for (const run of terminal) rmSync(resolve(config.dataDir, "runs", run.id), { recursive: true, force: true });
-    return { deleted: store.deleteRuns(terminal.map((run) => run.id)) };
+    for (const run of runs) rmSync(resolve(config.dataDir, "runs", run.id), { recursive: true, force: true });
+    return { deleted: store.deleteRuns(runs.map((run) => run.id)) };
   });
   app.post<{ Params: { id: string } }>("/api/runs/:id/cancel", async (request, reply) => {
     const run = store.getRun(request.params.id);

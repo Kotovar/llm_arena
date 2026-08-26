@@ -28,8 +28,8 @@ export function RunsPage() {
   const models = useData<Model[]>("models", "/models");
   const runners = useData<Runner[]>("runners", "/runners");
   const remove = useMutation({ mutationFn: (id: string) => api(`/runs/${id}`, { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["runs"] }) });
-  const clear = useMutation({ mutationFn: () => api<{ deleted: number }>("/runs", { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["runs"] }) });
-  const terminalCount = runs.data?.filter((run) => !runIsActive(run)).length ?? 0;
+  const clear = useMutation({ mutationFn: (runIds: string[]) => api<{ deleted: number }>("/runs", { method: "DELETE", body: JSON.stringify({ runIds }) }), onSuccess: () => client.invalidateQueries({ queryKey: ["runs"] }) });
+  const terminalIds = (runs.data ?? []).filter((run) => !runIsActive(run)).map((run) => run.id);
   const [modelFilter, setModelFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   // Модели-опции берём из самих запусков (через runModelName), а не из /models: отключённая
@@ -37,7 +37,7 @@ export function RunsPage() {
   const modelFilterOptions = [...new Map((runs.data ?? []).map((run) => [run.model_id, runModelName(run, models.data ?? [])] as const)).entries()].sort((a, b) => a[1].localeCompare(b[1], "ru"));
   const filtered = (runs.data ?? []).filter((run) => (!modelFilter || run.model_id === modelFilter) && (!statusFilter || (run.activityStatus ?? run.status) === statusFilter));
   function deleteRun(run: Run) { if (window.confirm(`Удалить результат запуска ${run.id.slice(0, 8)} и его файлы?`)) remove.mutate(run.id); }
-  return <Page title="Результаты запусков" eyebrow="История" intro="Здесь сохраняются ответы, изменения файлов, проверки и метрики каждого запуска."><Panel title={`Запусков: ${filtered.length} из ${runs.data?.length ?? 0}`} action={<button className="danger" disabled={!terminalCount || clear.isPending} onClick={() => { if (window.confirm(`Удалить все завершённые результаты (${terminalCount}) и их файлы?`)) clear.mutate(); }}>{clear.isPending ? "Очищаем…" : "Очистить все"}</button>}>
+  return <Page title="Результаты запусков" eyebrow="История" intro="Здесь сохраняются ответы, изменения файлов, проверки и метрики каждого запуска."><Panel title={`Запусков: ${filtered.length} из ${runs.data?.length ?? 0}`} action={<button className="danger" disabled={!terminalIds.length || clear.isPending} onClick={() => { if (window.confirm(`Удалить все завершённые результаты (${terminalIds.length}) и их файлы?`)) clear.mutate(terminalIds); }}>{clear.isPending ? "Очищаем…" : "Очистить все"}</button>}>
     <div className="run-filters"><select value={modelFilter} onChange={(event) => setModelFilter(event.currentTarget.value)} aria-label="Фильтр по модели"><option value="">Все модели</option>{modelFilterOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select><select value={statusFilter} onChange={(event) => setStatusFilter(event.currentTarget.value)} aria-label="Фильтр по статусу"><option value="">Любой статус</option>{runStatusOptions.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></div>
     <div className="run-list">{filtered.toReversed().map((run) => <RunRow key={run.id} run={run} models={models.data ?? []} runners={runners.data ?? []} onDelete={deleteRun} />)}{runs.data?.length && !filtered.length ? <Empty>Нет запусков по выбранному фильтру.</Empty> : null}{!runs.data?.length ? <Empty>Запусков пока нет. Выберите модель и промпт на главной странице.</Empty> : null}</div>{remove.error || clear.error ? <p className="error">{(remove.error ?? clear.error)?.message}</p> : null}</Panel></Page>;
 }

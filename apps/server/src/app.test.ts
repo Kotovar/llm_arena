@@ -559,7 +559,7 @@ describe("REST API", () => {
     store.close();
   });
 
-  it("bulk deletion keeps active runs", async () => {
+  it("bulk deletion needs an explicit list and keeps active runs", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-clear-"));
     directories.push(directory);
     const config = loadConfig("../../arena.config.yaml");
@@ -572,9 +572,14 @@ describe("REST API", () => {
     store.updateRunStatus(finished.id, "failed");
     const app = buildApp({ store, config });
 
-    const response = await app.inject({ method: "DELETE", url: "/api/runs" });
+    const response = await app.inject({ method: "DELETE", url: "/api/runs", payload: { runIds: [finished.id] } });
+    const refused = await app.inject({ method: "DELETE", url: "/api/runs", payload: { runIds: [active.id] } });
+    const withoutList = await app.inject({ method: "DELETE", url: "/api/runs" });
 
     expect(response.json()).toEqual({ deleted: 1 });
+    expect(refused.statusCode).toBe(400);
+    // Без явного списка удалять нечего: пустой запрос не должен стирать историю.
+    expect(withoutList.statusCode).toBe(400);
     expect(store.getRun(finished.id)).toBeUndefined();
     expect(store.getRun(active.id)?.status).toBe("pending");
     await app.close();
