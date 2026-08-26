@@ -76,7 +76,7 @@ function ActivityCard() {
   const [current, ...queued] = active;
   return <Link className="activity" to="/runs/$runId" params={{ runId: current!.id }}>
     <span className="activity-head"><i className="spinner" /><strong>{runModelName(current!, models.data ?? [])}</strong></span>
-    <span className="activity-meta">{statusLabel(current!.activityStatus ?? current!.status)}<Elapsed since={current!.started_at} /></span>
+    <span className="activity-meta"><span>{statusLabel(current!.activityStatus ?? current!.status)}</span><span><Elapsed since={current!.started_at} /></span></span>
     {queued.length ? <small>ещё {queued.length} в очереди</small> : null}
   </Link>;
 }
