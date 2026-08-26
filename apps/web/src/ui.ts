@@ -134,7 +134,7 @@ export function defaultLocalProfile(modelId: string) {
       cacheReuse: 256,
       fit: true,
       fitTargetMiB: 750,
-      fitContextMin: 4096,
+      fitContextMin: 100_000,
     },
   };
 }
@@ -154,7 +154,7 @@ export function modelOptionLabel(option: { id: string; name: string }) {
 
 export function reasoningEffortsForModel(model?: Pick<Model, "kind" | "capabilities">, cloudEfforts: string[] = []) {
   if (!model?.capabilities.reasoning) return [];
-  return model.kind === "local-gguf" ? ["minimal", "low", "medium", "high", "xhigh", "max"] : cloudEfforts;
+  return model.kind === "local-gguf" ? ["low", "medium", "xhigh"] : cloudEfforts;
 }
 
 export function visionProjectorFiles<T extends { filename: string }>(files: T[]) {

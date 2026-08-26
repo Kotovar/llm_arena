@@ -110,7 +110,7 @@ describe("интерфейс запуска", () => {
         flashAttention: "auto",
         fit: true,
         fitTargetMiB: 750,
-        fitContextMin: 4096,
+        fitContextMin: 100_000,
       },
     });
   });
@@ -131,7 +131,7 @@ describe("интерфейс запуска", () => {
 
   it("предлагает уровни обдумывания только моделям с этой возможностью", () => {
     expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: false } })).toEqual([]);
-    expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: true } })).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: true } })).toEqual(["low", "medium", "xhigh"]);
     expect(reasoningEffortsForModel({ kind: "cloud", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["low", "high"])).toEqual([]);
     expect(reasoningEffortsForModel({ kind: "cloud", capabilities: { toolUse: false, vision: false, reasoning: true } }, ["low", "high"])).toEqual(["low", "high"]);
   });

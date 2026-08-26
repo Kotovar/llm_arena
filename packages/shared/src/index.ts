@@ -97,7 +97,7 @@ export const updateModelCapabilitiesSchema = z.object({
 }).strict();
 
 export const llamaProfileSchema = z.object({
-  context: z.union([z.literal("auto"), z.number().int().positive()]),
+  context: z.union([z.literal("auto"), z.number().int().min(100_000)]),
   nGpuLayers: z.union([z.literal("auto"), z.literal("all"), z.number().int().nonnegative()]),
   nCpuMoe: z.number().int().nonnegative().optional(),
   cacheTypeK: z.string().min(1),
@@ -108,7 +108,7 @@ export const llamaProfileSchema = z.object({
   cacheReuse: z.number().int().nonnegative(),
   fit: z.boolean().optional(),
   fitTargetMiB: z.number().int().positive().optional(),
-  fitContextMin: z.number().int().positive().optional(),
+  fitContextMin: z.number().int().min(100_000).optional(),
   temperature: z.number().min(0).max(2).optional(),
   seed: z.number().int().optional(),
 }).superRefine((value, context) => {

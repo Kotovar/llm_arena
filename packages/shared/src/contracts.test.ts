@@ -43,7 +43,7 @@ describe("llama.cpp profile", () => {
       cacheReuse: 256,
       fit: true,
       fitTargetMiB: 750,
-      fitContextMin: 4096,
+      fitContextMin: 100_000,
     })).toMatchObject({ fit: true, context: "auto" });
   });
 
@@ -58,6 +58,19 @@ describe("llama.cpp profile", () => {
       flashAttention: "auto",
       cacheReuse: 256,
       fit: true,
+    }).success).toBe(false);
+  });
+
+  it("rejects a manual context below 100k", () => {
+    expect(llamaProfileSchema.safeParse({
+      context: 65_536,
+      nGpuLayers: "all",
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      batchSize: 1024,
+      ubatchSize: 512,
+      flashAttention: true,
+      cacheReuse: 256,
     }).success).toBe(false);
   });
 });

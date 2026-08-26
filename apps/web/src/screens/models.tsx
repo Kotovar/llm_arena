@@ -163,7 +163,7 @@ export function ModelsPage() {
             <label className={profileMode === "manual" ? "selected" : ""}><input type="radio" checked={profileMode === "manual"} onChange={() => setProfileMode("manual")} /><strong>Вручную</strong><small>Точные параметры для сравнения или переноса в другую связку.</small></label>
           </fieldset>
           {profileMode === "manual" ? <details className="manual-profile span-2" open><summary>Ручные параметры llama.cpp</summary><div className="form-grid">
-            <label>Контекст<input name="context" type="number" min="1024" step="1024" defaultValue="32768" required /><small>Размер контекста в токенах. Больше — выше расход VRAM.</small></label>
+            <label>Контекст<input name="context" type="number" min="100000" step="1024" defaultValue="100000" required /><small>Размер контекста в токенах. Не меньше 100 000; больше — выше расход VRAM.</small></label>
             <label>GPU-слои<input name="nGpuLayers" defaultValue="all" pattern="all|[0-9]+" required /><small><code>all</code> — все возможные, либо точное число.</small></label>
             <label>MoE-слои на CPU<input name="nCpuMoe" type="number" min="0" placeholder="не задавать" /><small>Только для MoE. Чем больше, тем меньше VRAM и ниже скорость.</small></label>
             <label>Flash Attention<select name="flashAttention" defaultValue="auto"><option value="auto">Автоматически</option><option value="on">Включить</option><option value="off">Выключить</option></select></label>

@@ -198,6 +198,91 @@ describe("run queue", () => {
 });
 
 describe("execution profiles and task results", () => {
+  it("upgrades a legacy automatic profile to a 100k fit context without rewriting history", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-profile-upgrade-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const firstStore = createStore(filename);
+    const model = firstStore.createModel({
+      name: "Qwen",
+      kind: "local-gguf",
+      provider: "llama.cpp",
+      modelRef: "qwen",
+      path: "/models/qwen.gguf",
+      alias: "qwen",
+    });
+    firstStore.createExecutionProfile({
+      modelId: model.id,
+      name: "Automatic",
+      parameters: {
+        context: "auto",
+        nGpuLayers: "auto",
+        cacheTypeK: "q8_0",
+        cacheTypeV: "q8_0",
+        batchSize: 1024,
+        ubatchSize: 512,
+        flashAttention: "auto",
+        cacheReuse: 256,
+        fit: true,
+        fitTargetMiB: 750,
+        fitContextMin: 4096,
+      },
+      calibrated: true,
+      ggufSha256: null,
+    });
+    firstStore.close();
+
+    const upgradedStore = createStore(filename);
+    const profiles = upgradedStore.listExecutionProfiles(model.id);
+
+    expect(profiles.map((profile) => ({ revision: profile.revision, context: profile.parameters.fitContextMin, calibrated: profile.calibrated }))).toEqual([
+      { revision: 1, context: 4096, calibrated: true },
+      { revision: 2, context: 100_000, calibrated: false },
+    ]);
+    upgradedStore.close();
+  });
+
+  it("upgrades a legacy manual profile below 100k without rewriting history", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-manual-profile-upgrade-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const firstStore = createStore(filename);
+    const model = firstStore.createModel({
+      name: "Gemma",
+      kind: "local-gguf",
+      provider: "llama.cpp",
+      modelRef: "gemma",
+      path: "/models/gemma.gguf",
+      alias: "gemma",
+    });
+    firstStore.createExecutionProfile({
+      modelId: model.id,
+      name: "Основной",
+      parameters: {
+        context: 65_536,
+        nGpuLayers: "all",
+        cacheTypeK: "q8_0",
+        cacheTypeV: "q8_0",
+        batchSize: 1024,
+        ubatchSize: 512,
+        flashAttention: true,
+        cacheReuse: 256,
+      },
+      calibrated: true,
+      ggufSha256: null,
+    });
+    firstStore.close();
+
+    const upgradedStore = createStore(filename);
+    const profiles = upgradedStore.listExecutionProfiles(model.id);
+
+    expect(profiles.map((profile) => ({ revision: profile.revision, context: profile.parameters.context, calibrated: profile.calibrated }))).toEqual([
+      { revision: 1, context: 65_536, calibrated: true },
+      { revision: 2, context: 100_000, calibrated: false },
+    ]);
+    upgradedStore.close();
+  });
+
   it("versions profiles and keeps reviews separate from immutable results", () => {
     const store = testStore();
     const task = store.createTask({ name: "Task", kind: "prompt", prompt: "Answer", tags: [] });

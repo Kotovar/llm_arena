@@ -174,6 +174,22 @@ function mapModel(row: ModelRow) {
   };
 }
 
+function upgradedLegacyProfileParameters(profile: { name: string; parameters: CreateExecutionProfile["parameters"] }): CreateExecutionProfile["parameters"] | undefined {
+  const { parameters } = profile;
+  if (profile.name === "Automatic"
+    && parameters.context === "auto"
+    && parameters.nGpuLayers === "auto"
+    && parameters.fit === true
+    && parameters.fitTargetMiB === 750
+    && parameters.fitContextMin === 4096) {
+    return { ...parameters, fitContextMin: 100_000 };
+  }
+  if (typeof parameters.context === "number" && parameters.context < 100_000) {
+    return { ...parameters, context: 100_000 };
+  }
+  return undefined;
+}
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -362,7 +378,7 @@ export function createStore(filename: string) {
     });
   }
 
-  return {
+  const store = {
     getSetting(key: string) {
       return one<{ value: string }>("SELECT value FROM app_settings WHERE key = ?", key)?.value;
     },
@@ -695,6 +711,20 @@ export function createStore(filename: string) {
       sqlite.close();
     },
   };
+
+  for (const profile of store.listExecutionProfiles()) {
+    const parameters = upgradedLegacyProfileParameters(profile);
+    if (!parameters) continue;
+    store.createExecutionProfile({
+      modelId: profile.modelId,
+      name: profile.name,
+      parameters,
+      ggufSha256: profile.ggufSha256,
+      calibrated: false,
+    });
+  }
+
+  return store;
 }
 
 export type ArenaStore = ReturnType<typeof createStore>;

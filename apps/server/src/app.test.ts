@@ -87,7 +87,7 @@ describe("REST API", () => {
         filename: "NoVision.gguf",
         name: "No vision",
         profileName: "Automatic",
-        profile: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 },
+        profile: { context: 100_000, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 },
         capabilities: { toolUse: false, vision: false, reasoning: false },
         mmprojFilename: "mmproj-Vision.gguf",
       },
@@ -160,7 +160,7 @@ describe("REST API", () => {
     const app = buildApp({ store, config });
     store.setSetting("modelDirectory", modelsRoot);
 
-    const connected = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "Local.gguf", name: "Local", profileName: "Automatic", profile: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 } } });
+    const connected = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "Local.gguf", name: "Local", profileName: "Automatic", profile: { context: 100_000, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 } } });
     const modelId = connected.json().model.id as string;
 
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
@@ -198,7 +198,7 @@ describe("REST API", () => {
     const app = buildApp({ store, config });
     store.setSetting("modelDirectory", modelsRoot);
 
-    const connected = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "Local.gguf", name: "Local", profileName: "Automatic", profile: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 } } });
+    const connected = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "Local.gguf", name: "Local", profileName: "Automatic", profile: { context: 100_000, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 } } });
     const modelId = connected.json().model.id as string;
 
     expect((await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId, profileName: "Automatic", port: 8080 } })).statusCode).toBe(200);
@@ -269,7 +269,7 @@ describe("REST API", () => {
       cacheReuse: 256,
       fit: true,
       fitTargetMiB: 750,
-      fitContextMin: 4096,
+      fitContextMin: 100_000,
     };
 
     const defaults = await app.inject({ method: "GET", url: "/api/settings" });
@@ -319,7 +319,7 @@ describe("REST API", () => {
       cacheReuse: 256,
       fit: true,
       fitTargetMiB: 750,
-      fitContextMin: 4096,
+      fitContextMin: 100_000,
     };
     const profile = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, calibrated: false, ggufSha256: null });
     const app = buildApp({ store, config });
