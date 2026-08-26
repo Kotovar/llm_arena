@@ -191,8 +191,7 @@ describe("REST API", () => {
     const modelId = connected.json().model.id as string;
 
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId, executionProfileId: null, runnerId: "llama-chat", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "llama-chat", resultMode: "text" });
     store.updateRunStatus(run.id, "running");
 
     // Пока модель занята запуском, отключать нельзя.
@@ -208,7 +207,7 @@ describe("REST API", () => {
     expect((await app.inject({ method: "GET", url: "/api/local-model-files" })).json()[0].connectedModelId).toBeNull();
     expect((await app.inject({ method: "DELETE", url: `/api/models/${modelId}` })).statusCode).toBe(204);
     // Отключённую модель больше нельзя запустить, проверить или снова повесить на omp-local.
-    const rerun = await app.inject({ method: "POST", url: "/api/runs", payload: { benchmarkRevisionId: benchmark.currentRevision.id, modelId, executionProfileId: null, runnerId: "llama-chat", resultMode: "text" } });
+    const rerun = await app.inject({ method: "POST", url: "/api/runs", payload: { taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "llama-chat", resultMode: "text" } });
     expect(rerun.statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/models/${modelId}/test`, payload: { runnerId: "llama-chat" } })).statusCode).toBe(404);
   });
@@ -250,8 +249,7 @@ describe("REST API", () => {
     const config = loadConfig("../../arena.config.yaml");
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
     const coding = store.createTask({ name: "Code", kind: "coding", prompt: "Build", fixtureId: "web-app", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [coding.currentRevision.id] });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const run = store.createRun({ taskRevisionIds: [coding.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const artifactPath = join(directory, "result");
     mkdirSync(join(artifactPath, "workspace"), { recursive: true });
     const taskRun = store.createTaskRun(run.id, coding.currentRevision.id, 0, artifactPath, { task: coding.currentRevision });
@@ -265,8 +263,7 @@ describe("REST API", () => {
     expect(calls).toEqual([join(artifactPath, "workspace")]);
 
     const prompt = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const promptBenchmark = store.createBenchmark({ name: "Prompt set", taskRevisionIds: [prompt.currentRevision.id] });
-    const promptRun = store.createRun({ benchmarkRevisionId: promptBenchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const promptRun = store.createRun({ taskRevisionIds: [prompt.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const promptTaskRun = store.createTaskRun(promptRun.id, prompt.currentRevision.id, 0, join(directory, "prompt"), { task: prompt.currentRevision });
     expect((await app.inject({ method: "POST", url: `/api/task-runs/${promptTaskRun.id}/open-in-zed` })).statusCode).toBe(400);
 
@@ -436,9 +433,8 @@ describe("REST API", () => {
     config.dataDir = join(directory, ".data");
     const store = createStore(join(directory, "arena.sqlite"));
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const artifactRoot = join(config.dataDir, "runs", run.id);
     mkdirSync(artifactRoot, { recursive: true });
     store.updateRunStatus(run.id, "completed");
@@ -460,10 +456,9 @@ describe("REST API", () => {
     config.dataDir = join(directory, ".data");
     const store = createStore(join(directory, "arena.sqlite"));
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
-    const runA = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
-    const runB = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const runA = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const runB = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRunA = store.createTaskRun(runA.id, task.currentRevision.id, 0, join(config.dataDir, "runs", runA.id, "task"), { task: task.currentRevision });
     const taskRunB = store.createTaskRun(runB.id, task.currentRevision.id, 0, join(config.dataDir, "runs", runB.id, "task"), { task: task.currentRevision });
     store.saveTaskRunResult(taskRunA.id, { finalAnswer: "A" });
@@ -538,9 +533,8 @@ describe("REST API", () => {
     const store = createStore(join(directory, "arena.sqlite"));
     const config = loadConfig("../../arena.config.yaml");
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/model.gguf", alias: "local" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "omp", resultMode: "web" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "omp", resultMode: "web" });
     const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
     const raw = `500 Failed to parse tool call arguments as JSON: column 352294\n${"<tool_call|><|channel>thought ".repeat(12_000)}`;
     store.saveTaskRunResult(taskRun.id, {}, "failed", raw);
@@ -572,10 +566,9 @@ describe("REST API", () => {
     config.dataDir = join(directory, ".data");
     const store = createStore(join(directory, "arena.sqlite"));
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
-    const finished = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
-    const active = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const finished = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const active = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     store.updateRunStatus(finished.id, "failed");
     const app = buildApp({ store, config });
 
@@ -620,9 +613,8 @@ describe("REST API", () => {
     const store = createStore(join(directory, "arena.sqlite"));
     const config = loadConfig("../../arena.config.yaml");
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/model.gguf", alias: "local" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "omp", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "omp", resultMode: "text" });
     const artifactPath = join(directory, "task-result");
     mkdirSync(artifactPath);
     const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, artifactPath, { task: task.currentRevision, runner: { kind: "omp" } });
@@ -647,9 +639,8 @@ describe("REST API", () => {
     const store = createStore(join(directory, "arena.sqlite"));
     const config = loadConfig("../../arena.config.yaml");
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
     store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original" });
     store.updateRunStatus(run.id, "completed");
@@ -678,9 +669,8 @@ describe("REST API", () => {
     const store = createStore(join(directory, "arena.sqlite"));
     const config = loadConfig("../../arena.config.yaml");
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const source = join(directory, "fixture");
     const artifactPath = join(directory, "task");
     mkdirSync(source);
@@ -739,13 +729,12 @@ describe("REST API", () => {
     const store = createStore(join(directory, "arena.sqlite"));
     const config = loadConfig("../../arena.config.yaml");
     const task = store.createTask({ name: "Landing", kind: "prompt", prompt: "Build a landing page", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Gemma", kind: "cloud", provider: "openai", modelRef: "gemma" });
     const source = join(directory, "fixture");
     mkdirSync(source);
     writeFileSync(join(source, "index.html"), "initial\n");
 
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const artifactPath = join(directory, "selected");
     const prepared = prepareWorkspace(source, artifactPath);
     const initial = finalizeWorkspace(prepared);
@@ -769,7 +758,7 @@ describe("REST API", () => {
     store.selectFollowupVersion(taskRun.id, followup.id);
     store.updateRunStatus(run.id, "completed");
 
-    const duplicateRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const duplicateRun = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const duplicatePath = join(directory, "duplicate");
     const duplicateWorkspace = prepareWorkspace(source, duplicatePath);
     const duplicateArtifacts = finalizeWorkspace(duplicateWorkspace);
@@ -779,24 +768,24 @@ describe("REST API", () => {
     store.saveTaskRunResult(duplicateTaskRun.id, { artifacts: duplicateArtifacts });
     store.updateRunStatus(duplicateRun.id, "completed");
 
-    const textRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const textRun = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const textTaskRun = store.createTaskRun(textRun.id, task.currentRevision.id, 0, join(directory, "text"), { task: task.currentRevision, fixture: { preview: { readyPath: "/" } } });
     store.saveTaskRunResult(textTaskRun.id, { artifacts: initial });
     store.updateRunStatus(textRun.id, "completed");
 
-    const noPreviewRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const noPreviewRun = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const noPreviewPath = join(directory, "no-preview");
     const noPreviewArtifacts = finalizeWorkspace(prepareWorkspace(source, noPreviewPath));
     const noPreviewTaskRun = store.createTaskRun(noPreviewRun.id, task.currentRevision.id, 0, noPreviewPath, { task: task.currentRevision });
     store.saveTaskRunResult(noPreviewTaskRun.id, { artifacts: noPreviewArtifacts });
     store.updateRunStatus(noPreviewRun.id, "completed");
 
-    const failedRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const failedRun = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const failedTaskRun = store.createTaskRun(failedRun.id, task.currentRevision.id, 0, join(directory, "failed"), { task: task.currentRevision, fixture: { preview: { readyPath: "/" } } });
     store.saveTaskRunResult(failedTaskRun.id, { artifacts: initial }, "failed", "failed");
     store.updateRunStatus(failedRun.id, "failed");
 
-    const failedCheckRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const failedCheckRun = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const failedCheckPath = join(directory, "failed-check");
     const failedCheckArtifacts = finalizeWorkspace(prepareWorkspace(source, failedCheckPath));
     const failedCheckTaskRun = store.createTaskRun(failedCheckRun.id, task.currentRevision.id, 0, failedCheckPath, {
@@ -808,7 +797,7 @@ describe("REST API", () => {
     });
     store.updateRunStatus(failedCheckRun.id, "completed");
 
-    const failedSelectedRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const failedSelectedRun = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const failedSelectedPath = join(directory, "failed-selected");
     const failedSelectedWorkspace = prepareWorkspace(source, failedSelectedPath);
     const failedSelectedInitial = finalizeWorkspace(failedSelectedWorkspace);
@@ -867,14 +856,13 @@ describe("REST API", () => {
     const store = createStore(join(directory, "arena.sqlite"));
     const config = loadConfig("../../arena.config.yaml");
     const task = store.createTask({ name: "Landing", kind: "prompt", prompt: "Build a landing page", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const cloudModel = store.createModel({ name: "GPT-5.6 Codex", kind: "cloud", provider: "openai", modelRef: "gpt-5.6-codex" });
     const localModel = store.createModel({ name: "Gemma 4", kind: "local-gguf", provider: "llama.cpp", modelRef: "gemma-4" });
     const source = join(directory, "fixture");
     mkdirSync(source);
     writeFileSync(join(source, "index.html"), "initial\n");
 
-    const cloudRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: cloudModel.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const cloudRun = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: cloudModel.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const cloudArtifacts = finalizeWorkspace(prepareWorkspace(source, join(directory, "cloud")));
     const cloudTaskRun = store.createTaskRun(cloudRun.id, task.currentRevision.id, 0, join(directory, "cloud"), {
       task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" },
@@ -886,7 +874,7 @@ describe("REST API", () => {
     store.saveTaskRunResult(cloudTaskRun.id, { artifacts: cloudArtifacts });
     store.updateRunStatus(cloudRun.id, "completed");
 
-    const localRun = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: localModel.id, executionProfileId: null, runnerId: "omp", resultMode: "web", useOmpAgent: false });
+    const localRun = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: localModel.id, executionProfileId: null, runnerId: "omp", resultMode: "web", useOmpAgent: false });
     const localArtifacts = finalizeWorkspace(prepareWorkspace(source, join(directory, "local")));
     const localTaskRun = store.createTaskRun(localRun.id, task.currentRevision.id, 0, join(directory, "local"), {
       task: { ...task.currentRevision, kind: "coding", fixtureId: "web-app" },
@@ -923,9 +911,8 @@ describe("REST API", () => {
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = join(directory, ".data");
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(config.dataDir, "runs", run.id, "task"), { task: task.currentRevision });
     store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original" });
     store.updateRunStatus(run.id, "completed");
@@ -946,9 +933,8 @@ describe("REST API", () => {
     const store = createStore(join(directory, "arena.sqlite"));
     const config = loadConfig("../../arena.config.yaml");
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
     store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original" });
     store.updateRunStatus(run.id, "completed");
@@ -974,29 +960,28 @@ describe("REST API", () => {
     const app = buildApp({ store, config });
 
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
 
     const scored = store.createModel({ name: "Scored Model", kind: "cloud", provider: "openai", modelRef: "scored" });
-    const runA = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const runA = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRunA1 = store.createTaskRun(runA.id, task.currentRevision.id, 0, join(directory, "a1"), { task: task.currentRevision });
     store.saveTaskRunResult(taskRunA1.id, { finalAnswer: "A1" });
     await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunA1.id}/review`, payload: review(10) }); // 40
     const taskRunA2 = store.createTaskRun(runA.id, task.currentRevision.id, 1, join(directory, "a2"), { task: task.currentRevision });
     store.saveTaskRunResult(taskRunA2.id, { finalAnswer: "A2" });
     await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunA2.id}/review`, payload: review(5) }); // 20
-    const runB = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const runB = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRunB1 = store.createTaskRun(runB.id, task.currentRevision.id, 0, join(directory, "b1"), { task: task.currentRevision });
     store.saveTaskRunResult(taskRunB1.id, { finalAnswer: "B1" });
     await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunB1.id}/review`, payload: review(9) }); // 36
     // Средний балл считается по промптам (40+20+36)/3, а не по ранам ((40+20)/2 и 36)/2 — иначе один слабый ран с одним промптом весил бы столько же, сколько ран с двумя.
 
     const unscored = store.createModel({ name: "Unscored Model", kind: "cloud", provider: "openai", modelRef: "unscored" });
-    const runC = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: unscored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const runC = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: unscored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     store.createTaskRun(runC.id, task.currentRevision.id, 0, join(directory, "c1"), { task: task.currentRevision });
 
     const archived = store.createModel({ name: "Archived Model", kind: "cloud", provider: "openai", modelRef: "archived" });
-    const runD = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: archived.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const runD = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: archived.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRunD1 = store.createTaskRun(runD.id, task.currentRevision.id, 0, join(directory, "d1"), { task: task.currentRevision });
     store.saveTaskRunResult(taskRunD1.id, { finalAnswer: "D1" });
     await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunD1.id}/review`, payload: review(7) }); // 28

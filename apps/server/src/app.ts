@@ -1,7 +1,6 @@
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
-  createBenchmarkSchema,
   createExecutionProfileSchema,
   connectLocalModelSchema,
   createModelSchema,
@@ -269,9 +268,6 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     store.archiveTask(request.params.id);
     return reply.code(204).send();
   });
-
-  app.get("/api/benchmarks", async () => store.listBenchmarks());
-  app.post("/api/benchmarks", async (request, reply) => reply.code(201).send(store.createBenchmark(parse(createBenchmarkSchema, request.body))));
 
   app.get("/api/models", async () => store.listModels().map((model) => {
     if (model.kind !== "local-gguf" || !model.path) return model;

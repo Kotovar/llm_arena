@@ -4,7 +4,6 @@ import { dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
   cloudModelCapabilities,
-  type CreateBenchmark,
   type CreateExecutionProfile,
   type CreateModel,
   type CreateRun,
@@ -37,16 +36,6 @@ type TaskRevisionRow = {
   images_json: string;
   content_hash: string;
   fixture_hash: string | null;
-  created_at: string;
-};
-
-type BenchmarkRevisionRow = {
-  id: string;
-  benchmark_id: string;
-  revision: number;
-  name: string;
-  description: string | null;
-  content_hash: string;
   created_at: string;
 };
 
@@ -208,12 +197,10 @@ function migrate(sqlite: DatabaseSync): void {
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, current_revision_id TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_revisions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL, prompt TEXT NOT NULL, fixture_id TEXT, tags_json TEXT NOT NULL, images_json TEXT NOT NULL DEFAULT '[]', content_hash TEXT NOT NULL, fixture_hash TEXT, created_at TEXT NOT NULL, UNIQUE(task_id, revision));
-    CREATE TABLE IF NOT EXISTS benchmarks (id TEXT PRIMARY KEY, current_revision_id TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS benchmark_revisions (id TEXT PRIMARY KEY, benchmark_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, content_hash TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(benchmark_id, revision));
-    CREATE TABLE IF NOT EXISTS benchmark_revision_tasks (benchmark_revision_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(benchmark_revision_id, task_revision_id));
     CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, position INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, capabilities_json TEXT NOT NULL DEFAULT '{"toolUse":false,"vision":false,"reasoning":false}', mmproj_path TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, benchmark_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS run_tasks (run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(run_id, position));
+    CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -234,6 +221,28 @@ function migrate(sqlite: DatabaseSync): void {
   if (!runColumns.some((column) => column.name === "use_omp_agent")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN use_omp_agent INTEGER NOT NULL DEFAULT 0");
     sqlite.exec("UPDATE benchmark_runs SET use_omp_agent = CASE WHEN result_mode = 'text' THEN 1 ELSE 0 END");
+  }
+  if (runColumns.some((column) => column.name === "benchmark_revision_id")) {
+    // Бенчмарк был безымянной обёрткой вокруг списка промптов: переносим связь прямо на запуск.
+    const hasLinks = sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'benchmark_revision_tasks'").get();
+    if (hasLinks) {
+      sqlite.exec(`
+        INSERT OR IGNORE INTO run_tasks (run_id, task_revision_id, position)
+        SELECT benchmark_runs.id, benchmark_revision_tasks.task_revision_id, benchmark_revision_tasks.position
+        FROM benchmark_runs
+        JOIN benchmark_revision_tasks ON benchmark_revision_tasks.benchmark_revision_id = benchmark_runs.benchmark_revision_id
+      `);
+    }
+    // Запуски без переносимой связи всё равно знают свои промпты по уже созданным task_runs.
+    sqlite.exec(`
+      INSERT OR IGNORE INTO run_tasks (run_id, task_revision_id, position)
+      SELECT benchmark_run_id, task_revision_id, position FROM task_runs
+      WHERE benchmark_run_id NOT IN (SELECT run_id FROM run_tasks)
+    `);
+    sqlite.exec("ALTER TABLE benchmark_runs DROP COLUMN benchmark_revision_id");
+    sqlite.exec("DROP TABLE IF EXISTS benchmark_revision_tasks");
+    sqlite.exec("DROP TABLE IF EXISTS benchmark_revisions");
+    sqlite.exec("DROP TABLE IF EXISTS benchmarks");
   }
   const taskRunColumns = sqlite.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>;
   if (!taskRunColumns.some((column) => column.name === "selected_followup_id")) {
@@ -351,23 +360,12 @@ export function createStore(filename: string) {
     return getTaskRevision(id)!;
   }
 
-  function getBenchmarkRevision(id: string) {
-    const revision = one<BenchmarkRevisionRow>("SELECT * FROM benchmark_revisions WHERE id = ?", id);
-    if (!revision) return undefined;
-    const links = all<{ task_revision_id: string }>(
-      "SELECT task_revision_id FROM benchmark_revision_tasks WHERE benchmark_revision_id = ? ORDER BY position",
-      id,
-    );
-    return {
-      id: revision.id,
-      benchmarkId: revision.benchmark_id,
-      revision: revision.revision,
-      name: revision.name,
-      description: revision.description,
-      contentHash: revision.content_hash,
-      createdAt: revision.created_at,
-      tasks: links.map((link) => getTaskRevision(link.task_revision_id)!).filter(Boolean),
-    };
+  /** Промпты запуска в заданном порядке — та самая связь, ради которой раньше существовал бенчмарк. */
+  function listRunTasks(runId: string) {
+    return all<{ task_revision_id: string }>(
+      "SELECT task_revision_id FROM run_tasks WHERE run_id = ? ORDER BY position",
+      runId,
+    ).map((link) => getTaskRevision(link.task_revision_id)!).filter(Boolean);
   }
 
   function deleteRuns(ids: string[]): number {
@@ -382,6 +380,7 @@ export function createStore(filename: string) {
       }
       for (const id of ids) {
         sqlite.prepare("DELETE FROM task_runs WHERE benchmark_run_id = ?").run(id);
+        sqlite.prepare("DELETE FROM run_tasks WHERE run_id = ?").run(id);
         sqlite.prepare("DELETE FROM benchmark_runs WHERE id = ?").run(id);
       }
       return ids.length;
@@ -423,34 +422,10 @@ export function createStore(filename: string) {
       const timestamp = now();
       sqlite.prepare("UPDATE tasks SET archived_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, id);
     },
-    createBenchmark(input: CreateBenchmark) {
-      return transaction(() => {
-        for (const id of input.taskRevisionIds) {
-          if (!getTaskRevision(id)) throw new Error(`Task revision ${id} not found`);
-        }
-        const id = randomUUID();
-        const revisionId = randomUUID();
-        const createdAt = now();
-        sqlite.prepare("INSERT INTO benchmarks VALUES (?, ?, NULL, ?, ?)").run(id, revisionId, createdAt, createdAt);
-        sqlite
-          .prepare("INSERT INTO benchmark_revisions VALUES (?, ?, 1, ?, ?, ?, ?)")
-          .run(revisionId, id, input.name, input.description ?? null, hash(input), createdAt);
-        const insertLink = sqlite.prepare("INSERT INTO benchmark_revision_tasks VALUES (?, ?, ?)");
-        input.taskRevisionIds.forEach((taskRevisionId, position) => insertLink.run(revisionId, taskRevisionId, position));
-        return { id, createdAt, updatedAt: createdAt, archivedAt: null, currentRevision: getBenchmarkRevision(revisionId)! };
-      });
-    },
-    getBenchmarkRevision,
-    listBenchmarks() {
-      return all<{ id: string; current_revision_id: string; archived_at: string | null; created_at: string; updated_at: string }>(
-        "SELECT * FROM benchmarks WHERE archived_at IS NULL ORDER BY created_at",
-      ).map((row) => ({
-        id: row.id,
-        archivedAt: row.archived_at,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        currentRevision: getBenchmarkRevision(row.current_revision_id)!,
-      }));
+    listRunTasks,
+    /** Только для проверки миграции: связи запуск→промпт без разворачивания ревизий. */
+    rawRunTasks() {
+      return all<{ run_id: string; task_revision_id: string; position: number }>("SELECT run_id, task_revision_id, position FROM run_tasks ORDER BY run_id, position");
     },
     createModel(input: StoredModelInput) {
       const id = randomUUID();
@@ -571,15 +546,22 @@ export function createStore(filename: string) {
       return rows.map((row) => this.getExecutionProfile(row.id)!);
     },
     createRun(input: CreateRun) {
-      const id = randomUUID();
-      const createdAt = now();
       const model = this.getModel(input.modelId);
       if (!model) throw new Error("Model not found");
+      for (const taskRevisionId of input.taskRevisionIds) {
+        if (!getTaskRevision(taskRevisionId)) throw new Error(`Task revision ${taskRevisionId} not found`);
+      }
       const modelRef = model.kind === "cloud" ? input.modelRef ?? model.modelRef : model.modelRef;
-      sqlite
-        .prepare("INSERT INTO benchmark_runs (id, benchmark_revision_id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
-        .run(id, input.benchmarkRevisionId, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, createdAt);
-      return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
+      return transaction(() => {
+        const id = randomUUID();
+        const createdAt = now();
+        sqlite
+          .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+          .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, createdAt);
+        const insertTask = sqlite.prepare("INSERT INTO run_tasks (run_id, task_revision_id, position) VALUES (?, ?, ?)");
+        input.taskRevisionIds.forEach((taskRevisionId, position) => insertTask.run(id, taskRevisionId, position));
+        return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
+      });
     },
     getRun(id: string) {
       return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id);

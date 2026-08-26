@@ -127,7 +127,7 @@ describe("normalized results", () => {
 describe("run configuration", () => {
   it("keeps the selected result mode and OMP environment in the parsed run", () => {
     const parsed = createRunSchema.parse({
-      benchmarkRevisionId: "2d2b5de7-7469-48a7-b625-2ff4509fa8a7",
+      taskRevisionIds: ["2d2b5de7-7469-48a7-b625-2ff4509fa8a7"],
       modelId: "62c2acc6-bc4f-4e01-ae65-3cf124d76219",
       executionProfileId: null,
       runnerId: "codex-proxy",
@@ -145,7 +145,7 @@ describe("run configuration", () => {
 
   it("defaults the reasoning effort to the runner default", () => {
     const parsed = createRunSchema.parse({
-      benchmarkRevisionId: "2d2b5de7-7469-48a7-b625-2ff4509fa8a7",
+      taskRevisionIds: ["2d2b5de7-7469-48a7-b625-2ff4509fa8a7"],
       modelId: "62c2acc6-bc4f-4e01-ae65-3cf124d76219",
       executionProfileId: null,
       runnerId: "codex-proxy",
@@ -154,6 +154,16 @@ describe("run configuration", () => {
 
     expect(parsed.reasoningEffort).toBeNull();
     expect(parsed.useOmpAgent).toBe(false);
+  });
+
+  it("requires at least one prompt", () => {
+    expect(createRunSchema.safeParse({
+      taskRevisionIds: [],
+      modelId: "62c2acc6-bc4f-4e01-ae65-3cf124d76219",
+      executionProfileId: null,
+      runnerId: "codex-proxy",
+      resultMode: "text",
+    }).success).toBe(false);
   });
 
   it("keeps the configured default runner marker", () => {

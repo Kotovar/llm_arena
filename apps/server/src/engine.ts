@@ -144,10 +144,10 @@ export class BenchmarkEngine {
   }
 
   async #execute(run: NonNullable<ReturnType<ArenaStore["claimNextRun"]>>, signal: AbortSignal): Promise<void> {
-    const benchmark = this.store.getBenchmarkRevision(run.benchmark_revision_id);
+    const tasks = this.store.listRunTasks(run.id);
     const model = this.store.getModel(run.model_id);
     const definition = this.config.runners.find((item) => item.id === run.runner_id);
-    if (!benchmark) throw new Error("Benchmark revision not found");
+    if (!tasks.length) throw new Error("Run has no prompts");
     if (!model) throw new Error("Model not found");
     if (!definition) throw new Error(`Runner ${run.runner_id} not found`);
     const profile = run.execution_profile_id ? this.store.getExecutionProfile(run.execution_profile_id) : undefined;
@@ -156,11 +156,11 @@ export class BenchmarkEngine {
       throw new Error(`${definition.kind} cannot run a local GGUF model`);
     }
     const selectedModel = { ...model, modelRef: run.model_ref ?? model.modelRef };
-    assertModelCapabilities(model, definition.kind, run.reasoning_effort, benchmark.tasks.flatMap((task) => task.images));
+    assertModelCapabilities(model, definition.kind, run.reasoning_effort, tasks.flatMap((task) => task.images));
 
     const runRoot = join(this.config.dataDir, "runs", run.id);
     mkdirSync(runRoot, { recursive: true });
-    this.store.setRunSnapshot(run.id, { benchmark, model: selectedModel, profile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
+    this.store.setRunSnapshot(run.id, { tasks, model: selectedModel, profile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
     const backendStdout = join(runRoot, "backend.stdout.log");
     const backendStderr = join(runRoot, "backend.stderr.log");
     writeFileSync(backendStdout, "");
@@ -186,7 +186,7 @@ export class BenchmarkEngine {
         );
         this.#emit({ type: "backend.ready", runId: run.id, data: { port: backend.port, startupDurationMs: backend.startupDurationMs } });
       }
-      for (const [position, task] of benchmark.tasks.entries()) {
+      for (const [position, task] of tasks.entries()) {
         if (signal.aborted) break;
         const effectiveTask = run.result_mode === "web"
           ? { ...task, kind: "coding" as const, fixtureId: "web-app" }

@@ -64,8 +64,7 @@ describe("preview command", () => {
     const store = createStore(join(directory, "arena.sqlite"));
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
     const task = store.createTask({ name: "Web", kind: "coding", prompt: "Build", fixtureId: "web", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
     const source = join(directory, "fixture");
     mkdirSync(source);
     writeFileSync(join(source, "index.html"), "preview");

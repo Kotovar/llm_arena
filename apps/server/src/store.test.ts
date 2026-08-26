@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,22 +114,90 @@ describe("model order", () => {
   });
 });
 
-describe("benchmark revisions", () => {
+describe("run prompts", () => {
   it("pins exact task revisions", () => {
     const store = testStore();
     const task = store.createTask({ name: "Task", kind: "prompt", prompt: "First", tags: [] });
-    const benchmark = store.createBenchmark({
-      name: "Core set",
-      taskRevisionIds: [task.currentRevision.id],
-    });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
 
     store.updateTask(task.id, { name: "Task", kind: "prompt", prompt: "Second", tags: [] });
 
-    expect(store.getBenchmarkRevision(benchmark.currentRevision.id)?.tasks[0]?.prompt).toBe("First");
+    expect(store.listRunTasks(run.id)[0]?.prompt).toBe("First");
+  });
+
+  it("keeps the chosen order", () => {
+    const store = testStore();
+    const first = store.createTask({ name: "First", kind: "prompt", prompt: "One", tags: [] });
+    const second = store.createTask({ name: "Second", kind: "prompt", prompt: "Two", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [second.currentRevision.id, first.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+
+    expect(store.listRunTasks(run.id).map((task) => task.name)).toEqual(["Second", "First"]);
+  });
+
+  it("refuses a run that points at a missing task revision", () => {
+    const store = testStore();
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+
+    expect(() => store.createRun({ taskRevisionIds: [randomUUID()], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" })).toThrow(/not found/u);
+    expect(store.listRuns()).toHaveLength(0);
   });
 });
 
 describe("run queue", () => {
+  it("moves benchmark prompt links onto the runs themselves", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-benchmark-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const sqlite = new DatabaseSync(filename);
+    sqlite.exec(`
+      CREATE TABLE benchmark_runs (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        benchmark_revision_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        execution_profile_id TEXT,
+        runner_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        snapshot_json TEXT,
+        error TEXT,
+        started_at TEXT,
+        finished_at TEXT,
+        created_at TEXT NOT NULL,
+        result_mode TEXT NOT NULL DEFAULT 'web',
+        model_ref TEXT,
+        reasoning_effort TEXT
+      );
+      CREATE TABLE benchmark_revision_tasks (benchmark_revision_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL);
+      CREATE TABLE task_runs (
+        id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL,
+        status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL,
+        started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL
+      );
+      INSERT INTO benchmark_runs (id, benchmark_revision_id, model_id, runner_id, status, created_at)
+      VALUES ('linked', 'revision-1', 'model', 'omp', 'completed', '2026-08-23T00:00:00.000Z'),
+             ('orphan', 'revision-gone', 'model', 'omp', 'completed', '2026-08-23T00:00:00.000Z');
+      INSERT INTO benchmark_revision_tasks VALUES ('revision-1', 'task-b', 1), ('revision-1', 'task-a', 0);
+      INSERT INTO task_runs (id, benchmark_run_id, task_revision_id, position, status, snapshot_json, artifact_path, created_at)
+      VALUES ('task-run-1', 'orphan', 'task-c', 0, 'completed', '{}', '.data/run', '2026-08-23T00:00:00.000Z');
+    `);
+    sqlite.close();
+
+    const store = createStore(filename);
+    const links = store.rawRunTasks();
+
+    expect(links.filter((link) => link.run_id === "linked")).toEqual([
+      { run_id: "linked", task_revision_id: "task-a", position: 0 },
+      { run_id: "linked", task_revision_id: "task-b", position: 1 },
+    ]);
+    // Ссылки на бенчмарк не осталось — промпты восстановлены по уже выполненным task_runs.
+    expect(links.filter((link) => link.run_id === "orphan")).toEqual([
+      { run_id: "orphan", task_revision_id: "task-c", position: 0 },
+    ]);
+    store.close();
+  });
+
   it("migrates legacy text runs to their normal OMP environment", () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-legacy-"));
     directories.push(directory);
@@ -170,9 +239,8 @@ describe("run queue", () => {
     const store = testStore();
     const first = store.createTask({ name: "First", kind: "prompt", prompt: "One", tags: [] });
     const second = store.createTask({ name: "Second", kind: "prompt", prompt: "Two", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [first.currentRevision.id, second.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [first.currentRevision.id, second.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const firstRun = store.createTaskRun(run.id, first.currentRevision.id, 0, ".data/run/one", { task: first.currentRevision });
     store.createTaskRun(run.id, second.currentRevision.id, 1, ".data/run/two", { task: second.currentRevision });
     store.saveReview(firstRun.id, { correctness: 9, codeQuality: 8, uiQuality: 7, instructionFollowing: 10, comment: "Good" });
@@ -184,9 +252,8 @@ describe("run queue", () => {
     const store = testStore();
     const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });
     const other = store.createTask({ name: "Second", kind: "prompt", prompt: "Two", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id, other.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id, other.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const measured = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/one", { task: task.currentRevision });
     const unmeasured = store.createTaskRun(run.id, other.currentRevision.id, 1, ".data/run/two", { task: other.currentRevision });
     store.saveTaskRunResult(measured.id, { metrics: { generationTokensPerSecond: { value: 60 } } }, "completed");
@@ -198,9 +265,8 @@ describe("run queue", () => {
   it("drops the visual criterion from the maximum when it was not applied", () => {
     const store = testStore();
     const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/one", { task: task.currentRevision });
     store.saveReview(taskRun.id, { correctness: 9, codeQuality: 8, uiQuality: 0, instructionFollowing: 10, comment: "" });
 
@@ -210,7 +276,6 @@ describe("run queue", () => {
   it("claims pending runs in FIFO order", () => {
     const store = testStore();
     const task = store.createTask({ name: "Task", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({
       name: "Claude",
       kind: "cloud",
@@ -218,7 +283,7 @@ describe("run queue", () => {
       modelRef: "configured-model",
     });
     const first = store.createRun({
-      benchmarkRevisionId: benchmark.currentRevision.id,
+      taskRevisionIds: [task.currentRevision.id],
       modelId: model.id,
       executionProfileId: null,
       runnerId: "claude",
@@ -226,7 +291,7 @@ describe("run queue", () => {
       modelRef: "claude-sonnet-4-5",
     });
     store.createRun({
-      benchmarkRevisionId: benchmark.currentRevision.id,
+      taskRevisionIds: [task.currentRevision.id],
       modelId: model.id,
       executionProfileId: null,
       runnerId: "claude",
@@ -327,7 +392,6 @@ describe("execution profiles and task results", () => {
   it("versions profiles and keeps reviews separate from immutable results", () => {
     const store = testStore();
     const task = store.createTask({ name: "Task", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({
       name: "Ornith",
       kind: "local-gguf",
@@ -351,7 +415,7 @@ describe("execution profiles and task results", () => {
     const second = store.createExecutionProfile({ modelId: model.id as string, name: "Quality", parameters, calibrated: true, ggufSha256: null });
     const duplicate = store.createExecutionProfile({ modelId: model.id as string, name: "Quality", parameters, calibrated: true, ggufSha256: null });
     const run = store.createRun({
-      benchmarkRevisionId: benchmark.currentRevision.id,
+      taskRevisionIds: [task.currentRevision.id],
       modelId: model.id as string,
       executionProfileId: second.id,
       runnerId: "omp",
@@ -371,9 +435,8 @@ describe("execution profiles and task results", () => {
   it("queues follow-up prompts without replacing the original result", () => {
     const store = testStore();
     const task = store.createTask({ name: "Task", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-test" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/task", { task: task.currentRevision });
     store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original" });
 
@@ -388,9 +451,8 @@ describe("execution profiles and task results", () => {
   it("persists the chosen completed follow-up without allowing another task run", () => {
     const store = testStore();
     const task = store.createTask({ name: "Task", kind: "prompt", prompt: "Answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-test" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/task", { task: task.currentRevision });
     store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original" });
     const followup = store.createFollowup(taskRun.id, "Уточни ответ");

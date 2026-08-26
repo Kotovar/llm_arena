@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Page, Panel, Status, useData } from "../shell.js";
-import type { Benchmark, Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
+import type { Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
 import { chooseRunner, cloudProviderCatalogKind, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel, updateTaskSelection } from "../ui.js";
 
 export function Launcher() {
@@ -60,12 +60,8 @@ export function Launcher() {
     mutationFn: async () => {
       if (!selectedModel || !selectedRunner || !selectedTasks.length) throw new Error("Выберите модель и хотя бы один промпт");
       if (imageError) throw new Error(imageError);
-      const benchmark = await api<Benchmark>("/benchmarks", { method: "POST", body: JSON.stringify({
-        name: selectedTasks.length === 1 ? selectedTasks[0]!.currentRevision.name : `${promptCountLabel(selectedTasks.length)} · ${new Date().toLocaleString("ru-RU")}`,
-        taskRevisionIds: selectedTasks.map((task) => task.currentRevision.id),
-      }) });
       const profile = latestProfiles(profiles.data ?? []).find((item) => item.modelId === selectedModel.id);
-      return api<Run>("/runs", { method: "POST", body: JSON.stringify({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: selectedModel.id, executionProfileId: profile?.id ?? null, runnerId: selectedRunner.id, resultMode, useOmpAgent: usingOmpAgent, modelRef: selectedModel.kind === "cloud" ? effectiveModelRef : undefined, reasoningEffort: effectiveEffort || null }) });
+      return api<Run>("/runs", { method: "POST", body: JSON.stringify({ taskRevisionIds: selectedTasks.map((task) => task.currentRevision.id), modelId: selectedModel.id, executionProfileId: profile?.id ?? null, runnerId: selectedRunner.id, resultMode, useOmpAgent: usingOmpAgent, modelRef: selectedModel.kind === "cloud" ? effectiveModelRef : undefined, reasoningEffort: effectiveEffort || null }) });
     },
     onSuccess: (run) => navigate({ to: "/runs/$runId", params: { runId: run.id } }),
   });

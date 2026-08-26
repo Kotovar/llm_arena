@@ -107,9 +107,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", modelRef: "gpt-selected", reasoningEffort: "high" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", modelRef: "gpt-selected", reasoningEffort: "high" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("engine-test", 100));
 
     await engine.processNext();
@@ -140,10 +139,9 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
       tags: [],
       images: [image],
     });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Text only", kind: "local-gguf", provider: "llama.cpp", modelRef: "text-only", path: join(root, "text-only.gguf"), alias: "text-only" });
     const profile = store.createExecutionProfile({ modelId: model.id, name: "Manual", parameters: { context: 100_000, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 }, calibrated: false, ggufSha256: null });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: profile.id, runnerId: "fake", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: profile.id, runnerId: "fake", resultMode: "text" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("vision-gate-test", 100));
 
     await engine.processNext();
@@ -171,9 +169,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай тетрис", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("web-engine-test", 100));
 
     await engine.processNext();
@@ -192,7 +189,7 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
 
     // Без браузера результат обязан сохраниться целиком, просто без снимка.
     config.browser = join(root, "missing-browser");
-    const withoutBrowser = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    const withoutBrowser = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
     await engine.processNext();
     const withoutBrowserTaskRun = store.listTaskRuns(withoutBrowser.id)[0]!;
     expect(withoutBrowserTaskRun.status).toBe("completed");
@@ -218,9 +215,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("web-check-failure-test", 100));
 
     await engine.processNext();
@@ -247,9 +243,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("failed-engine-test", 100));
     // Сброс backend может упасть уже после сохранения статуса задачи.
     engine.subscribe(run.id, (event) => { if (event.type === "task.status" && (event.data as { status?: string } | undefined)?.status === "failed") throw new Error("fetch failed"); });
@@ -279,9 +274,8 @@ console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content
     config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
-    const request = { benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" as const, useOmpAgent: true };
+    const request = { taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" as const, useOmpAgent: true };
     const run = store.createRun(request);
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("web-omp-engine-test", 100));
 
@@ -315,9 +309,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web", kind: "prompt", prompt: "Сделай страницу", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-test", capabilities: { toolUse: false, vision: false, reasoning: true } });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web", reasoningEffort: "high" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web", reasoningEffort: "high" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("followup-engine-test", 100));
     await engine.processNext();
     const taskRun = store.listTaskRuns(run.id)[0]!;
@@ -361,9 +354,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_t
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("web-followup-check-failure-test", 100));
 
     await engine.processNext();
@@ -395,9 +387,8 @@ if (input.includes("Дополнительный запрос")) process.exitCod
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "answer", tags: [] });
-    const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("followup-failure-test", 100));
 
     await engine.processNext();

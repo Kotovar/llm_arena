@@ -23,18 +23,6 @@ export type TaskImage = {
   sha256: string;
 };
 
-export type Benchmark = {
-  id: string;
-  currentRevision: {
-    id: string;
-    name: string;
-    description: string | null;
-    revision: number;
-    contentHash: string;
-    tasks: Task["currentRevision"][];
-  };
-};
-
 export type Model = {
   id: string;
   name: string;
@@ -173,7 +161,6 @@ export type TaskRun = {
 
 export type Run = {
   id: string;
-  benchmark_revision_id: string;
   model_id: string;
   runner_id: string;
   result_mode: "text" | "web";

@@ -53,12 +53,6 @@ export const taskSchema = z.object({
   currentRevision: taskRevisionSchema,
 });
 
-export const createBenchmarkSchema = z.object({
-  name: z.string().trim().min(1).max(160),
-  description: z.string().trim().max(4_000).optional(),
-  taskRevisionIds: z.array(z.string().uuid()).min(1),
-});
-
 export const modelKindSchema = z.enum(["local-gguf", "cloud"]);
 export const modelCapabilitiesSchema = z.object({
   toolUse: z.boolean().default(false),
@@ -143,7 +137,7 @@ export const createExecutionProfileSchema = z.object({
 });
 
 export const createRunSchema = z.object({
-  benchmarkRevisionId: z.string().uuid(),
+  taskRevisionIds: z.array(z.string().uuid()).min(1),
   modelId: z.string().uuid(),
   executionProfileId: z.string().uuid().nullable(),
   runnerId: z.string().trim().min(1),
@@ -238,7 +232,6 @@ export const runnerDefinitionSchema = z.object({
 export type CreateTask = z.input<typeof createTaskSchema>;
 export type Task = z.infer<typeof taskSchema>;
 export type TaskRevision = z.infer<typeof taskRevisionSchema>;
-export type CreateBenchmark = z.infer<typeof createBenchmarkSchema>;
 export type CreateModel = z.infer<typeof createModelSchema>;
 export type ModelCapabilities = z.infer<typeof modelCapabilitiesSchema>;
 export type TaskImage = z.infer<typeof taskImageSchema>;

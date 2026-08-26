@@ -342,8 +342,9 @@ export function RunDetail({ runId }: { runId: string }) {
   const remove = useMutation({ mutationFn: () => api(`/runs/${runId}`, { method: "DELETE" }), onSuccess: () => navigate({ to: "/runs" }) });
   if (run.error) return <Page title="Запуск не найден" eyebrow="Результат" intro="Он мог быть удалён вместе с файлами, либо сервер сейчас недоступен."><p className="error">{run.error.message}</p><p className="actions"><Link to="/runs">← Ко всем результатам</Link></p></Page>;
   if (!run.data) return <Page title="Загрузка запуска" eyebrow="Результат"><Empty>Читаем сохранённые данные…</Empty></Page>;
-  const snapshot = run.data.snapshot_json ? JSON.parse(run.data.snapshot_json) as { benchmark?: { tasks?: unknown[] }; model?: { name?: string; modelRef?: string }; reasoningEffort?: string | null } : undefined;
-  const total = snapshot?.benchmark?.tasks?.length ?? run.data.taskRuns?.length ?? 0;
+  const snapshot = run.data.snapshot_json ? JSON.parse(run.data.snapshot_json) as { tasks?: unknown[]; benchmark?: { tasks?: unknown[] }; model?: { name?: string; modelRef?: string }; reasoningEffort?: string | null } : undefined;
+  // benchmark — снапшоты запусков, сделанных до отказа от этой сущности.
+  const total = snapshot?.tasks?.length ?? snapshot?.benchmark?.tasks?.length ?? run.data.taskRuns?.length ?? 0;
   const progress = runProgress(total, run.data.taskRuns?.map((task) => task.status) ?? []);
   const activeTask = run.data.taskRuns?.find((task) => task.status === "running");
   const activeTaskName = activeTask ? (JSON.parse(activeTask.snapshot_json) as { task: { name: string } }).task.name : undefined;
