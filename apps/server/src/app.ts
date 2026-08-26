@@ -9,6 +9,7 @@ import {
   renameModelSchema,
   previewResultVersionSchema,
   resultShaSchema,
+  setModelOrderSchema,
   createRunSchema,
   createTaskSchema,
   reviewSchema,
@@ -269,6 +270,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const { name } = parse(renameModelSchema, request.body);
     return store.renameModel(request.params.id, name);
   });
+  app.put("/api/models/order", async (request) => store.setModelOrder(parse(setModelOrderSchema, request.body).modelIds));
   app.put<{ Params: { id: string } }>("/api/models/:id/capabilities", async (request) => {
     const input = parse(updateModelCapabilitiesSchema, request.body);
     const model = store.getActiveModel(request.params.id);

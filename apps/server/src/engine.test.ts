@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,29 @@ afterEach(() => {
 });
 
 describe("benchmark engine", () => {
+  it("keeps the VRAM reserve check for automatic profiles only", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-calibration-reserve-"));
+    directories.push(root);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    const store = createStore(join(root, "arena.sqlite"));
+    const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(root, "model.gguf"), alias: "local" });
+    const baseParameters = { context: 100_000 as const, nGpuLayers: "all" as const, cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: true, cacheReuse: 256 };
+    const manual = store.createExecutionProfile({ modelId: model.id, name: "Manual", parameters: { ...baseParameters, fit: false }, calibrated: false, ggufSha256: null });
+    const automatic = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters: { ...baseParameters, context: "auto", nGpuLayers: "auto", flashAttention: "auto", fit: true, fitTargetMiB: 750, fitContextMin: 100_000 }, calibrated: false, ggufSha256: null });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("calibration-reserve-test", 100), {
+      createLlamaManager: () => ({ async start() { return { baseUrl: "http://127.0.0.1:1234", async stop() {} }; } }),
+      fetch: async () => ({ ok: true, status: 200 }),
+      readGpuInfo: () => ({ name: "NVIDIA", totalMiB: 16303, usedMiB: 15840, freeMiB: 463 }),
+    });
+
+    await expect(engine.calibrate(manual.id)).resolves.toMatchObject({ gpu: { freeMiB: 463 } });
+    await expect(engine.calibrate(automatic.id)).rejects.toThrow("Configured VRAM reserve was not preserved (463/750 MiB)");
+
+    await engine.stop();
+    store.close();
+  });
+
   it("verifies an automatic profile with one warmup and records observed GPU memory", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-calibration-"));
     directories.push(root);
@@ -103,18 +126,22 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     directories.push(root);
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = join(root, ".data");
-    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, "-e", ""], default: false, env: {}, envPassthrough: [] }];
+    config.runners = [{ id: "fake", name: "Fake llama.cpp Chat", kind: "llama-chat", exec: [process.execPath, "-e", ""], default: false, env: {}, envPassthrough: [] }];
+    const image = { id: "fada14a24a5666a23098c09882aa9a5c3e8617c4b7d594b08d70480f32ca02a2", filename: "reference.png", mimeType: "image/png" as const, sizeBytes: 68, sha256: "fada14a24a5666a23098c09882aa9a5c3e8617c4b7d594b08d70480f32ca02a2" };
+    mkdirSync(join(config.dataDir, "task-images"), { recursive: true });
+    writeFileSync(join(config.dataDir, "task-images", `${image.id}.png`), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JH3sAAAAASUVORK5CYII=", "base64"));
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({
       name: "Describe",
       kind: "prompt",
       prompt: "Describe it",
       tags: [],
-      images: [{ id: "a".repeat(64), filename: "reference.png", mimeType: "image/png", sizeBytes: 1, sha256: "a".repeat(64) }],
+      images: [image],
     });
     const benchmark = store.createBenchmark({ name: "Set", taskRevisionIds: [task.currentRevision.id] });
-    const model = store.createModel({ name: "Text only", kind: "cloud", provider: "openai", modelRef: "text-only" });
-    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const model = store.createModel({ name: "Text only", kind: "local-gguf", provider: "llama.cpp", modelRef: "text-only", path: join(root, "text-only.gguf"), alias: "text-only" });
+    const profile = store.createExecutionProfile({ modelId: model.id, name: "Manual", parameters: { context: 100_000, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 }, calibrated: false, ggufSha256: null });
+    const run = store.createRun({ benchmarkRevisionId: benchmark.currentRevision.id, modelId: model.id, executionProfileId: profile.id, runnerId: "fake", resultMode: "text" });
     const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("vision-gate-test", 100));
 
     await engine.processNext();

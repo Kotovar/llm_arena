@@ -149,6 +149,33 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("persists a complete model order and rejects partial orders", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-model-order-"));
+    directories.push(directory);
+    const database = join(directory, "arena.sqlite");
+    const store = createStore(database);
+    const config = loadConfig("../../arena.config.yaml");
+    const first = store.createModel({ name: "First", kind: "cloud", provider: "openai", modelRef: "first" });
+    const second = store.createModel({ name: "Second", kind: "cloud", provider: "openai", modelRef: "second" });
+    const third = store.createModel({ name: "Third", kind: "cloud", provider: "openai", modelRef: "third" });
+    const app = buildApp({ store, config });
+
+    const duplicate = await app.inject({ method: "PUT", url: "/api/models/order", payload: { modelIds: [first.id, first.id, second.id] } });
+    const partial = await app.inject({ method: "PUT", url: "/api/models/order", payload: { modelIds: [first.id, second.id] } });
+    const ordered = await app.inject({ method: "PUT", url: "/api/models/order", payload: { modelIds: [third.id, first.id, second.id] } });
+
+    expect(duplicate.statusCode).toBe(400);
+    expect(partial.statusCode).toBe(400);
+    expect(ordered.statusCode).toBe(200);
+    expect(ordered.json().map((model: { id: string }) => model.id)).toEqual([third.id, first.id, second.id]);
+    await app.close();
+    store.close();
+
+    const reopened = createStore(database);
+    expect(reopened.listModels().map((model) => model.id)).toEqual([third.id, first.id, second.id]);
+    reopened.close();
+  });
+
   it("disconnects a model but keeps its history and frees the file", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-disconnect-"));
     directories.push(directory);

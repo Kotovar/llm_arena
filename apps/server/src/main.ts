@@ -7,6 +7,7 @@ import { BenchmarkEngine } from "./engine.js";
 import { acquireInstanceLock, loadOwnerId, recoverOwnedProcesses } from "./lifecycle.js";
 import { PreviewManager } from "./preview.js";
 import { ProcessSupervisor } from "./process-supervisor.js";
+import { cleanupTerminalRunLogs } from "./run-log-cleanup.js";
 import { createStore } from "./store.js";
 
 const defaultConfig = fileURLToPath(new URL("../../../arena.config.yaml", import.meta.url));
@@ -17,6 +18,7 @@ const releaseLock = acquireInstanceLock(config.dataDir);
 const ownerId = loadOwnerId(config.dataDir);
 recoverOwnedProcesses(ownerId);
 const store = createStore(join(config.dataDir, "arena.sqlite"));
+cleanupTerminalRunLogs(config.dataDir, store);
 store.recoverInterruptedRuns();
 
 if (store.listModels().length === 0) {

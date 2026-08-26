@@ -49,11 +49,12 @@ function TasksPage() {
   const remove = useMutation({ mutationFn: (id: string) => api(`/tasks/${id}`, { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
     try {
       setUploading(true);
       await create.mutateAsync({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt"), images: await uploadTaskImages(files) });
-      event.currentTarget.reset();
+      form.reset();
       setFiles([]);
     } finally {
       setUploading(false);

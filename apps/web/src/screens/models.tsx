@@ -7,6 +7,16 @@ import { chooseRunner, defaultLocalProfile, formatDuration, latestProfiles, visi
 
 type Capabilities = Model["capabilities"];
 
+export function moveModel<T extends { id: string }>(models: readonly T[], modelId: string, targetId: string): T[] {
+  const source = models.findIndex((model) => model.id === modelId);
+  const target = models.findIndex((model) => model.id === targetId);
+  if (source < 0 || target < 0 || source === target) return [...models];
+  const next = [...models];
+  const [model] = next.splice(source, 1);
+  next.splice(next.findIndex((item) => item.id === targetId), 0, model!);
+  return next;
+}
+
 function CapabilityCheckboxes({ value, onChange }: { value: Capabilities; onChange: (value: Capabilities) => void }) {
   return <div className="capability-options">
     <label><input type="checkbox" checked={value.toolUse} onChange={(event) => onChange({ ...value, toolUse: event.currentTarget.checked })} />Tools<small>Можно запускать через OMP-среду с инструментами.</small></label>
@@ -52,6 +62,7 @@ export function ModelsPage() {
   const [localMmprojFilename, setLocalMmprojFilename] = useState("");
   const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; title: string; detail: string }>>({});
   const [hardware, setHardware] = useState<Record<string, CalibrationResult>>( {});
+  const [draggedModelId, setDraggedModelId] = useState<string | null>(null);
 
   const invalidateModels = async () => {
     await Promise.all([
@@ -86,6 +97,10 @@ export function ModelsPage() {
   const rename = useMutation({
     mutationFn: ({ modelId, name }: { modelId: string; name: string }) => api(`/models/${modelId}`, { method: "PATCH", body: JSON.stringify({ name }) }),
     onSuccess: invalidateModels,
+  });
+  const reorder = useMutation({
+    mutationFn: (modelIds: string[]) => api<Model[]>("/models/order", { method: "PUT", body: JSON.stringify({ modelIds }) }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["models"] }),
   });
   const saveCapabilities = useMutation({
     mutationFn: ({ modelId, capabilities, mmprojFilename }: { modelId: string; capabilities: Capabilities; mmprojFilename: string | null }) => api(`/models/${modelId}/capabilities`, { method: "PUT", body: JSON.stringify({ capabilities, mmprojFilename }) }),
@@ -159,7 +174,7 @@ export function ModelsPage() {
             </label> : null}
           </fieldset>
           <fieldset className="profile-mode span-2"><legend>Профиль запуска</legend>
-            <label className={profileMode === "auto" ? "selected" : ""}><input type="radio" checked={profileMode === "auto"} onChange={() => setProfileMode("auto")} /><strong>Автоматически</strong><small>Максимум GPU с резервом 750 MiB, контекст не ниже 4096, Flash Attention и GPU-слои подбирает llama.cpp.</small></label>
+            <label className={profileMode === "auto" ? "selected" : ""}><input type="radio" checked={profileMode === "auto"} onChange={() => setProfileMode("auto")} /><strong>Автоматически</strong><small>Максимум GPU с резервом 750 MiB, контекст не ниже 100 000, Flash Attention и GPU-слои подбирает llama.cpp.</small></label>
             <label className={profileMode === "manual" ? "selected" : ""}><input type="radio" checked={profileMode === "manual"} onChange={() => setProfileMode("manual")} /><strong>Вручную</strong><small>Точные параметры для сравнения или переноса в другую связку.</small></label>
           </fieldset>
           {profileMode === "manual" ? <details className="manual-profile span-2" open><summary>Ручные параметры llama.cpp</summary><div className="form-grid">
@@ -189,7 +204,7 @@ export function ModelsPage() {
         const runner = chooseRunner(model, ["prompt"], runners.data ?? []);
         const checking = testModel.isPending && testModel.variables?.modelId === model.id;
         const modelProfiles = visibleProfiles.filter((profile) => profile.modelId === model.id);
-        return <details className="model-card" key={model.id}><summary className="model-card-summary"><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
+        return <details className={draggedModelId === model.id ? "model-card dragging" : "model-card"} key={model.id} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", model.id); setDraggedModelId(model.id); }} onDragEnd={() => setDraggedModelId(null)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); const draggedId = draggedModelId ?? event.dataTransfer.getData("text/plain"); if (draggedId && draggedId !== model.id) reorder.mutate(moveModel(models.data ?? [], draggedId, model.id).map((item) => item.id)); setDraggedModelId(null); }}><summary className="model-card-summary"><span className="model-drag-handle" role="img" aria-label="Перетащите модель, чтобы изменить порядок" title="Перетащите, чтобы изменить порядок">⠿</span><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
           <form className="model-rename" onSubmit={(event) => submitRename(event, model.id)}><label>Название в результатах<input name="name" defaultValue={model.name} required /></label><button className="primary" disabled={rename.isPending && rename.variables?.modelId === model.id}>{rename.isPending && rename.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить название"}</button></form>
           {rename.error && rename.variables?.modelId === model.id ? <p className="error">{rename.error.message}</p> : null}
           {model.kind === "local-gguf" ? <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} /> : null}
@@ -200,7 +215,7 @@ export function ModelsPage() {
             {report ? <div className="gpu-report"><strong>{report.gpu.name}</strong><span>VRAM: {report.gpu.usedMiB} MiB занято · {report.gpu.freeMiB} MiB свободно из {report.gpu.totalMiB} MiB</span></div> : null}
             {calibrate.error && calibrate.variables === profile.id ? <p className="error">{calibrate.error.message}</p> : null}
             {activate.error && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? <p className="error">{activate.error.message}</p> : null}
-            <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending && calibrate.variables === profile.id}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : "Проверить автоконфигурацию"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name}>{activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button></div>
+            <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending && calibrate.variables === profile.id}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : profile.parameters.fit ? "Проверить автоконфигурацию" : "Проверить профиль"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name}>{activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button></div>
           </section>; })}
           <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button>{checking ? <span className="check-badge"><span className="spinner" />Ждём ответ модели…</span> : diagnostics[model.id] ? <span className={diagnostics[model.id]?.ok ? "check-badge check-pass" : "check-badge check-fail"}>{diagnostics[model.id]?.ok ? "✓" : "✕"} {diagnostics[model.id]?.title}</span> : <small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small>}<button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { if (window.confirm(`Отключить «${model.name}»? Результаты прошлых запусков останутся, файл модели не удаляется.`)) disconnect.mutate(model.id); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
           {diagnostics[model.id]?.detail ? <p className="model-check-detail">{diagnostics[model.id]?.detail}</p> : null}

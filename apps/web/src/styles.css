@@ -169,6 +169,9 @@ dl { margin: 0; }dl div { display: grid; grid-template-columns: 130px 1fr; paddi
 .model-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: #0a1921; }
 .model-card-summary { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 13px 15px; cursor: pointer; }
 .model-card-summary::marker { color: var(--signal); }
+.model-card.dragging { opacity: .55; }
+.model-drag-handle { align-self: center; color: var(--muted); cursor: grab; font-size: 20px; line-height: 1; }
+.model-drag-handle:active { cursor: grabbing; }
 .model-card-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
 .model-card-copy > strong { font-size: 15px; }
 .model-card-copy > span:last-child { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }

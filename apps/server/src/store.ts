@@ -125,6 +125,7 @@ type GalleryFeaturedRow = {
 
 type ModelRow = {
   id: string;
+  position: number;
   name: string;
   kind: "local-gguf" | "cloud";
   provider: string;
@@ -207,7 +208,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS benchmarks (id TEXT PRIMARY KEY, current_revision_id TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS benchmark_revisions (id TEXT PRIMARY KEY, benchmark_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, content_hash TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(benchmark_id, revision));
     CREATE TABLE IF NOT EXISTS benchmark_revision_tasks (benchmark_revision_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(benchmark_revision_id, task_revision_id));
-    CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, capabilities_json TEXT NOT NULL DEFAULT '{"toolUse":false,"vision":false,"reasoning":false}', mmproj_path TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, position INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, capabilities_json TEXT NOT NULL DEFAULT '{"toolUse":false,"vision":false,"reasoning":false}', mmproj_path TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, benchmark_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
@@ -240,6 +241,12 @@ function migrate(sqlite: DatabaseSync): void {
     sqlite.exec("ALTER TABLE task_revisions ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'");
   }
   const modelColumns = sqlite.prepare("PRAGMA table_info(models)").all() as Array<{ name: string }>;
+  if (!modelColumns.some((column) => column.name === "position")) {
+    sqlite.exec("ALTER TABLE models ADD COLUMN position INTEGER NOT NULL DEFAULT 0");
+    const models = sqlite.prepare("SELECT id FROM models ORDER BY created_at").all() as Array<{ id: string }>;
+    const setPosition = sqlite.prepare("UPDATE models SET position = ? WHERE id = ?");
+    models.forEach((model, position) => setPosition.run(position, model.id));
+  }
   if (!modelColumns.some((column) => column.name === "archived_at")) {
     sqlite.exec("ALTER TABLE models ADD COLUMN archived_at TEXT");
   }
@@ -446,9 +453,10 @@ export function createStore(filename: string) {
       const id = randomUUID();
       const createdAt = now();
       const capabilities = input.kind === "cloud" ? cloudModelCapabilities : input.capabilities ?? defaultModelCapabilities;
+      const position = one<{ position: number }>("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM models")?.position ?? 0;
       sqlite
-        .prepare("INSERT INTO models (id, name, kind, provider, model_ref, path, alias, capabilities_json, mmproj_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(capabilities), input.mmprojPath ?? null, createdAt, createdAt);
+        .prepare("INSERT INTO models (id, position, name, kind, provider, model_ref, path, alias, capabilities_json, mmproj_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, position, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(capabilities), input.mmprojPath ?? null, createdAt, createdAt);
       return mapModel(one<ModelRow>("SELECT * FROM models WHERE id = ?", id)!);
     },
     getModel(id: string) {
@@ -456,7 +464,18 @@ export function createStore(filename: string) {
       return row ? mapModel(row) : undefined;
     },
     listModels() {
-      return all<ModelRow>("SELECT * FROM models WHERE archived_at IS NULL ORDER BY created_at").map(mapModel);
+      return all<ModelRow>("SELECT * FROM models WHERE archived_at IS NULL ORDER BY position, created_at").map(mapModel);
+    },
+    setModelOrder(modelIds: readonly string[]) {
+      const activeIds = all<{ id: string }>("SELECT id FROM models WHERE archived_at IS NULL").map((model) => model.id);
+      if (modelIds.length !== activeIds.length || new Set(modelIds).size !== modelIds.length || !modelIds.every((id) => activeIds.includes(id))) {
+        throw new Error("Model order must list every active model exactly once");
+      }
+      transaction(() => {
+        const setPosition = sqlite.prepare("UPDATE models SET position = ? WHERE id = ?");
+        modelIds.forEach((id, position) => setPosition.run(position, id));
+      });
+      return this.listModels();
     },
     getActiveModel(id: string) {
       const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NULL", id);

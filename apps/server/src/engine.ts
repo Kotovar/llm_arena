@@ -497,7 +497,7 @@ export class BenchmarkEngine {
       const gpu = this.runtime.readGpuInfo(this.config.nvidiaSmi);
       appendFileSync(log, `gpu=${gpu.name} usedMiB=${gpu.usedMiB} freeMiB=${gpu.freeMiB}\n`);
       const reserveMiB = profile.parameters.fitTargetMiB ?? this.config.defaults.vramReserveMiB;
-      if (gpu.freeMiB < reserveMiB) throw new Error(`Configured VRAM reserve was not preserved (${gpu.freeMiB}/${reserveMiB} MiB)`);
+      if (profile.parameters.fit && gpu.freeMiB < reserveMiB) throw new Error(`Configured VRAM reserve was not preserved (${gpu.freeMiB}/${reserveMiB} MiB)`);
       const calibrated = this.store.createExecutionProfile({
         modelId: profile.modelId,
         name: profile.name,

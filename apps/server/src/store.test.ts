@@ -99,6 +99,20 @@ describe("model capabilities", () => {
   });
 });
 
+describe("model order", () => {
+  it("persists a complete active-model order", () => {
+    const store = testStore();
+    const first = store.createModel({ name: "First", kind: "cloud", provider: "openai", modelRef: "first" });
+    const second = store.createModel({ name: "Second", kind: "cloud", provider: "openai", modelRef: "second" });
+    const third = store.createModel({ name: "Third", kind: "cloud", provider: "openai", modelRef: "third" });
+
+    store.setModelOrder([third.id, first.id, second.id]);
+
+    expect(store.listModels().map((model) => model.id)).toEqual([third.id, first.id, second.id]);
+    expect(() => store.setModelOrder([first.id, first.id, second.id])).toThrow("Model order must list every active model exactly once");
+  });
+});
+
 describe("benchmark revisions", () => {
   it("pins exact task revisions", () => {
     const store = testStore();

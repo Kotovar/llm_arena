@@ -91,6 +91,10 @@ export const renameModelSchema = z.object({
   name: z.string().trim().min(1).max(160),
 }).strict();
 
+export const setModelOrderSchema = z.object({
+  modelIds: z.array(z.string().uuid()),
+}).strict();
+
 export const updateModelCapabilitiesSchema = z.object({
   capabilities: modelCapabilitiesSchema,
   mmprojFilename: z.string().trim().min(1).nullable().default(null),

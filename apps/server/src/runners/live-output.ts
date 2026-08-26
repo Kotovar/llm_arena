@@ -14,6 +14,7 @@ function parseLine(line: string): Json | undefined {
 export function createLiveOutput(kind: RunnerKind) {
   let buffer = "";
   let textOpen = false;
+  let lastThinkingNotice = 0;
 
   function lineBreak() {
     if (!textOpen) return "";
@@ -39,6 +40,10 @@ export function createLiveOutput(kind: RunnerKind) {
         if (update?.type === "text_delta" && typeof update.delta === "string") {
           textOpen = true;
           return update.delta;
+        }
+        if (update?.type === "thinking_delta" && Date.now() - lastThinkingNotice >= 10_000) {
+          lastThinkingNotice = Date.now();
+          return "· Модель обдумывает ответ\n";
         }
       }
       return "";
