@@ -152,6 +152,7 @@ export type GalleryResult = {
 export type TaskRun = {
   id: string;
   task_revision_id: string;
+  taskName?: string;
   taskDescription?: string | null;
   position: number;
   status: string;

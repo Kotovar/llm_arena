@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { api } from "./api.js";
+import { useConfirm } from "./confirm.js";
 import { Launcher } from "./screens/launcher.js";
 import { ComparePage } from "./screens/compare.js";
 import { GalleryPage } from "./screens/gallery.js";
@@ -11,7 +12,7 @@ import { ModelsPage } from "./screens/models.js";
 import { RunDetail, RunsPage } from "./screens/results.js";
 import { SettingsPage } from "./screens/settings.js";
 import { Empty, Page, Panel, Shell, useData } from "./shell.js";
-import { ToastProvider } from "./toast.js";
+import { ToastProvider, useToast } from "./toast.js";
 import type { Task, TaskImage } from "./types.js";
 import { matchesPromptQuery, taskUpdateBody } from "./ui.js";
 import "./styles.css";
@@ -45,6 +46,16 @@ function TasksPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [query, setQuery] = useState("");
+  const { confirm, view: confirmView } = useConfirm();
+  const toast = useToast();
+  const importTasks = useMutation({
+    mutationFn: async (file: File) => api<{ created: number; updated: number }>("/tasks/import", { method: "POST", body: await file.text() }),
+    onSuccess: async ({ created, updated }) => {
+      toast(`Импорт: добавлено ${created}, обновлено ${updated}`);
+      await client.invalidateQueries({ queryKey: ["tasks"] });
+    },
+    onError: (error) => toast(error.message, "error"),
+  });
   const create = useMutation({ mutationFn: (body: unknown) => api("/tasks", { method: "POST", body: JSON.stringify(body) }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
   const update = useMutation({ mutationFn: ({ id, body }: { id: string; body: unknown }) => api(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) }), onSuccess: () => { setEditing(null); return client.invalidateQueries({ queryKey: ["tasks"] }); } });
   const remove = useMutation({ mutationFn: (id: string) => api(`/tasks/${id}`, { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
@@ -72,8 +83,11 @@ function TasksPage() {
       {files.length ? <ul className="image-attachments span-2">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => setFiles((current) => current.filter((_, position) => position !== index))}>Убрать</button></li>)}</ul> : null}
       <button className="primary" disabled={create.isPending || uploading}>{uploading || create.isPending ? "Загружаем…" : "Добавить"}</button>{create.error ? <p className="error">{create.error.message}</p> : null}
     </form></Panel>
-    <Panel title={`Промптов: ${found.length} из ${tasks.data?.length ?? 0}`}><label className="prompt-search"><input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск по названию и тексту" aria-label="Поиск промптов" /></label><div className="stack">{found.map((task) => <article className="item prompt-item" key={task.id}>
-      <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span>{editing?.taskId === task.id ? null : <h3>{task.currentRevision.name}</h3>}{editing?.taskId === task.id || !task.description ? null : <small className="task-description">{task.description}</small>}{task.currentRevision.images.length ? <small className="task-image-summary">Изображения: {task.currentRevision.images.map((image) => image.filename).join(", ")}</small> : null}</div><div className="item-actions">{editing?.taskId === task.id ? null : <button type="button" onClick={() => setEditing({ taskId: task.id, name: task.currentRevision.name, description: task.description ?? "", prompt: task.currentRevision.prompt, images: task.currentRevision.images, files: [] })}>Редактировать</button>}<button type="button" className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></div>
+    <Panel title={`Промптов: ${found.length} из ${tasks.data?.length ?? 0}`} action={<div className="prompt-transfer">
+      <a href="/api/tasks/export" download>Экспорт JSON</a>
+      <label className="prompt-import">{importTasks.isPending ? "Импортируем…" : "Импорт JSON"}<input type="file" accept="application/json,.json" disabled={importTasks.isPending} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) importTasks.mutate(file); }} /></label>
+    </div>}><label className="prompt-search"><input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск по названию и тексту" aria-label="Поиск промптов" /></label><div className="stack">{found.map((task) => <article className="item prompt-item" key={task.id}>
+      <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span>{editing?.taskId === task.id ? null : <h3>{task.currentRevision.name}</h3>}{editing?.taskId === task.id || !task.description ? null : <small className="task-description">{task.description}</small>}{task.currentRevision.images.length ? <small className="task-image-summary">Изображения: {task.currentRevision.images.map((image) => image.filename).join(", ")}</small> : null}</div><div className="item-actions">{editing?.taskId === task.id ? null : <button type="button" onClick={() => setEditing({ taskId: task.id, name: task.currentRevision.name, description: task.description ?? "", prompt: task.currentRevision.prompt, images: task.currentRevision.images, files: [] })}>Редактировать</button>}<button type="button" className="danger" disabled={remove.isPending} onClick={() => confirm({ title: "Убрать промпт в архив?", body: `«${task.currentRevision.name}» исчезнет из списка и из выбора при запуске. Результаты прошлых прогонов останутся, но вернуть промпт из интерфейса нельзя.`, action: "В архив", onConfirm: () => remove.mutate(task.id) })}>В архив</button></div></div>
       {editing?.taskId === task.id ? null : <details className="prompt-preview"><summary>Текст промпта</summary><p>{task.currentRevision.prompt}</p></details>}
       {editing && editing.taskId === task.id ? <form className="prompt-editor" onSubmit={async (event) => { event.preventDefault(); const prompt = editing.prompt.trim(); const name = editing.name.trim(); if (!prompt || !name) return; try { setUploading(true); await update.mutateAsync({ id: task.id, body: taskUpdateBody(task.currentRevision, prompt, [...editing.images, ...await uploadTaskImages(editing.files)], name, editing.description.trim()) }); } finally { setUploading(false); } }}>
         <label>Название<input autoFocus value={editing.name} onChange={(event) => { const name = event.currentTarget.value; setEditing((current) => current ? { ...current, name } : current); }} required /></label>
@@ -84,7 +98,7 @@ function TasksPage() {
         <div className="prompt-editor-footer"><small>Запуски с предыдущей версией останутся без изменений.</small><div className="prompt-editor-actions"><button type="button" onClick={() => setEditing(null)} disabled={update.isPending || uploading}>Отмена</button><button className="primary" disabled={update.isPending || uploading || !editing.prompt.trim() || !editing.name.trim()}>{uploading || update.isPending ? "Загружаем…" : "Сохранить версию"}</button></div></div>
         {update.error ? <p className="error">{update.error.message}</p> : null}
       </form> : null}
-    </article>)}{!tasks.data?.length ? <Empty>Промптов пока нет. Добавьте первый слева.</Empty> : null}{tasks.data?.length && !found.length ? <Empty>Ничего не нашлось по запросу.</Empty> : null}</div></Panel></div>
+    </article>)}{!tasks.data?.length ? <Empty>Промптов пока нет. Добавьте первый слева.</Empty> : null}{tasks.data?.length && !found.length ? <Empty>Ничего не нашлось по запросу.</Empty> : null}{remove.error ? <p className="error">{remove.error.message}</p> : null}</div></Panel></div>{confirmView}
   </Page>;
 }
 

@@ -56,10 +56,10 @@ export function chooseRunner(
 }
 
 /** Поиск по названию и тексту промпта: подстрока без учёта регистра. */
-export function matchesPromptQuery(task: { currentRevision: { name: string; prompt: string } }, query: string): boolean {
+export function matchesPromptQuery(task: { description?: string; currentRevision: { name: string; prompt: string } }, query: string): boolean {
   const needle = query.trim().toLocaleLowerCase("ru");
   if (!needle) return true;
-  return `${task.currentRevision.name}\n${task.currentRevision.prompt}`.toLocaleLowerCase("ru").includes(needle);
+  return [task.currentRevision.name, task.description ?? "", task.currentRevision.prompt].join("\n").toLocaleLowerCase("ru").includes(needle);
 }
 
 export function initializeTaskSelection(current: string[] | null, taskIds: string[]) {

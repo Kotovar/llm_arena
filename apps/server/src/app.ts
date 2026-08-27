@@ -61,6 +61,12 @@ const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) 
 const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
 const deleteRunsSchema = z.object({ runIds: z.array(z.string().uuid()).min(1) }).strict();
+/** Обмен промптами между машинами: только то, что человек пишет руками. Картинки и теги остаются на месте. */
+const importTasksSchema = z.array(z.object({
+  name: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(4_000).optional(),
+  prompt: z.string().trim().min(1),
+}).strict()).min(1).max(1_000);
 const externalLauncherQuerySchema = z.object({
   profileName: z.string().trim().min(1),
   port: z.coerce.number().int().min(1).max(65535).default(8080),
@@ -207,6 +213,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       ?? taskRuns.find((taskRun) => taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running"));
     return active ? parseGallerySnapshot(active.snapshot_json)?.task?.name ?? null : null;
   };
+  const taskRunName = (taskRun: { snapshot_json: string; task_revision_id: string }) =>
+    parseGallerySnapshot(taskRun.snapshot_json)?.task?.name || store.getTaskRevision(taskRun.task_revision_id)?.name;
   const withPublicError = <T extends { error: string | null }>(item: T) => {
     const { error, ...result } = item;
     const errorDetails = describeGenerationError(error);
@@ -283,6 +291,38 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.post("/api/task-images", async (request, reply) => reply.code(201).send(storeTaskImage(config.dataDir, parse(taskImageUploadSchema, request.body))));
   app.post("/api/tasks", async (request, reply) => reply.code(201).send(store.createTask(parseTask(request.body))));
   app.patch<{ Params: { id: string } }>("/api/tasks/:id", async (request) => store.updateTask(request.params.id, parseTask(request.body)));
+  app.get("/api/tasks/export", async (_request, reply) => {
+    reply.header("content-disposition", 'attachment; filename="llm-arena-prompts.json"');
+    return store.listTasks().map((task) => ({
+      name: task.currentRevision.name,
+      ...(task.description ? { description: task.description } : {}),
+      prompt: task.currentRevision.prompt,
+    }));
+  });
+  app.post("/api/tasks/import", async (request) => {
+    const incoming = parse(importTasksSchema, request.body);
+    const existing = new Map(store.listTasks().map((task) => [task.currentRevision.name, task]));
+    let created = 0;
+    let updated = 0;
+    for (const item of incoming) {
+      const current = existing.get(item.name);
+      if (!current) {
+        store.createTask({ ...item, kind: "prompt", tags: [], images: [] });
+        created += 1;
+        continue;
+      }
+      // Совпадение по названию — правка, а не дубль: тип, фикстура, теги и картинки остаются от текущей версии.
+      const revision = current.currentRevision;
+      store.updateTask(current.id, {
+        ...item,
+        tags: revision.tags,
+        images: revision.images,
+        ...(revision.kind === "coding" ? { kind: "coding" as const, fixtureId: revision.fixtureId } : { kind: "prompt" as const }),
+      });
+      updated += 1;
+    }
+    return { created, updated };
+  });
   app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
     store.archiveTask(request.params.id);
     return reply.code(204).send();
@@ -512,7 +552,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return {
       ...withPublicError(run),
       activityStatus: activityStatus(run),
-      taskRuns: taskRuns.map((taskRun) => ({ ...withSelectedVersion(taskRun), taskDescription: store.taskDescriptionByRevision(taskRun.task_revision_id) })),
+      taskRuns: taskRuns.map((taskRun) => ({
+        ...withSelectedVersion(taskRun),
+        // Имя — из снапшота: карточка показывает промпт таким, каким его получила модель. Описание — заметка,
+        // она не версионируется, поэтому берётся текущая.
+        taskName: taskRunName(taskRun) ?? `Промпт ${taskRun.position + 1}`,
+        taskDescription: store.taskDescriptionByRevision(taskRun.task_revision_id),
+      })),
     };
   });
   app.get<{ Params: { id: string } }>("/api/runs/:id/error-details", async (request) => {

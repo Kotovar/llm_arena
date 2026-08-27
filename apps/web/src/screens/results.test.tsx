@@ -63,6 +63,22 @@ describe("критерии оценки", () => {
   });
 });
 
+describe("комментарий к оценке", () => {
+  // jsdom не вставляет перенос строки по Ctrl+Enter, поэтому здесь проверяется только отправка формы.
+  it("сохраняет оценку по Ctrl+Enter", async () => {
+    const user = userEvent.setup();
+    await renderResult();
+    const comment = screen.getByLabelText("Комментарий");
+
+    await user.click(comment);
+    await user.keyboard("Ровно то, что нужно");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/review"))).toBe(true));
+    expect((comment as HTMLTextAreaElement).value).toBe("Ровно то, что нужно");
+  });
+});
+
 describe("шкала оценки", () => {
   it("при наведении ниже выбранного значения подсветка уменьшается, а не пропадает", async () => {
     const user = userEvent.setup();
@@ -194,6 +210,7 @@ function taskRunAt(position: number, name: string, review?: { correctness: numbe
   return taskRun({
     id: `task-run-${position}`,
     position,
+    taskName: name,
     snapshot_json: JSON.stringify({ task: { id: `rev-${position}`, taskId: `task-${position}`, name, kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: [], images: [] } }),
     ...(review ? { review } : {}),
   });

@@ -293,12 +293,14 @@ describe("подписи списка запусков", () => {
     expect(finishedSince([{ id: "c", status: "completed", activityStatus: "running-followup" }], [{ id: "c", status: "completed" }]).map((run) => run.id)).toEqual(["c"]);
   });
 
-  it("ищет промпт по названию и тексту", () => {
-    const task = { currentRevision: { name: "2D-аквариум", prompt: "Сделай симуляцию рыбок" } };
+  it("ищет промпт по названию, описанию и тексту", () => {
+    const task = { description: "Проверяем плавность анимации", currentRevision: { name: "2D-аквариум", prompt: "Сделай симуляцию рыбок" } };
     expect(matchesPromptQuery(task, "")).toBe(true);
     expect(matchesPromptQuery(task, "  ")).toBe(true);
     expect(matchesPromptQuery(task, "АКВА")).toBe(true);
     expect(matchesPromptQuery(task, "рыбок")).toBe(true);
+    expect(matchesPromptQuery(task, "плавность")).toBe(true);
+    expect(matchesPromptQuery({ currentRevision: task.currentRevision }, "плавность")).toBe(false);
     expect(matchesPromptQuery(task, "часы")).toBe(false);
   });
 

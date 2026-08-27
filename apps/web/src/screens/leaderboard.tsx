@@ -16,10 +16,10 @@ const kindFilters = [
 type KindFilter = (typeof kindFilters)[number][0];
 
 const criteriaColumns = [
-  ["correctness", "Корректность"],
-  ["codeQuality", "Удобство"],
-  ["uiQuality", "Визуал"],
-  ["instructionFollowing", "Задание"],
+  ["correctness", "Корректность", "Насколько результат правильно решает задачу."],
+  ["codeQuality", "Удобство", "Качество кода и решения: читаемость, структура, отсутствие лишнего."],
+  ["uiQuality", "Визуал", "Внешний вид готового web-приложения. У текстовых ответов критерий не применяется."],
+  ["instructionFollowing", "Задание", "Насколько точно выполнены требования промпта."],
 ] as const;
 
 function speedLabel(entry: LeaderboardEntry) {
@@ -57,7 +57,7 @@ export function LeaderboardPage() {
         <th scope="col">#</th>
         <th scope="col">Модель</th>
         <th scope="col">Доля баллов</th>
-        {criteriaColumns.map(([key, label]) => <th scope="col" key={key}>{label}</th>)}
+        {criteriaColumns.map(([key, label, hint]) => <th scope="col" key={key} title={hint}>{label}</th>)}
         <th scope="col" title="Средняя скорость генерации по всем замерам модели. Контекст и профиль у промптов разные, поэтому цифра ориентировочная.">Скорость</th>
         <th scope="col">Прогонов</th>
         <th scope="col">Оценено промптов</th>

@@ -308,6 +308,58 @@ describe("REST API", () => {
     }
   });
 
+  it("экспортирует промпты и переносит их обратно без дублей", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-transfer-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+    const existing = store.createTask({ name: "Часы", kind: "prompt", prompt: "Сделай часы", tags: ["ui"], description: "Проверяем таймеры" });
+
+    const exported = await app.inject({ method: "GET", url: "/api/tasks/export" });
+
+    expect(exported.headers["content-disposition"]).toContain("llm-arena-prompts.json");
+    expect(exported.json()).toEqual([{ name: "Часы", description: "Проверяем таймеры", prompt: "Сделай часы" }]);
+
+    const imported = await app.inject({ method: "POST", url: "/api/tasks/import", payload: [
+      { name: "Часы", description: "Проверяем таймеры и будильник", prompt: "Сделай часы с будильником" },
+      { name: "Калькулятор", prompt: "Сделай калькулятор" },
+    ] });
+
+    expect(imported.json()).toEqual({ created: 1, updated: 1 });
+    const tasks = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as Array<Record<string, never>>;
+    expect(tasks).toHaveLength(2);
+    // Совпадение по названию — правка существующего промпта, а теги прежней версии не теряются.
+    expect(tasks.find((task) => task.id === existing.id)).toMatchObject({
+      description: "Проверяем таймеры и будильник",
+      currentRevision: { revision: 2, prompt: "Сделай часы с будильником", tags: ["ui"] },
+    });
+    // Пустой список и лишние поля — ошибка, а не молчаливый импорт.
+    expect((await app.inject({ method: "POST", url: "/api/tasks/import", payload: [] })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/api/tasks/import", payload: [{ name: "X", prompt: "Y", kind: "coding" }] })).statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
+  it("отдаёт имя промпта из снапшота, а описание — текущее с задачи", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-labels-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Часы", kind: "prompt", prompt: "Сделай часы", tags: [] });
+    const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/model.gguf", alias: "local" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "omp", resultMode: "web" });
+    store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
+    // Описание добавлено уже после прогона: он всё равно должен его показать.
+    store.updateTask(task.id, { name: "Часы с будильником", kind: "prompt", prompt: "Сделай часы", tags: [], description: "Проверяем таймеры" });
+    const app = buildApp({ store, config });
+
+    const detail = await app.inject({ method: "GET", url: `/api/runs/${run.id}` });
+
+    expect(detail.json().taskRuns).toMatchObject([{ taskName: "Часы", taskDescription: "Проверяем таймеры" }]);
+    await app.close();
+    store.close();
+  });
+
   it("discovers and safely connects a GGUF file from the persisted directory", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-local-api-"));
     directories.push(directory);
