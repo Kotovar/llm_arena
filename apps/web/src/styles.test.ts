@@ -18,6 +18,11 @@ describe("responsive result layout", () => {
     expect(css).toMatch(/\.followup-item[^}]*overflow-wrap:\s*anywhere/);
   });
 
+  it("overlays the follow-output button instead of shifting the log layout", () => {
+    expect(css).toMatch(/\.live-output\s*\{[^}]*position:\s*relative/);
+    expect(css).toMatch(/\.follow-output\s*\{[^}]*position:\s*absolute/);
+  });
+
   it("provides compact disclosure controls for versions and follow-ups", () => {
     expect(css).toMatch(/\.version-picker/);
     expect(css).toMatch(/\.followups\s*>\s*summary/);

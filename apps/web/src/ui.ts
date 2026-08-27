@@ -195,6 +195,15 @@ export function launchModeNote({ kind, resultMode, usingOmpAgent, ompUnavailable
   return resultMode === "web" ? "Изолированный OMP: без skills, расширений и MCP." : "Ответ модели без рабочей директории";
 }
 
+// Вкладка браузера показывает ход генерации: свёрнутое окно всё ещё говорит, на каком промпте запуск.
+export function runTabTitle(active: boolean, current: number, total: number, taskName?: string): string {
+  if (!active || total <= 0) return "LLM Arena";
+  // Вкладка обрезает текст, поэтому счётчик идёт первым, а длинное имя промпта укорачивается.
+  const name = taskName?.trim();
+  const short = name && name.length > 32 ? `${name.slice(0, 31)}…` : name;
+  return [`⏳ ${current}/${total}`, short, "LLM Arena"].filter(Boolean).join(" · ");
+}
+
 export function runProgress(total: number, statuses: string[]) {
   const completed = statuses.filter((status) => status === "completed").length;
   return {

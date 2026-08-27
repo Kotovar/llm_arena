@@ -6,7 +6,7 @@ import { useConfirm } from "../confirm.js";
 import { Empty, Page, Panel, Status, useData } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, Runner, Task, TaskRun } from "../types.js";
-import { checkStatusLabel, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, shouldFollowOutput, statusLabel } from "../ui.js";
+import { checkStatusLabel, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
@@ -60,11 +60,6 @@ function parseResult(json: string | null): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
-}
-
-function resultAnswer(json: string | null) {
-  const answer = parseResult(json)?.finalAnswer;
-  return typeof answer === "string" ? answer : "";
 }
 
 function resultSha(json: string | null) {
@@ -362,6 +357,14 @@ function PromptRail({ items, activeId, reviewed, onSelect }: { items: RailItem[]
   </nav>;
 }
 
+function TabTitle({ text }: { text: string }) {
+  useEffect(() => {
+    document.title = text;
+    return () => { document.title = "LLM Arena"; };
+  }, [text]);
+  return null;
+}
+
 export function RunDetail({ runId }: { runId: string }) {
   const client = useQueryClient();
   const navigate = useNavigate();
@@ -402,6 +405,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const nextUnrated = items.slice(activeIndex + 1).find((item) => !item.score) ?? items.find((item) => !item.score && item.taskRun.id !== activeId);
   const step = (delta: number) => { const next = items[activeIndex + delta]; if (next) setSelectedTaskRunId(next.taskRun.id); };
   return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", ompModeLabel(run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
+    <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName)} />
     {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? "Выполняется уточнение" : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
     {run.data.error && !hasTaskError ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
     <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}>{items.length ? <div className="run-split"><PromptRail items={items} activeId={activeId!} reviewed={scores.reviewed} onSelect={setSelectedTaskRunId} />

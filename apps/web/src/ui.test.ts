@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, matchesPromptQuery, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, matchesPromptQuery, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -168,6 +168,14 @@ describe("интерфейс запуска", () => {
 
   it("помечает расчётную скорость знаком приблизительности", () => {
     expect(formatMeasuredMetric("generationTokensPerSecond", { value: 5.25, source: "estimated" })).toBe("≈ 5.3 токенов/с");
+  });
+
+  it("показывает ход генерации во вкладке браузера", () => {
+    expect(runTabTitle(true, 1, 5)).toBe("⏳ 1/5 · LLM Arena");
+    expect(runTabTitle(true, 2, 5, "Falling Sand")).toBe("⏳ 2/5 · Falling Sand · LLM Arena");
+    expect(runTabTitle(true, 2, 5, "a".repeat(40))).toBe(`⏳ 2/5 · ${"a".repeat(31)}… · LLM Arena`);
+    expect(runTabTitle(false, 5, 5)).toBe("LLM Arena");
+    expect(runTabTitle(true, 0, 0)).toBe("LLM Arena");
   });
 
   it("останавливает автопрокрутку, когда пользователь ушёл вверх", () => {

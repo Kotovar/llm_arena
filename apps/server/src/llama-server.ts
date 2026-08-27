@@ -43,6 +43,9 @@ export function buildLlamaServerCommand(
     "-fa",
     profile.flashAttention === "auto" ? "auto" : profile.flashAttention ? "on" : "off",
     "--jinja",
+    // Дефолт llama-server (temp 0.8) на длинном контексте срывает tool call в мусорную генерацию.
+    "--temp",
+    String(profile.temperature ?? 0.2),
     "-np",
     "1",
     "--cache-reuse",

@@ -2,6 +2,23 @@ import { describe, expect, it } from "vitest";
 import { buildLlamaServerCommand } from "./llama-server.js";
 
 describe("llama-server command", () => {
+  it("pins sampling temperature so long-context tool calls stay parseable", () => {
+    const base = {
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      batchSize: 1024,
+      ubatchSize: 512,
+      flashAttention: "auto" as const,
+      cacheReuse: 256,
+    };
+    const model = { path: "/models/a.gguf", alias: "a" };
+    const fallback = buildLlamaServerCommand("/bin/llama-server", model, { ...base, context: "auto", nGpuLayers: "auto" }, 8080, "/tmp/arena-slots");
+    const explicit = buildLlamaServerCommand("/bin/llama-server", model, { ...base, context: "auto", nGpuLayers: "auto", temperature: 0.9 }, 8080, "/tmp/arena-slots");
+
+    expect(fallback[fallback.indexOf("--temp") + 1]).toBe("0.2");
+    expect(explicit[explicit.indexOf("--temp") + 1]).toBe("0.9");
+  });
+
   it("renders native automatic fitting without an exact context", () => {
     const command = buildLlamaServerCommand(
       "/bin/llama-server",

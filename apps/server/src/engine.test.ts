@@ -293,6 +293,74 @@ console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content
     store.close();
   });
 
+  it("retries a task once when the model returns a broken tool call, from a clean workspace", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-retry-engine-"));
+    directories.push(root);
+    const script = join(root, "fake-retry.mjs");
+    const counter = join(root, "attempts");
+    writeFileSync(
+      script,
+      `import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+appendFileSync(${JSON.stringify(counter)}, "x");
+const attempt = readFileSync(${JSON.stringify(counter)}, "utf8").length;
+if (attempt === 1) {
+  writeFileSync("garbage.txt", "leftover");
+  console.log(JSON.stringify({type:"agent_end",errorMessage:"500 Failed to parse tool call arguments as JSON: [json.exception.parse_error.101] parse error"}));
+} else {
+  writeFileSync("index.html", "<h1>Готово</h1>");
+  console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:"attempt-"+attempt+"-leftover-"+existsSync("garbage.txt")}]}]}));
+}`,
+    );
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.browser = join(root, "missing-browser");
+    config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" as const, useOmpAgent: true });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("retry-engine-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    expect([taskRun.status, taskRun.error]).toEqual(["completed", null]);
+    expect(JSON.parse(taskRun.result_json ?? "{}").finalAnswer).toBe("attempt-2-leftover-false");
+    await engine.stop();
+    store.close();
+  });
+
+  it("gives up after one retry and keeps the model error", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-retry-exhausted-"));
+    directories.push(root);
+    const script = join(root, "fake-broken.mjs");
+    const counter = join(root, "attempts");
+    writeFileSync(
+      script,
+      `import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(counter)}, "x");
+console.log(JSON.stringify({type:"agent_end",errorMessage:"500 Failed to parse tool call arguments as JSON: [json.exception.parse_error.101] parse error"}));`,
+    );
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.browser = join(root, "missing-browser");
+    config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай страницу", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" as const, useOmpAgent: true });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("retry-exhausted-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    expect(taskRun.status).toBe("failed");
+    expect(taskRun.error).toContain("Failed to parse tool call arguments as JSON");
+    expect(readFileSync(counter, "utf8")).toBe("xx");
+    await engine.stop();
+    store.close();
+  });
+
   it("runs an additional prompt in the existing web workspace without replacing the original answer", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-followup-engine-"));
     directories.push(root);

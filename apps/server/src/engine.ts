@@ -15,6 +15,7 @@ import type { ArenaStore } from "./store.js";
 import { completedResultVersions } from "./result-versions.js";
 import { readGpuInfo, startGpuSampler, type GpuInfo } from "./system-metrics.js";
 import { buildTaskPrompt } from "./task-prompt.js";
+import { describeGenerationError } from "./generation-error.js";
 import { taskImagePath } from "./task-images.js";
 
 type RunEvent = { type: string; runId: string; taskRunId?: string; data?: unknown };
@@ -211,7 +212,7 @@ export class BenchmarkEngine {
           continue;
         }
         try {
-          const result = await this.#runAgent({
+          const agentInput = {
             definition,
             prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
             images: runnerImages(this.config.dataDir, effectiveTask.images),
@@ -229,7 +230,23 @@ export class BenchmarkEngine {
             stdoutPath,
             stderrPath,
             displayPath,
-          });
+          };
+          let result;
+          // ponytail: одна повторная попытка. Сорванный tool call недетерминирован, второй прогон обычно проходит.
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              result = await this.#runAgent(agentInput);
+              break;
+            } catch (error) {
+              const retriable = attempt === 0 && !signal.aborted && describeGenerationError((error as Error).message)?.code === "invalid_tool_call";
+              if (!retriable) throw error;
+              // Повтор идёт по тому же промпту, поэтому чистим KV-слот: иначе модель продолжает с того же состояния.
+              if (backend && !(await backend.reset())) throw error;
+              materializeWorkspaceVersion(prepared.gitDir, prepared.baselineSha, prepared.workspace);
+              for (const path of [stdoutPath, stderrPath, displayPath]) writeFileSync(path, "");
+              appendFileSync(displayPath, "Модель вернула некорректный tool call. Повторяем задание с чистого workspace.\n");
+            }
+          }
           if (backend) result.metrics.startupDurationMs = { value: backend.startupDurationMs, unit: "ms", source: "client-observed" };
           const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, signal) : [];
           const failedCheck = checks.find((check) => check.status !== "pass");
