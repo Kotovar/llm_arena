@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, matchesPromptQuery, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -291,6 +291,25 @@ describe("подписи списка запусков", () => {
     expect(finishedSince(after, after)).toEqual([]);
     // Уточнение в уже завершённом запуске тоже считается активностью.
     expect(finishedSince([{ id: "c", status: "completed", activityStatus: "running-followup" }], [{ id: "c", status: "completed" }]).map((run) => run.id)).toEqual(["c"]);
+  });
+
+  it("отмечает промпты, по которым уже есть результат в галерее", () => {
+    const result = (taskId: string, revisionId: string, modelId: string) => ({
+      taskRunId: `tr-${taskId}-${modelId}`,
+      runId: "run",
+      prompt: { id: revisionId, taskId, name: "Промпт", prompt: "Текст" },
+      model: { id: modelId, name: `Модель ${modelId}` },
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+    });
+    const coverage = galleryCoverage([result("t1", "r1", "m1"), result("t1", "r1", "m2"), result("t2", "r-old", "m1")]);
+    const task = (id: string, revisionId: string) => ({ id, currentRevision: { id: revisionId } });
+
+    expect(promptCoverageNote(coverage, task("t1", "r1"), "m1")).toEqual({ text: "уже есть у этой модели", state: "own" });
+    expect(promptCoverageNote(coverage, task("t1", "r1"), "m3")).toEqual({ text: "есть у 2 моделей", state: "other" });
+    // Промпт отредактировали: результаты остались на прежней версии и сравнению не годятся.
+    expect(promptCoverageNote(coverage, task("t2", "r-new"), "m1")).toEqual({ text: "есть по прежней версии", state: "stale" });
+    expect(promptCoverageNote(coverage, task("t3", "r9"), "m1")).toBeUndefined();
   });
 
   it("ищет промпт по названию, описанию и тексту", () => {

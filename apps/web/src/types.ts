@@ -134,7 +134,7 @@ export type GalleryMetrics = {
 export type GalleryResult = {
   taskRunId: string;
   runId: string;
-  prompt: { id: string; name: string; description?: string | null; prompt: string };
+  prompt: { id: string; taskId?: string | null; name: string; description?: string | null; prompt: string };
   model: { id: string; name: string; kind?: Model["kind"]; modelRef?: string };
   reasoningEffort?: string | null;
   profile?: { name: string; context: number | "auto" } | null;

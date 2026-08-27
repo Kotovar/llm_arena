@@ -19,6 +19,7 @@ beforeEach(() => {
     "/api/runners": [{ id: "codex", name: "Codex", kind: "codex", exec: ["codex"], default: true }],
     "/api/model-catalog": {},
     "/api/runs": [],
+    "/api/gallery": [],
   };
   vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(payloads[url] ?? {}), { status: 200, headers: { "content-type": "application/json" } })));
 });
@@ -29,6 +30,32 @@ afterEach(() => {
 });
 
 const checkbox = (name: string) => screen.findByRole<HTMLInputElement>("checkbox", { name: new RegExp(name, "u") });
+
+describe("отметки о готовых результатах", () => {
+  it("показывает, что по промпту уже есть результат выбранной модели", async () => {
+    const user = userEvent.setup();
+    payloads["/api/gallery"] = [{
+      taskRunId: "tr-1",
+      runId: "run-1",
+      prompt: { id: "task-1-rev", taskId: "task-1", name: "Аквариум", prompt: "Промпт" },
+      model: { id: "model-1", name: "Модель" },
+      selectedVersion: { type: "initial", followupId: null, resultSha: "a".repeat(40), status: "completed", index: 0 },
+      screenshotUrl: null,
+    }];
+    payloads["/api/models"] = [
+      ...(payloads["/api/models"] as unknown[]),
+      { id: "model-2", name: "Вторая", kind: "cloud", provider: "openai", modelRef: "model", path: null, alias: null, capabilities: { toolUse: true, vision: false, reasoning: false }, mmprojPath: null },
+    ];
+    await renderInApp(<Launcher />, "/");
+
+    // По умолчанию выбрана первая модель, у неё результат уже есть.
+    expect(await screen.findByText("уже есть у этой модели")).toBeDefined();
+
+    await user.selectOptions(screen.getByLabelText("Подключение"), "model-2");
+
+    expect(await screen.findByText("есть у 1 модели")).toBeDefined();
+  });
+});
 
 describe("повтор промпта на другой модели", () => {
   it("выбирает только тот промпт, что пришёл в адресе", async () => {

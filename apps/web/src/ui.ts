@@ -56,6 +56,32 @@ export function chooseRunner(
 }
 
 /** Поиск по названию и тексту промпта: подстрока без учёта регистра. */
+/** Какие модели уже дали по промпту успешный результат в галерее и на какой его версии. */
+export function galleryCoverage(results: readonly GalleryResult[]) {
+  const byTask = new Map<string, { modelIds: Set<string>; revisionIds: Set<string> }>();
+  for (const result of results) {
+    if (!result.prompt.taskId) continue;
+    const entry = byTask.get(result.prompt.taskId) ?? { modelIds: new Set<string>(), revisionIds: new Set<string>() };
+    entry.modelIds.add(result.model.id);
+    entry.revisionIds.add(result.prompt.id);
+    byTask.set(result.prompt.taskId, entry);
+  }
+  return byTask;
+}
+
+export function promptCoverageNote(
+  coverage: ReturnType<typeof galleryCoverage>,
+  task: { id: string; currentRevision: { id: string } },
+  modelId: string,
+): { text: string; state: "own" | "other" | "stale" } | undefined {
+  const entry = coverage.get(task.id);
+  if (!entry) return undefined;
+  // Правка промпта заводит новую версию: старые результаты остаются, но сравнивать их уже не с чем.
+  if (!entry.revisionIds.has(task.currentRevision.id)) return { text: "есть по прежней версии", state: "stale" };
+  if (modelId && entry.modelIds.has(modelId)) return { text: "уже есть у этой модели", state: "own" };
+  return { text: `есть у ${entry.modelIds.size} ${plural(entry.modelIds.size, "модели", "моделей", "моделей")}`, state: "other" };
+}
+
 export function matchesPromptQuery(task: { description?: string; currentRevision: { name: string; prompt: string } }, query: string): boolean {
   const needle = query.trim().toLocaleLowerCase("ru");
   if (!needle) return true;

@@ -81,7 +81,10 @@ a { color: var(--signal); text-decoration: none; }
 .prompt-search input { width: 100%; padding: 9px 11px; }
 .picker-actions a { display: inline-flex; align-items: center; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
 .prompt-options { display: grid; gap: 7px; max-height: 310px; overflow: auto; padding-right: 3px; }
-.prompt-options > label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; padding: 11px 12px; border: 1px solid var(--control-line); border-radius: 10px; background: #121723; cursor: pointer; }
+.prompt-options > label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 11px 12px; border: 1px solid var(--control-line); border-radius: 10px; background: #121723; cursor: pointer; }
+.prompt-covered { align-self: start; padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; color: var(--muted); font: 400 10px ui-monospace, monospace; font-style: normal; white-space: nowrap; }
+.prompt-covered.own { color: var(--good); }
+.prompt-covered.stale { color: var(--warn); }
 .prompt-options > label.selected { border-color: #8fb0ee; background: #182237; }
 .prompt-options input { width: auto; margin: 3px 0 0; }
 .prompt-options strong, .prompt-options small { display: block; }

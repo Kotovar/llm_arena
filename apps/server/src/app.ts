@@ -93,7 +93,7 @@ function contained(root: string, requested: string): string {
 }
 
 type GallerySnapshot = {
-  task?: { name?: string; prompt?: string };
+  task?: { taskId?: string; name?: string; prompt?: string };
   fixture?: { preview?: unknown };
   model?: { name?: string; modelRef?: string };
   reasoningEffort?: string | null;
@@ -480,7 +480,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         return [{
           taskRunId: taskRun.id,
           runId: run.id,
-          prompt: { id: taskRun.task_revision_id, name: task.name, description: store.taskDescriptionByRevision(taskRun.task_revision_id), prompt: task.prompt },
+          // taskId нужен, чтобы отметки о готовых результатах переживали правку промпта: у неё новая версия.
+          prompt: { id: taskRun.task_revision_id, taskId: task.taskId ?? store.getTaskRevision(taskRun.task_revision_id)?.taskId ?? null, name: task.name, description: store.taskDescriptionByRevision(taskRun.task_revision_id), prompt: task.prompt },
           model: {
             id: run.model_id,
             name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),
