@@ -539,6 +539,21 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!cancelled && !followup) store.updateRunStatus(run.id, "cancelled");
     return reply.code(202).send({ status: "cancelled" });
   });
+  // Прогон, упавший на середине группы, доигрывается с первого промпта без результата.
+  // Состояние перечитываем прямо перед записью: между проверкой и мутацией мог быть await, а движок работает параллельно.
+  const resumeRun = (runId: string) => {
+    const run = store.getRun(runId);
+    if (!run) throw new Error("Run not found");
+    if (run.status === "pending" || run.status === "running") throw new Error("Run is already active");
+    if (hasActiveFollowup(run.id)) throw new Error("Active additional prompt must be cancelled before resuming");
+    store.updateRunStatus(run.id, "pending");
+    engine?.wake();
+  };
+  app.post<{ Params: { id: string } }>("/api/runs/:id/resume", async (request, reply) => {
+    if (store.listRunTasks(request.params.id).length <= store.listTaskRuns(request.params.id).length) throw new Error("Run has no prompts left");
+    resumeRun(request.params.id);
+    return reply.code(202).send({ status: "pending" });
+  });
   app.get<{ Params: { id: string } }>("/api/runs/:id/events", async (request, reply) => {
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -586,6 +601,28 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (taskRun.status !== "pending" && taskRun.status !== "running") throw new Error("Prompt is not running");
     if (!engine?.cancelTask(taskRun.id)) store.saveTaskRunResult(taskRun.id, {}, "cancelled");
     return reply.code(202).send({ status: "cancelled" });
+  });
+  // Перезапуск промпта с нуля: старый результат и его файлы уходят, движок проходит позицию заново.
+  app.post<{ Params: { id: string } }>("/api/task-runs/:id/retry", async (request, reply) => {
+    const assertRestartable = () => {
+      const taskRun = store.getTaskRun(request.params.id);
+      if (!taskRun) throw new Error("Task run not found");
+      if (taskRun.status !== "failed" && taskRun.status !== "cancelled") throw new Error("Only a failed or stopped prompt can be restarted");
+      const run = store.getRun(taskRun.benchmark_run_id);
+      if (!run) throw new Error("Run not found");
+      if (run.status === "pending" || run.status === "running") throw new Error("Active run must be cancelled before restart");
+      if (hasActiveFollowup(run.id)) throw new Error("Active additional prompt must be cancelled before restart");
+      return taskRun;
+    };
+    const taskRun = assertRestartable();
+    await preview?.removeTaskRunPreviews?.([taskRun.id]);
+    // Пока снимали превью, движок мог снова взять прогон в работу: перепроверяем перед удалением.
+    assertRestartable();
+    const artifacts = resolve(taskRun.artifact_path);
+    if (artifacts.startsWith(`${resolve(config.dataDir, "runs")}/`)) rmSync(artifacts, { recursive: true, force: true });
+    store.deleteTaskRun(taskRun.id);
+    resumeRun(taskRun.benchmark_run_id);
+    return reply.code(202).send({ status: "pending" });
   });
   app.get<{ Params: { id: string } }>("/api/task-runs/:id/error-details", async (request) => {
     const run = store.getTaskRun(request.params.id);

@@ -160,6 +160,48 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_t
     store.close();
   });
 
+  it("resumes a stopped run from the first prompt without a result", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-resume-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    writeFileSync(
+      script,
+      `let input=""; for await (const chunk of process.stdin) input+=chunk;
+if (input.includes("slow")) { setInterval(() => {}, 1000); process.stdout.write("working\\n"); } else {
+console.log(JSON.stringify({type:"thread.started",thread_id:"thread"}));
+console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"done"}}));
+console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:1}})); }`,
+    );
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const slow = store.createTask({ name: "Slow", kind: "prompt", prompt: "slow", tags: [] });
+    const fast = store.createTask({ name: "Fast", kind: "prompt", prompt: "fast", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ taskRevisionIds: [slow.currentRevision.id, fast.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("resume-test", 100));
+    const unsubscribe = engine.subscribe(run.id, (event) => {
+      const data = event.data as { status?: string; name?: string } | undefined;
+      if (event.type === "task.status" && data?.status === "running" && data.name === "Slow") setTimeout(() => void engine.cancel(run.id), 50);
+    });
+
+    await engine.processNext();
+    unsubscribe();
+
+    expect(store.listTaskRuns(run.id).map((taskRun) => taskRun.status)).toEqual(["cancelled"]);
+    const stoppedId = store.listTaskRuns(run.id)[0]!.id;
+
+    store.updateRunStatus(run.id, "pending");
+    await engine.processNext();
+
+    const taskRuns = store.listTaskRuns(run.id);
+    expect(taskRuns.map((taskRun) => taskRun.status)).toEqual(["cancelled", "completed"]);
+    expect(taskRuns[0]!.id).toBe(stoppedId);
+    await engine.stop();
+    store.close();
+  });
+
   it("rejects image tasks for a model not declared vision-capable", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-vision-gate-"));
     directories.push(root);

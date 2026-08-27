@@ -168,8 +168,13 @@ export class BenchmarkEngine {
     this.store.setRunSnapshot(run.id, { tasks, model: selectedModel, profile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
     const backendStdout = join(runRoot, "backend.stdout.log");
     const backendStderr = join(runRoot, "backend.stderr.log");
-    writeFileSync(backendStdout, "");
-    writeFileSync(backendStderr, "");
+    // Возобновление после сбоя: позиции с уже созданным task_run пропускаем, идём с первого невыполненного.
+    const executed = new Set(this.store.listTaskRuns(run.id).map((taskRun) => taskRun.position));
+    // Логи бэкенда за уже отработавшие промпты нужны как раз при разборе сбоя, поэтому чистим их только на первом заходе.
+    for (const path of [backendStdout, backendStderr]) {
+      if (executed.size) appendFileSync(path, "\n--- Прогон возобновлён ---\n");
+      else writeFileSync(path, "");
+    }
 
     let backend:
       | Awaited<ReturnType<LlamaCppServerManager["start"]>>
@@ -203,6 +208,7 @@ export class BenchmarkEngine {
       }
       for (const [position, task] of tasks.entries()) {
         if (signal.aborted) break;
+        if (executed.has(position)) continue;
         const effectiveTask = run.result_mode === "web"
           ? { ...task, kind: "coding" as const, fixtureId: "web-app" }
           : { ...task, kind: "prompt" as const, fixtureId: undefined };

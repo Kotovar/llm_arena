@@ -527,6 +527,59 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("restarts a failed prompt and resumes the rest of the planned group", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-resume-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const first = store.createTask({ name: "First", kind: "prompt", prompt: "First", tags: [] });
+    const second = store.createTask({ name: "Second", kind: "prompt", prompt: "Second", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model" });
+    const run = store.createRun({ taskRevisionIds: [first.currentRevision.id, second.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const artifactPath = join(directory, "runs", run.id, "task-0");
+    mkdirSync(artifactPath, { recursive: true });
+    writeFileSync(join(artifactPath, "stdout.log"), "broken");
+    const taskRun = store.createTaskRun(run.id, first.currentRevision.id, 0, artifactPath, { task: first.currentRevision });
+    store.saveTaskRunResult(taskRun.id, {}, "failed", "Runner exited 1");
+    store.updateRunStatus(run.id, "failed", "Runner exited 1");
+    let wakes = 0;
+    const app = buildApp({ store, config, engine: { wake: () => { wakes += 1; } } as never });
+
+    const resumed = await app.inject({ method: "POST", url: `/api/runs/${run.id}/resume` });
+    expect(resumed.statusCode).toBe(202);
+    expect(store.getRun(run.id)?.status).toBe("pending");
+    expect(store.listTaskRuns(run.id)).toHaveLength(1);
+
+    const busy = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/retry` });
+    expect(busy.statusCode).toBe(400);
+    expect(busy.json().error).toContain("Active run");
+
+    store.updateRunStatus(run.id, "failed", "Runner exited 1");
+    const retried = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/retry` });
+    expect(retried.statusCode).toBe(202);
+    expect(store.listTaskRuns(run.id)).toHaveLength(0);
+    expect(existsSync(artifactPath)).toBe(false);
+    expect(store.getRun(run.id)?.status).toBe("pending");
+    expect(wakes).toBe(2);
+
+    store.updateRunStatus(run.id, "completed");
+    const done = store.createTaskRun(run.id, first.currentRevision.id, 0, join(directory, "runs", run.id, "task-a"), { task: first.currentRevision });
+    store.saveTaskRunResult(done.id, { finalAnswer: "ok" });
+    const tail = store.createTaskRun(run.id, second.currentRevision.id, 1, join(directory, "runs", run.id, "task-b"), { task: second.currentRevision });
+    store.saveTaskRunResult(tail.id, { finalAnswer: "ok" });
+
+    const nothingLeft = await app.inject({ method: "POST", url: `/api/runs/${run.id}/resume` });
+    expect(nothingLeft.statusCode).toBe(400);
+    expect(nothingLeft.json().error).toContain("no prompts left");
+
+    const completedRetry = await app.inject({ method: "POST", url: `/api/task-runs/${done.id}/retry` });
+    expect(completedRetry.statusCode).toBe(400);
+    expect(completedRetry.json().error).toContain("failed or stopped");
+    await app.close();
+    store.close();
+  });
+
   it("keeps a huge provider error out of normal result payloads and exposes it on demand", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-error-details-"));
     directories.push(directory);
