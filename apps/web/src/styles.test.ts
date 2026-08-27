@@ -23,6 +23,10 @@ describe("responsive result layout", () => {
     expect(css).toMatch(/\.follow-output\s*\{[^}]*position:\s*absolute/);
   });
 
+  it("отделяет шапку результата от метрик и версий", () => {
+    expect(css).toMatch(/\.result-card\s*>\s*header\s*\{[^}]*margin-bottom:\s*14px/);
+  });
+
   it("provides compact disclosure controls for versions and follow-ups", () => {
     expect(css).toMatch(/\.version-picker/);
     expect(css).toMatch(/\.followups\s*>\s*summary/);

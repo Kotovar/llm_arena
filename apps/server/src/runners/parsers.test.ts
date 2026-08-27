@@ -21,6 +21,17 @@ describe("runner output parsers", () => {
     expect(result.metrics.cachedInputTokens.value).toBe(100);
     expect(result.metrics.modelRequests.value).toBe(2);
     expect(result.metrics.generationTokensPerSecond.value).toBe(10);
+    // Контекст в финале — только последнее обращение (8 + 60 + 3), а не сумма по всем.
+    expect(result.metrics.finalContextTokens.value).toBe(71);
+  });
+
+  it("не выдумывает заполненность контекста, когда у обращения нет usage", () => {
+    const output = JSON.stringify({
+      type: "agent_end",
+      messages: [{ role: "assistant", content: [{ type: "text", text: "Done" }] }],
+    });
+
+    expect(parseOmpOutput(output, 1_000, 0).metrics.finalContextTokens).toMatchObject({ value: null, source: "unavailable" });
   });
 
   it("rejects a terminal OMP agent error", () => {
@@ -112,5 +123,6 @@ describe("runner output parsers", () => {
 
     expect(result.metrics.promptTokensPerSecond).toMatchObject({ value: 120, source: "llama.cpp" });
     expect(result.metrics.generationTokensPerSecond.value).toBe(40);
+    expect(result.metrics.finalContextTokens.value).toBe(20);
   });
 });

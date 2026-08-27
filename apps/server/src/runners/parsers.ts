@@ -38,6 +38,8 @@ function metrics(totalMs: number, startupMs: number): NormalizedRunResult["metri
     cachedInputTokens: unavailable(),
     outputTokens: unavailable(),
     modelRequests: unavailable(),
+    finalContextTokens: unavailable(),
+    contextWindowTokens: unavailable(),
     promptTokensPerSecond: unavailable(),
     generationTokensPerSecond: unavailable(),
   };
@@ -88,6 +90,15 @@ export function parseOmpOutput(output: string, totalMs: number, startupMs: numbe
     "tokens/s",
   );
   resultMetrics.ttftMs = runnerNumber(last?.ttft, "ms");
+  // Контекст последнего обращения: весь промпт (новый и поднятый из кеша) плюс то, что модель дописала.
+  // У claude/codex/opencode такого поля нет: их финальный usage — сумма по всему прогону.
+  // Для claude и opencode оно теоретически собирается из потока событий, но не проверено на живом выводе.
+  const lastUsage = last?.usage as Json | undefined;
+  const lastContext = ["input", "cacheRead", "output"].reduce<number | undefined>((sum, key) => {
+    const value = lastUsage?.[key];
+    return typeof value === "number" ? (sum ?? 0) + value : sum;
+  }, undefined);
+  resultMetrics.finalContextTokens = runnerNumber(lastContext, "tokens");
   return {
     finalAnswer: textContent(last?.content),
     exitCode: 0,
@@ -207,6 +218,11 @@ export function parseLlamaResponse(response: unknown, totalMs: number, startupMs
   resultMetrics.cachedInputTokens = llamaNumber(promptDetails.cached_tokens, "tokens");
   resultMetrics.outputTokens = llamaNumber(usage.completion_tokens, "tokens");
   resultMetrics.modelRequests = llamaNumber(1, "requests");
+  // Один запрос без агента: контекст в финале — это весь промпт вместе с ответом.
+  resultMetrics.finalContextTokens = llamaNumber(
+    typeof usage.prompt_tokens === "number" && typeof usage.completion_tokens === "number" ? usage.prompt_tokens + usage.completion_tokens : undefined,
+    "tokens",
+  );
   resultMetrics.promptTokensPerSecond = llamaNumber(timings.prompt_per_second, "tokens/s");
   resultMetrics.generationTokensPerSecond = llamaNumber(timings.predicted_per_second, "tokens/s");
   return {

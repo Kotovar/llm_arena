@@ -240,6 +240,19 @@ export function formatMeasuredMetric(name: string, item?: { value: number | null
   return `${item.source === "estimated" ? "≈ " : ""}${formatMetricValue(name, item.value)}`;
 }
 
+/**
+ * Заполненность контекста в последнем обращении к модели. Длина окна известна только
+ * для локальных запусков (её отдаёт llama-server), для облачных показываем сами токены.
+ */
+export function contextFill(metrics?: Record<string, { value: number | null } | undefined>) {
+  const used = metrics?.finalContextTokens?.value;
+  if (used === null || used === undefined) return undefined;
+  const window = metrics?.contextWindowTokens?.value ?? null;
+  const tokens = formatMetricValue("finalContextTokens", used);
+  if (!window) return { label: tokens, percent: null };
+  return { label: `${tokens} из ${formatMetricValue("contextWindowTokens", window)}`, percent: Math.round((used / window) * 100) };
+}
+
 export function shouldFollowOutput(scrollTop: number, clientHeight: number, scrollHeight: number) {
   return scrollHeight - scrollTop - clientHeight < 24;
 }

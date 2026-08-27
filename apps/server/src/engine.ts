@@ -265,6 +265,7 @@ export class BenchmarkEngine {
             }
           }
           if (backend) result.metrics.startupDurationMs = { value: backend.startupDurationMs, unit: "ms", source: "client-observed" };
+          if (backend?.contextTokens) result.metrics.contextWindowTokens = { value: backend.contextTokens, unit: "tokens", source: "llama.cpp" };
           const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, taskSignal) : [];
           const failedCheck = checks.find((check) => check.status !== "pass");
           const status = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
@@ -357,6 +358,7 @@ export class BenchmarkEngine {
         stderrPath,
         displayPath,
       });
+      if (backend?.contextTokens) result.metrics.contextWindowTokens = { value: backend.contextTokens, unit: "tokens", source: "llama.cpp" };
       const checks = snapshot.fixture ? await this.#runChecks(snapshot.fixture, workspace, followup.artifact_path, signal) : [];
       const failedCheck = checks.find((check) => check.status !== "pass");
       const status = result.exitCode === 0 && !failedCheck ? "completed" : "failed";

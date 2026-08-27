@@ -76,6 +76,20 @@ async function waitForHealth(baseUrl: string, timeoutMs: number, process: OwnedP
   throw new Error(`llama-server health timeout after ${timeoutMs} ms`);
 }
 
+/** Длина контекста, с которой сервер реально поднялся: профиль мог просить "auto". */
+async function readContextTokens(baseUrl: string): Promise<number | null> {
+  try {
+    // Здоровый сервер отвечает мгновенно; без таймаута зависший /props подвесил бы весь запуск.
+    const response = await fetch(`${baseUrl}/props`, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) return null;
+    const props = await response.json() as { n_ctx?: unknown; default_generation_settings?: { n_ctx?: unknown } };
+    const value = props.default_generation_settings?.n_ctx ?? props.n_ctx;
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export class LlamaCppServerManager {
   constructor(
     private readonly executable: string,
@@ -114,6 +128,7 @@ export class LlamaCppServerManager {
     return {
       port,
       baseUrl,
+      contextTokens: await readContextTokens(baseUrl),
       command,
       startupDurationMs: performance.now() - startedAt,
       reset: async () => {

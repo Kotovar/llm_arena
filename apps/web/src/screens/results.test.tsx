@@ -58,7 +58,7 @@ describe("критерии оценки", () => {
   it("считает максимум по числу применимых критериев", async () => {
     await renderResult(taskRun({ snapshot_json: snapshot("prompt") }));
 
-    expect(screen.getByText("15/30")).toBeDefined();
+    expect(screen.getByText((_, element) => element?.tagName === "OUTPUT" && element.textContent === "15/30")).toBeDefined();
     expect(screen.queryByText("Визуал")).toBeNull();
   });
 });

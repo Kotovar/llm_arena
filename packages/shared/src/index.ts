@@ -168,6 +168,9 @@ export const normalizedMetricsSchema = z.object({
   cachedInputTokens: measuredSchema,
   outputTokens: measuredSchema,
   modelRequests: measuredSchema,
+  // Сколько токенов держал контекст в последнем обращении к модели и какой он был длины.
+  finalContextTokens: measuredSchema,
+  contextWindowTokens: measuredSchema,
   promptTokensPerSecond: measuredSchema,
   generationTokensPerSecond: measuredSchema,
 });

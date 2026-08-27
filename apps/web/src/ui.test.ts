@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, matchesPromptQuery, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { betterResult, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, matchesPromptQuery, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -93,6 +93,18 @@ describe("интерфейс запуска", () => {
     expect(statusLabel("cancelled")).toBe("Остановлен");
     expect(statusLabel("running-followup")).toBe("Выполняется уточнение");
     expect(statusLabel("partial")).toBe("Выполнен частично");
+  });
+
+  it("показывает заполненность контекста в долях окна, когда его длина известна", () => {
+    expect(contextFill({ finalContextTokens: { value: 41_200 }, contextWindowTokens: { value: 102_400 } }))
+      .toEqual({ label: "41 200 токенов из 102 400 токенов", percent: 40 });
+  });
+
+  it("для облачного запуска показывает только токены: длина окна неизвестна", () => {
+    expect(contextFill({ finalContextTokens: { value: 12_345 }, contextWindowTokens: { value: null } }))
+      .toEqual({ label: "12 345 токенов", percent: null });
+    expect(contextFill({ finalContextTokens: { value: null } })).toBeUndefined();
+    expect(contextFill(undefined)).toBeUndefined();
   });
 
   it("считает запуск активным, пока выполняется любое уточнение", () => {
