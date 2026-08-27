@@ -48,6 +48,26 @@ describe("llama-server command", () => {
     expect(command).not.toContain("-c");
   });
 
+  it("drops mmap only when part of the model can land on the CPU", () => {
+    const base = {
+      context: 32_768 as const,
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      batchSize: 1024,
+      ubatchSize: 512,
+      flashAttention: "auto" as const,
+      cacheReuse: 256,
+    };
+    const model = { path: "/models/a.gguf", alias: "a" };
+    const offloaded = buildLlamaServerCommand("/bin/llama-server", model, { ...base, nGpuLayers: "all", nCpuMoe: 8 }, 8080, "/tmp/arena-slots");
+    const fitted = buildLlamaServerCommand("/bin/llama-server", model, { ...base, nGpuLayers: "auto", fit: true, fitTargetMiB: 750, fitContextMin: 100_000 }, 8080, "/tmp/arena-slots");
+    const wholeGpu = buildLlamaServerCommand("/bin/llama-server", model, { ...base, nGpuLayers: "all" }, 8080, "/tmp/arena-slots");
+
+    expect(offloaded.slice(offloaded.indexOf("--load-mode"), offloaded.indexOf("--load-mode") + 2)).toEqual(["--load-mode", "none"]);
+    expect(fitted).toContain("--load-mode");
+    expect(wholeGpu).not.toContain("--load-mode");
+  });
+
   it("renders the immutable Ornith profile with fit disabled and a dynamic port", () => {
     const command = buildLlamaServerCommand(
       "/bin/llama-server",

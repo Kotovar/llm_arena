@@ -61,9 +61,9 @@ describe("llama.cpp profile", () => {
     }).success).toBe(false);
   });
 
-  it("rejects a manual context below 100k", () => {
+  it("rejects a manual context below the smallest usable one", () => {
     expect(llamaProfileSchema.safeParse({
-      context: 65_536,
+      context: 2048,
       nGpuLayers: "all",
       cacheTypeK: "q8_0",
       cacheTypeV: "q8_0",

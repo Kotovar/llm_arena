@@ -26,6 +26,9 @@ export function buildLlamaServerCommand(
     "-ngl",
     String(profile.nGpuLayers),
   ];
+  // mmap на вынесенных к CPU тензорах стоит ~12% скорости генерации, llama.cpp
+  // предупреждает об этом сам. Когда модель целиком в VRAM, mmap только ускоряет старт.
+  if (profile.fit || profile.nCpuMoe !== undefined || profile.nGpuLayers !== "all") command.push("--load-mode", "none");
   if (model.mmprojPath) command.push("--mmproj", model.mmprojPath);
   if (profile.fit) command.push("--fit-target", String(profile.fitTargetMiB), "--fit-ctx", String(profile.fitContextMin));
   if (profile.nCpuMoe !== undefined) command.push("--n-cpu-moe", String(profile.nCpuMoe));
