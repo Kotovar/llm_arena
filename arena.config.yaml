@@ -43,6 +43,12 @@ runners:
     kind: opencode
     default: true
     exec: [opencode]
+    # Часть моделей Zen отдаёт Forbidden по региону. NO_PROXY обязателен: локальный сервер
+    # самого opencode, llama-server и preview должны ходить мимо прокси.
+    env:
+      HTTPS_PROXY: "http://127.0.0.1:10808"
+      HTTP_PROXY: "http://127.0.0.1:10808"
+      NO_PROXY: "localhost,127.0.0.1,::1"
 fixtures:
   - id: web-app
     name: Готовое web-приложение
