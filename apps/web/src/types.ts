@@ -85,6 +85,7 @@ export type Runner = { id: string; name: string; kind: string; exec: string[]; d
 export type LeaderboardEntry = {
   modelId: string;
   modelName: string;
+  modelKind: "local-gguf" | "cloud";
   runCount: number;
   reviewedTaskRunCount: number;
   scorePercent: number | null;

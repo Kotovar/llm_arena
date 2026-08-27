@@ -595,7 +595,7 @@ describe("REST API", () => {
     const calls: Array<[string, string]> = [];
     const engine = {
       wake() {},
-      async cancel() { return false; },
+      async cancel() { return false; }, cancelTask() { return false; },
       subscribe() { return () => undefined; },
       async calibrate() { return {}; },
       async testModel(modelId: string, runnerId: string) { calls.push([modelId, runnerId]); return { ok: true, answer: "OK", durationMs: 12 }; },
@@ -650,7 +650,7 @@ describe("REST API", () => {
     store.saveTaskRunResult(taskRun.id, { finalAnswer: "Original" });
     store.updateRunStatus(run.id, "completed");
     let wakes = 0;
-    const engine = { wake() { wakes += 1; }, async cancel() { return false; }, subscribe() { return () => undefined; }, async calibrate() { return {}; }, async testModel() { return {}; } };
+    const engine = { wake() { wakes += 1; }, async cancel() { return false; }, cancelTask() { return false; }, subscribe() { return () => undefined; }, async calibrate() { return {}; }, async testModel() { return {}; } };
     const app = buildApp({ store, config, engine });
 
     const queued = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/followups`, payload: { prompt: "Исправь заголовок" } });
@@ -932,6 +932,149 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("deletes one failed prompt from a run and keeps the successful one", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-run-delete-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const good = store.createTaskRun(run.id, task.currentRevision.id, 0, join(config.dataDir, "runs", run.id, "good"), { task: task.currentRevision });
+    const bad = store.createTaskRun(run.id, task.currentRevision.id, 1, join(config.dataDir, "runs", run.id, "bad"), { task: task.currentRevision });
+    mkdirSync(bad.artifact_path, { recursive: true });
+    writeFileSync(join(bad.artifact_path, "stdout.log"), "broken");
+    store.saveTaskRunResult(good.id, { finalAnswer: "Good" });
+    store.saveTaskRunResult(bad.id, {}, "failed", "Runner exited 1");
+    store.saveReview(good.id, { correctness: 8, codeQuality: 8, uiQuality: 8, instructionFollowing: 8, comment: "" });
+    store.updateRunStatus(run.id, "failed");
+    const app = buildApp({ store, config });
+
+    const response = await app.inject({ method: "DELETE", url: `/api/task-runs/${bad.id}` });
+
+    expect(response.statusCode).toBe(204);
+    expect(store.listTaskRuns(run.id).map((taskRun) => taskRun.id)).toEqual([good.id]);
+    expect(store.getTaskRun(good.id)?.review).toBeTruthy();
+    expect(existsSync(bad.artifact_path)).toBe(false);
+    await app.close();
+    store.close();
+  });
+
+  it("refuses to delete the only prompt of a run", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-run-delete-last-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const only = store.createTaskRun(run.id, task.currentRevision.id, 0, join(config.dataDir, "runs", run.id, "task"), { task: task.currentRevision });
+    store.saveTaskRunResult(only.id, {}, "failed", "Runner exited 1");
+    const app = buildApp({ store, config });
+
+    const response = await app.inject({ method: "DELETE", url: `/api/task-runs/${only.id}` });
+
+    expect(response.statusCode).toBe(400);
+    expect(store.listTaskRuns(run.id)).toHaveLength(1);
+    await app.close();
+    store.close();
+  });
+
+  it("refuses to delete a prompt that is still running", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-run-delete-active-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(config.dataDir, "runs", run.id, "task"), { task: task.currentRevision });
+    store.startTaskRun(taskRun.id);
+    const app = buildApp({ store, config });
+
+    const response = await app.inject({ method: "DELETE", url: `/api/task-runs/${taskRun.id}` });
+
+    expect(response.statusCode).toBe(400);
+    expect(store.listTaskRuns(run.id)).toHaveLength(1);
+    await app.close();
+    store.close();
+  });
+
+  it("cancels one prompt through the engine without touching the whole run", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-cancel-route-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
+    store.startTaskRun(taskRun.id);
+    const cancelledTasks: string[] = [];
+    const engine = { wake() {}, async cancel() { return false; }, cancelTask(id: string) { cancelledTasks.push(id); return true; }, subscribe() { return () => undefined; }, async calibrate() { return {}; }, async testModel() { return {}; } };
+    const app = buildApp({ store, config, engine });
+
+    const response = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/cancel` });
+
+    expect(response.statusCode).toBe(202);
+    expect(cancelledTasks).toEqual([taskRun.id]);
+    expect(store.getRun(run.id)?.status).toBe("pending");
+    expect(store.getTaskRun(taskRun.id)?.status).toBe("running");
+    await app.close();
+    store.close();
+  });
+
+  it("marks a prompt cancelled itself when no engine is attached", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-cancel-fallback-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
+    store.startTaskRun(taskRun.id);
+    const app = buildApp({ store, config });
+
+    const response = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/cancel` });
+
+    expect(response.statusCode).toBe(202);
+    expect(store.getTaskRun(taskRun.id)?.status).toBe("cancelled");
+    await app.close();
+    store.close();
+  });
+
+  it("reports a partially finished run instead of a bare cancelled chip", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-partial-status-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const done = store.createTaskRun(run.id, task.currentRevision.id, 0, join(config.dataDir, "runs", run.id, "done"), { task: task.currentRevision });
+    const stopped = store.createTaskRun(run.id, task.currentRevision.id, 1, join(config.dataDir, "runs", run.id, "stopped"), { task: task.currentRevision });
+    store.saveTaskRunResult(done.id, { finalAnswer: "Good" });
+    store.saveTaskRunResult(stopped.id, {}, "cancelled");
+    store.updateRunStatus(run.id, "cancelled");
+    const app = buildApp({ store, config });
+
+    const list = await app.inject({ method: "GET", url: "/api/runs" });
+    expect(list.json()[0]).toMatchObject({ status: "cancelled", activityStatus: "partial" });
+
+    // Единственный оборванный промпт удалили — остались только готовые ответы.
+    const deleted = await app.inject({ method: "DELETE", url: `/api/task-runs/${stopped.id}` });
+    expect(deleted.statusCode).toBe(204);
+    const after = await app.inject({ method: "GET", url: "/api/runs" });
+    expect(after.json()[0]).toMatchObject({ status: "cancelled", activityStatus: "partial" });
+    await app.close();
+    store.close();
+  });
+
   it("cancels an active follow-up instead of rewriting the completed run", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-followup-cancel-"));
     directories.push(directory);
@@ -945,7 +1088,7 @@ describe("REST API", () => {
     store.updateRunStatus(run.id, "completed");
     const followup = store.createFollowup(taskRun.id, "Уточни");
     const cancelled: string[] = [];
-    const engine = { wake() {}, async cancel(id: string) { cancelled.push(id); return true; }, subscribe() { return () => undefined; }, async calibrate() { return {}; }, async testModel() { return {}; } };
+    const engine = { wake() {}, async cancel(id: string) { cancelled.push(id); return true; }, cancelTask() { return false; }, subscribe() { return () => undefined; }, async calibrate() { return {}; }, async testModel() { return {}; } };
     const app = buildApp({ store, config, engine });
 
     const response = await app.inject({ method: "POST", url: `/api/runs/${run.id}/cancel` });
@@ -985,6 +1128,10 @@ describe("REST API", () => {
     const runC = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: unscored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     store.createTaskRun(runC.id, task.currentRevision.id, 0, join(directory, "c1"), { task: task.currentRevision });
 
+    const local = store.createModel({ name: "Local Model", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
+    const runLocal = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: local.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    store.createTaskRun(runLocal.id, task.currentRevision.id, 0, join(directory, "local1"), { task: task.currentRevision });
+
     const archived = store.createModel({ name: "Archived Model", kind: "cloud", provider: "openai", modelRef: "archived" });
     const runD = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: archived.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRunD1 = store.createTaskRun(runD.id, task.currentRevision.id, 0, join(directory, "d1"), { task: task.currentRevision });
@@ -995,16 +1142,20 @@ describe("REST API", () => {
 
     const response = await app.inject({ method: "GET", url: "/api/leaderboard" });
     expect(response.statusCode).toBe(200);
-    const entries = response.json() as Array<{ modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null; criteria: Record<string, number | null> }>;
+    const entries = response.json() as Array<{ modelId: string; modelName: string; modelKind: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null; criteria: Record<string, number | null> }>;
 
     expect(entries.find((entry) => entry.modelId === scored.id)).toMatchObject({ modelName: "Scored Model", runCount: 2, reviewedTaskRunCount: 3, scorePercent: 80 });
     // Разбивка по критериям: визуал усредняется только по задачам, где он применялся.
     expect(entries.find((entry) => entry.modelId === scored.id)?.criteria).toEqual({ correctness: 8, codeQuality: 8, uiQuality: 8, instructionFollowing: 8 });
     expect(entries.find((entry) => entry.modelId === unscored.id)?.criteria).toEqual({ correctness: null, codeQuality: null, uiQuality: null, instructionFollowing: null });
     expect(entries.find((entry) => entry.modelId === archived.id)).toMatchObject({ modelName: "Archived Model", runCount: 1, reviewedTaskRunCount: 1, scorePercent: 70 });
+    // Тип модели нужен фильтру лидерборда и переживает архивацию.
+    expect(entries.find((entry) => entry.modelId === scored.id)?.modelKind).toBe("cloud");
+    expect(entries.find((entry) => entry.modelId === archived.id)?.modelKind).toBe("cloud");
+    expect(entries.find((entry) => entry.modelId === local.id)?.modelKind).toBe("local-gguf");
     expect(entries.find((entry) => entry.modelId === unscored.id)).toMatchObject({ modelName: "Unscored Model", runCount: 1, reviewedTaskRunCount: 0, scorePercent: null });
     // Убывание по среднему баллу, неоценённые — в хвосте.
-    expect(entries.map((entry) => entry.modelId)).toEqual([scored.id, archived.id, unscored.id]);
+    expect(entries.map((entry) => entry.modelId)).toEqual([scored.id, archived.id, unscored.id, local.id]);
     await app.close();
     store.close();
   });

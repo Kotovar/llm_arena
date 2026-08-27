@@ -92,6 +92,7 @@ describe("интерфейс запуска", () => {
     expect(statusLabel("failed")).toBe("Ошибка");
     expect(statusLabel("cancelled")).toBe("Остановлен");
     expect(statusLabel("running-followup")).toBe("Выполняется уточнение");
+    expect(statusLabel("partial")).toBe("Выполнен частично");
   });
 
   it("считает запуск активным, пока выполняется любое уточнение", () => {

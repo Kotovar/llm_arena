@@ -6,6 +6,7 @@ const statusLabels: Record<string, string> = {
   "running-followup": "Выполняется уточнение",
   completed: "Завершён",
   failed: "Ошибка",
+  partial: "Выполнен частично",
   cancelled: "Остановлен",
   missing: "Нет результата",
 };

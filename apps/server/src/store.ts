@@ -379,16 +379,26 @@ export function createStore(filename: string) {
     ).map((link) => getTaskRevision(link.task_revision_id)!).filter(Boolean);
   }
 
+  function deleteTaskRunRows(taskRunId: string): void {
+    sqlite.prepare("DELETE FROM gallery_featured WHERE task_run_id = ?").run(taskRunId);
+    sqlite.prepare("DELETE FROM task_run_followups WHERE task_run_id = ?").run(taskRunId);
+    sqlite.prepare("DELETE FROM reviews WHERE task_run_id = ?").run(taskRunId);
+    sqlite.prepare("DELETE FROM check_runs WHERE task_run_id = ?").run(taskRunId);
+  }
+
+  /** Удаление одного промпта из запуска: остальные результаты и их оценки остаются на месте. */
+  function deleteTaskRun(id: string): void {
+    transaction(() => {
+      deleteTaskRunRows(id);
+      sqlite.prepare("DELETE FROM task_runs WHERE id = ?").run(id);
+    });
+  }
+
   function deleteRuns(ids: string[]): number {
     if (!ids.length) return 0;
     return transaction(() => {
       const taskRunIds = ids.flatMap((id) => all<{ id: string }>("SELECT id FROM task_runs WHERE benchmark_run_id = ?", id).map((row) => row.id));
-      for (const taskRunId of taskRunIds) {
-        sqlite.prepare("DELETE FROM gallery_featured WHERE task_run_id = ?").run(taskRunId);
-        sqlite.prepare("DELETE FROM task_run_followups WHERE task_run_id = ?").run(taskRunId);
-        sqlite.prepare("DELETE FROM reviews WHERE task_run_id = ?").run(taskRunId);
-        sqlite.prepare("DELETE FROM check_runs WHERE task_run_id = ?").run(taskRunId);
-      }
+      for (const taskRunId of taskRunIds) deleteTaskRunRows(taskRunId);
       for (const id of ids) {
         sqlite.prepare("DELETE FROM task_runs WHERE benchmark_run_id = ?").run(id);
         sqlite.prepare("DELETE FROM run_tasks WHERE run_id = ?").run(id);
@@ -615,6 +625,7 @@ export function createStore(filename: string) {
       `);
     },
     deleteRuns,
+    deleteTaskRun,
     createTaskRun(benchmarkRunId: string, taskRevisionId: string, position: number, artifactPath: string, snapshot: unknown) {
       const id = randomUUID();
       const createdAt = now();

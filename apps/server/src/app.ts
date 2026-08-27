@@ -36,6 +36,7 @@ import { readGpuInfo } from "./system-metrics.js";
 type EngineLike = {
   wake(): void;
   cancel(runId: string): Promise<boolean>;
+  cancelTask(taskRunId: string): boolean;
   subscribe(runId: string, listener: (event: unknown) => void): () => void;
   calibrate(profileId: string): Promise<unknown>;
   testModel(modelId: string, runnerId: string): Promise<unknown>;
@@ -188,7 +189,15 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   };
   const hasActiveFollowup = (runId: string) => store.listTaskRuns(runId).some((taskRun) =>
     taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running"));
-  const activityStatus = (run: { id: string; status: string }) => hasActiveFollowup(run.id) ? "running-followup" : run.status;
+  /**
+   * Статус для показа. Прогон, который оборвали или уронили после нескольких готовых
+   * ответов, под чипом «Остановлен» выглядит как полностью потерянный, хотя результаты есть.
+   */
+  const activityStatus = (run: { id: string; status: string }) => {
+    if (hasActiveFollowup(run.id)) return "running-followup";
+    if (run.status !== "failed" && run.status !== "cancelled") return run.status;
+    return store.listTaskRuns(run.id).some((taskRun) => taskRun.status === "completed") ? "partial" : run.status;
+  };
   const withPublicError = <T extends { error: string | null }>(item: T) => {
     const { error, ...result } = item;
     const errorDetails = describeGenerationError(error);
@@ -338,15 +347,17 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run) })));
   app.get("/api/leaderboard", async () => {
     type Totals = {
-      modelId: string; modelName: string; runCount: number; reviewedTaskRunCount: number;
+      modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; runCount: number; reviewedTaskRunCount: number;
       scoreSum: number; possibleSum: number; speedSum: number; speedSamples: number;
       correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; visualReviewed: number;
     };
     const totals = new Map<string, Totals>();
     for (const run of store.listRuns()) {
+      const model = store.getModel(run.model_id);
       const entry = totals.get(run.model_id) ?? {
         modelId: run.model_id,
-        modelName: store.getModel(run.model_id)?.name ?? run.model_ref ?? run.model_id.slice(0, 8),
+        modelName: model?.name ?? run.model_ref ?? run.model_id.slice(0, 8),
+        modelKind: model?.kind ?? "cloud",
         runCount: 0,
         reviewedTaskRunCount: 0,
         scoreSum: 0,
@@ -549,6 +560,32 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const run = store.getTaskRun(request.params.id);
     if (!run) throw new Error("Task run not found");
     return withSelectedVersion(run);
+  });
+  app.delete<{ Params: { id: string } }>("/api/task-runs/:id", async (request, reply) => {
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) throw new Error("Task run not found");
+    if (taskRun.status === "pending" || taskRun.status === "running") throw new Error("Active prompt must be cancelled before deletion");
+    if (taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running")) {
+      throw new Error("Active additional prompt must be cancelled before deletion");
+    }
+    if (store.listTaskRuns(taskRun.benchmark_run_id).length === 1) throw new Error("Last prompt of a run cannot be deleted: delete the whole run instead");
+    await preview?.removeTaskRunPreviews?.([taskRun.id]);
+    // Уточнение могло стартовать, пока снимали превью: без повторной проверки его процесс осиротеет.
+    if (store.getTaskRun(taskRun.id)?.followups.some((followup) => followup.status === "pending" || followup.status === "running")) {
+      throw new Error("Active additional prompt must be cancelled before deletion");
+    }
+    const artifacts = resolve(taskRun.artifact_path);
+    // Путь приходит из БД, поэтому удаляем только то, что лежит внутри каталога запусков.
+    if (artifacts.startsWith(`${resolve(config.dataDir, "runs")}/`)) rmSync(artifacts, { recursive: true, force: true });
+    store.deleteTaskRun(taskRun.id);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string } }>("/api/task-runs/:id/cancel", async (request, reply) => {
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) throw new Error("Task run not found");
+    if (taskRun.status !== "pending" && taskRun.status !== "running") throw new Error("Prompt is not running");
+    if (!engine?.cancelTask(taskRun.id)) store.saveTaskRunResult(taskRun.id, {}, "cancelled");
+    return reply.code(202).send({ status: "cancelled" });
   });
   app.get<{ Params: { id: string } }>("/api/task-runs/:id/error-details", async (request) => {
     const run = store.getTaskRun(request.params.id);

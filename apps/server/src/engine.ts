@@ -52,6 +52,7 @@ function runnerImages(dataDir: string, images: readonly TaskImage[]) {
 
 export class BenchmarkEngine {
   readonly #controllers = new Map<string, AbortController>();
+  readonly #taskControllers = new Map<string, AbortController>();
   readonly #listeners = new Map<string, Set<(event: RunEvent) => void>>();
   #pumping: Promise<void> | undefined;
   #stopping = false;
@@ -114,7 +115,8 @@ export class BenchmarkEngine {
       const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed");
       const message = failedTask?.error ?? (error as Error).message;
       this.store.updateRunStatus(run.id, controller.signal.aborted ? "cancelled" : "failed", message);
-      this.#emit({ type: "run.error", runId: run.id, data: { message } });
+      // При явной отмене техническая ошибка оборванного вызова — шум, а не то, что стоит показывать.
+      if (!controller.signal.aborted) this.#emit({ type: "run.error", runId: run.id, data: { message } });
     } finally {
       this.#controllers.delete(run.id);
       this.#emit({ type: "run.status", runId: run.id, data: { status: this.store.getRun(run.id)?.status } });
@@ -211,6 +213,9 @@ export class BenchmarkEngine {
           this.store.saveTaskRunResult(taskRun.id, {}, "failed", `${definition.kind} does not support ${effectiveTask.kind} tasks`);
           continue;
         }
+        const taskController = new AbortController();
+        const taskSignal = AbortSignal.any([signal, taskController.signal]);
+        this.#taskControllers.set(taskRun.id, taskController);
         try {
           const agentInput = {
             definition,
@@ -223,7 +228,7 @@ export class BenchmarkEngine {
             reasoningEffort: run.reasoning_effort,
             taskDataDir: artifactRoot,
             timeoutMs: this.config.defaults.taskTimeoutMs,
-            signal,
+            signal: taskSignal,
             ...(backend ? { baseUrl: backend.baseUrl } : {}),
             runId: run.id,
             taskRunId: taskRun.id,
@@ -238,7 +243,7 @@ export class BenchmarkEngine {
               result = await this.#runAgent(agentInput);
               break;
             } catch (error) {
-              const retriable = attempt === 0 && !signal.aborted && describeGenerationError((error as Error).message)?.code === "invalid_tool_call";
+              const retriable = attempt === 0 && !taskSignal.aborted && describeGenerationError((error as Error).message)?.code === "invalid_tool_call";
               if (!retriable) throw error;
               // Повтор идёт по тому же промпту, поэтому чистим KV-слот: иначе модель продолжает с того же состояния.
               if (backend && !(await backend.reset())) throw error;
@@ -248,17 +253,18 @@ export class BenchmarkEngine {
             }
           }
           if (backend) result.metrics.startupDurationMs = { value: backend.startupDurationMs, unit: "ms", source: "client-observed" };
-          const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, signal) : [];
+          const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, taskSignal) : [];
           const failedCheck = checks.find((check) => check.status !== "pass");
           const status = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
           const artifacts = status === "completed" ? finalizeWorkspace(prepared) : undefined;
-          const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, signal);
+          const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, taskSignal);
           const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
           this.store.saveTaskRunResult(taskRun.id, saved, status, status === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
         } catch (error) {
-          this.store.saveTaskRunResult(taskRun.id, {}, signal.aborted ? "cancelled" : "failed", (error as Error).message);
+          this.store.saveTaskRunResult(taskRun.id, {}, taskSignal.aborted ? "cancelled" : "failed", (error as Error).message);
         }
+        this.#taskControllers.delete(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: this.store.getTaskRun(taskRun.id)?.status } });
         if (backend && !signal.aborted && !(await backend.reset())) {
           throw new Error("llama.cpp KV slot reset failed");
@@ -476,6 +482,14 @@ export class BenchmarkEngine {
       });
     }
     return results;
+  }
+
+  // ponytail: отмена одного промпта не трогает supervisor.stopAll() — раннер сам гасит свой процесс по сигналу, а бэкенд нужен следующим промптам.
+  cancelTask(taskRunId: string): boolean {
+    const controller = this.#taskControllers.get(taskRunId);
+    if (!controller) return false;
+    controller.abort();
+    return true;
   }
 
   async cancel(runId: string): Promise<boolean> {

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import type { LeaderboardEntry } from "../types.js";
@@ -5,6 +6,14 @@ import { plural } from "../ui.js";
 
 // Ниже этого порога средняя ещё слишком шумная, чтобы читать её как результат модели.
 const CONFIDENT_SAMPLE = 3;
+
+const kindFilters = [
+  ["all", "Все модели"],
+  ["local-gguf", "Локальные"],
+  ["cloud", "По подписке"],
+] as const;
+
+type KindFilter = (typeof kindFilters)[number][0];
 
 const criteriaColumns = [
   ["correctness", "Корректность"],
@@ -32,15 +41,19 @@ function Row({ entry, place }: { entry: LeaderboardEntry; place?: number }) {
 
 export function LeaderboardPage() {
   const leaderboard = useData<LeaderboardEntry[]>("leaderboard", "/leaderboard");
-  const ranked = leaderboard.data?.filter((entry) => entry.scorePercent !== null) ?? [];
-  const unranked = leaderboard.data?.filter((entry) => entry.scorePercent === null) ?? [];
+  const [kind, setKind] = useState<KindFilter>("all");
+  // Места считаются внутри выбранной группы: локальная модель не должна выглядеть седьмой среди облачных.
+  const shown = leaderboard.data?.filter((entry) => kind === "all" || entry.modelKind === kind) ?? [];
+  const ranked = shown.filter((entry) => entry.scorePercent !== null);
+  const unranked = shown.filter((entry) => entry.scorePercent === null);
   const thin = ranked.filter((entry) => entry.reviewedTaskRunCount < CONFIDENT_SAMPLE).length;
   return <Page title="Лидерборд моделей" eyebrow="Лидерборд" intro="Доля набранных баллов по оценённым промптам во всех запусках модели. Максимум за промпт зависит от типа задачи, поэтому счёт нормализован. Средние по критериям — из десяти.">
     {leaderboard.isPending ? <Empty>Считаем результаты…</Empty> : null}
     {leaderboard.error ? <p className="error">{leaderboard.error.message}</p> : null}
     {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length ? <Empty>Пока нет ни одного запуска.</Empty> : null}
-    {leaderboard.data?.length ? <Panel title={`Моделей: ${leaderboard.data.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель оценена", "модели оценены", "моделей оценены")} меньше чем на {CONFIDENT_SAMPLE} промптах</span> : undefined}>
-      <div className="leaderboard-scroll"><table className="leaderboard-table"><thead><tr>
+    {leaderboard.data?.length ? <Panel title={`Моделей: ${shown.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель оценена", "модели оценены", "моделей оценены")} меньше чем на {CONFIDENT_SAMPLE} промптах</span> : undefined}>
+      <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{kindFilters.map(([value, label]) => <button type="button" key={value} className={kind === value ? "active" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>)}</div>
+      {shown.length ? <div className="leaderboard-scroll"><table className="leaderboard-table"><thead><tr>
         <th scope="col">#</th>
         <th scope="col">Модель</th>
         <th scope="col">Доля баллов</th>
@@ -51,7 +64,7 @@ export function LeaderboardPage() {
       </tr></thead><tbody>
         {ranked.map((entry, index) => <Row key={entry.modelId} entry={entry} place={index + 1} />)}
         {unranked.map((entry) => <Row key={entry.modelId} entry={entry} />)}
-      </tbody></table></div>
+      </tbody></table></div> : <Empty>В этой группе пока нет запусков.</Empty>}
     </Panel> : null}
   </Page>;
 }

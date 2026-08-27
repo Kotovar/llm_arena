@@ -216,6 +216,31 @@ describe("список промптов запуска", () => {
     expect(screen.queryByRole("heading", { level: 3, name: "Аквариум" })).toBeNull();
   });
 
+  it("удаляет отдельный промпт запуска и возвращает к оставшимся", async () => {
+    const user = userEvent.setup();
+    const deleted: string[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") { deleted.push(url); return new Response("", { status: 204 }); }
+      return new Response(JSON.stringify(url.startsWith("/api/runs/") ? run : []), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    await user.click(screen.getByRole("button", { name: "Удалить промпт" }));
+    await user.click(screen.getByRole("button", { name: "Удалить" }));
+
+    await waitFor(() => expect(deleted).toEqual([`/api/task-runs/${run.taskRuns[0]!.id}`]));
+  });
+
+  it("не предлагает удалить промпт, когда он в запуске единственный", async () => {
+    const single = { ...run, taskRuns: [run.taskRuns[0]!] };
+    fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/runs/") ? single : []), { status: 200, headers: { "content-type": "application/json" } }));
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    expect(screen.queryByRole("button", { name: "Удалить промпт" })).toBeNull();
+  });
+
   it("ведёт к следующему неоценённому промпту", async () => {
     const user = userEvent.setup();
     await renderInApp(<RunDetail runId="run-1" />);
