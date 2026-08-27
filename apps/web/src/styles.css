@@ -214,6 +214,9 @@ dl { margin: 0; }dl div { display: grid; grid-template-columns: 130px 1fr; paddi
 .image-attachments span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-attachments button { padding: 4px 7px; font-size: 11px; }
 .task-image-summary { display: block; margin-top: 8px; color: var(--signal); font-size: 11px; }
+.task-description { display: block; margin: 4px 0 10px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+/* Описание короткое и написано для себя — режем текст промпта, а описание показываем целиком. */
+.gallery-prompt small.task-description { display: block; margin-bottom: 0; overflow: visible; -webkit-line-clamp: unset; }
 .model-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #111a2d; }
 .model-card-summary { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 13px 15px; cursor: pointer; }
 .model-card-summary::marker { color: var(--signal); }

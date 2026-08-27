@@ -12,7 +12,8 @@ type RunLogStore = {
 
 const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const runLogNames = ["backend.stdout.log", "backend.stderr.log", "system-metrics.ndjson"];
-const taskLogNames = ["stdout.log", "stderr.log", "display.log"];
+// omp/models.db — копия каталога моделей OMP (~1.2 МБ на промпт), она восстанавливается сама при следующем запуске.
+const taskArtifactNames = ["stdout.log", "stderr.log", "display.log", "omp/models.db", "omp/models.db-shm", "omp/models.db-wal"];
 
 function isInside(directory: string, root: string): boolean {
   const path = relative(root, resolve(directory));
@@ -33,7 +34,7 @@ export function cleanupTerminalRunLogs(dataDir: string, store: RunLogStore): voi
     removeLogs(runDirectory, runLogNames);
     for (const taskRun of taskRuns) {
       for (const directory of [taskRun.artifact_path, ...taskRun.followups.map((followup) => followup.artifact_path)]) {
-        if (isInside(directory, runDirectory)) removeLogs(directory, taskLogNames);
+        if (isInside(directory, runDirectory)) removeLogs(directory, taskArtifactNames);
       }
     }
   }

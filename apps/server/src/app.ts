@@ -434,7 +434,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         return [{
           taskRunId: taskRun.id,
           runId: run.id,
-          prompt: { id: taskRun.task_revision_id, name: task.name, prompt: task.prompt },
+          prompt: { id: taskRun.task_revision_id, name: task.name, description: store.taskDescriptionByRevision(taskRun.task_revision_id), prompt: task.prompt },
           model: {
             id: run.model_id,
             name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),
@@ -503,7 +503,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         return taskRun;
       }
     });
-    return { ...withPublicError(run), activityStatus: activityStatus(run), taskRuns: taskRuns.map(withSelectedVersion) };
+    return {
+      ...withPublicError(run),
+      activityStatus: activityStatus(run),
+      taskRuns: taskRuns.map((taskRun) => ({ ...withSelectedVersion(taskRun), taskDescription: store.taskDescriptionByRevision(taskRun.task_revision_id) })),
+    };
   });
   app.get<{ Params: { id: string } }>("/api/runs/:id/error-details", async (request) => {
     const run = store.getRun(request.params.id);

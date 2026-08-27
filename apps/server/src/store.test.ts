@@ -52,6 +52,29 @@ describe("task revisions", () => {
     expect(second.currentRevision.contentHash).not.toBe(first.currentRevision.contentHash);
   });
 
+  it("keeps the description on the task, so old runs still show it", () => {
+    const store = testStore();
+    const first = store.createTask({ name: "Explain sorting", kind: "prompt", prompt: "Explain quicksort", tags: [] });
+    const oldRevisionId = first.currentRevision.id;
+
+    const described = store.updateTask(first.id, { name: "Explain sorting", kind: "prompt", prompt: "Explain quicksort", tags: [], description: "Проверяем объяснение алгоритма" });
+
+    // Описание не трогает содержимое промпта, поэтому новая версия не нужна.
+    expect(described.currentRevision.id).toBe(oldRevisionId);
+    expect(described.description).toBe("Проверяем объяснение алгоритма");
+    expect(described.currentRevision.contentHash).toBe(first.currentRevision.contentHash);
+    // Прогон держит только id версии — описание должно находиться и по старой версии.
+    expect(store.taskDescriptionByRevision(oldRevisionId)).toBe("Проверяем объяснение алгоритма");
+
+    const edited = store.updateTask(first.id, { name: "Explain sorting", kind: "prompt", prompt: "Explain mergesort", tags: [], description: "Проверяем объяснение алгоритма" });
+    expect(edited.currentRevision.revision).toBe(2);
+    expect(store.taskDescriptionByRevision(oldRevisionId)).toBe("Проверяем объяснение алгоритма");
+
+    const cleared = store.updateTask(first.id, { name: "Explain sorting", kind: "prompt", prompt: "Explain mergesort", tags: [] });
+    expect(cleared.description).toBeUndefined();
+    expect(store.taskDescriptionByRevision(oldRevisionId)).toBeNull();
+  });
+
   it("keeps each revision's image list immutable", () => {
     const store = testStore();
     const image = {

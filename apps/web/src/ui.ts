@@ -81,11 +81,12 @@ export function launchSummary({ modelName, taskCount, runnerName, resultMode }: 
   ];
 }
 
-export function taskUpdateBody(revision: Task["currentRevision"], prompt: string, images = revision.images, name = revision.name) {
+export function taskUpdateBody(revision: Task["currentRevision"], prompt: string, images = revision.images, name = revision.name, description = "") {
   return {
     name,
     kind: revision.kind,
     prompt,
+    ...(description ? { description } : {}),
     tags: revision.tags,
     images,
     ...(revision.kind === "coding" ? { fixtureId: revision.fixtureId } : {}),

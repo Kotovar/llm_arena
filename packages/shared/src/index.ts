@@ -47,6 +47,8 @@ export const taskRevisionSchema = createTaskSchema.and(
 
 export const taskSchema = z.object({
   id: z.string().uuid(),
+  // Заметка «для себя»: в модель не уходит и не версионируется, поэтому живёт на задаче, а не в версии.
+  description: z.string().trim().max(4_000).optional(),
   archivedAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

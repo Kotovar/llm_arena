@@ -18,6 +18,7 @@ import {
 type TaskRow = {
   id: string;
   current_revision_id: string | null;
+  description: string | null;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
@@ -199,6 +200,13 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS gallery_featured (task_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, task_run_id TEXT NOT NULL UNIQUE, updated_at TEXT NOT NULL, PRIMARY KEY(task_revision_id, model_id));
     CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
   `);
+  // Описание — заметка «для себя», в модель не уходит и не должно замораживаться в версии промпта:
+  // иначе у старых прогонов его не видно. Поэтому оно живёт на задаче, а старые значения переносим.
+  const taskColumns = sqlite.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+  if (!taskColumns.some((column) => column.name === "description")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN description TEXT");
+    sqlite.exec("UPDATE tasks SET description = (SELECT description FROM task_revisions WHERE id = tasks.current_revision_id)");
+  }
   const runColumns = sqlite.prepare("PRAGMA table_info(benchmark_runs)").all() as Array<{ name: string }>;
   if (!runColumns.some((column) => column.name === "result_mode")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN result_mode TEXT NOT NULL DEFAULT 'text'");
@@ -282,7 +290,6 @@ function mapTaskRevision(row: TaskRevisionRow): TaskRevision {
     contentHash: row.content_hash,
     fixtureHash: row.fixture_hash,
     createdAt: row.created_at,
-    ...(row.description ? { description: row.description } : {}),
   };
   return row.kind === "coding"
     ? { ...common, kind: "coding", fixtureId: row.fixture_id ?? "" }
@@ -326,6 +333,7 @@ export function createStore(filename: string) {
     if (!currentRevision) throw new Error(`Missing task revision ${task.current_revision_id}`);
     return {
       id: task.id,
+      ...(task.description ? { description: task.description } : {}),
       archivedAt: task.archived_at,
       createdAt: task.created_at,
       updatedAt: task.updated_at,
@@ -333,12 +341,17 @@ export function createStore(filename: string) {
     };
   }
 
+  function revisionContentHash(input: CreateTask): string {
+    const { description: _description, ...revisionInput } = input;
+    return hash({ ...revisionInput, tags: input.tags ?? [], images: input.images ?? [] });
+  }
+
   function writeTaskRevision(taskId: string, revision: number, input: CreateTask): TaskRevision {
     const createdAt = now();
     const id = randomUUID();
     const tags = input.tags ?? [];
     const images = input.images ?? [];
-    const normalizedInput = { ...input, tags, images };
+
     sqlite
       .prepare("INSERT INTO task_revisions (id, task_id, revision, name, description, kind, prompt, fixture_id, tags_json, images_json, content_hash, fixture_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(
@@ -346,13 +359,13 @@ export function createStore(filename: string) {
         taskId,
         revision,
         input.name,
-        input.description ?? null,
+        null,
         input.kind,
         input.prompt,
         input.kind === "coding" ? input.fixtureId : null,
         JSON.stringify(tags),
         JSON.stringify(images),
-        hash(normalizedInput),
+        revisionContentHash(input),
         null,
         createdAt,
       );
@@ -411,7 +424,9 @@ export function createStore(filename: string) {
       return transaction(() => {
         const id = randomUUID();
         const createdAt = now();
-        sqlite.prepare("INSERT INTO tasks VALUES (?, NULL, NULL, ?, ?)").run(id, createdAt, createdAt);
+        sqlite
+          .prepare("INSERT INTO tasks (id, current_revision_id, description, archived_at, created_at, updated_at) VALUES (?, NULL, ?, NULL, ?, ?)")
+          .run(id, input.description ?? null, createdAt, createdAt);
         writeTaskRevision(id, 1, input);
         return materializeTask(id)!;
       });
@@ -420,11 +435,22 @@ export function createStore(filename: string) {
       return transaction(() => {
         const current = materializeTask(id);
         if (!current) throw new Error(`Task ${id} not found`);
-        writeTaskRevision(id, current.currentRevision.revision + 1, input);
+        sqlite.prepare("UPDATE tasks SET description = ?, updated_at = ? WHERE id = ?").run(input.description ?? null, now(), id);
+        // Правка одного описания не должна плодить версию промпта: старые прогоны сравнивают именно версии.
+        if (revisionContentHash(input) !== current.currentRevision.contentHash) {
+          writeTaskRevision(id, current.currentRevision.revision + 1, input);
+        }
         return materializeTask(id)!;
       });
     },
     getTaskRevision,
+    /** Описание задачи по её версии: у прогонов на руках только task_revision_id. */
+    taskDescriptionByRevision(taskRevisionId: string): string | null {
+      return one<{ description: string | null }>(
+        "SELECT tasks.description AS description FROM tasks JOIN task_revisions ON task_revisions.task_id = tasks.id WHERE task_revisions.id = ?",
+        taskRevisionId,
+      )?.description ?? null;
+    },
     listTasks() {
       return all<TaskRow>("SELECT * FROM tasks WHERE archived_at IS NULL ORDER BY created_at").map((row) => materializeTask(row.id)!);
     },

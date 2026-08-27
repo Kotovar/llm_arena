@@ -41,7 +41,7 @@ async function uploadTaskImages(files: File[]): Promise<TaskImage[]> {
 function TasksPage() {
   const client = useQueryClient();
   const tasks = useData<Task[]>("tasks", "/tasks");
-  const [editing, setEditing] = useState<{ taskId: string; name: string; prompt: string; images: TaskImage[]; files: File[] } | null>(null);
+  const [editing, setEditing] = useState<{ taskId: string; name: string; description: string; prompt: string; images: TaskImage[]; files: File[] } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [query, setQuery] = useState("");
@@ -54,7 +54,8 @@ function TasksPage() {
     const data = new FormData(form);
     try {
       setUploading(true);
-      await create.mutateAsync({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt"), images: await uploadTaskImages(files) });
+      const description = String(data.get("description") ?? "").trim();
+      await create.mutateAsync({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt"), images: await uploadTaskImages(files), ...(description ? { description } : {}) });
       form.reset();
       setFiles([]);
     } finally {
@@ -65,16 +66,18 @@ function TasksPage() {
   return <Page title="Подготовленные промпты" eyebrow="Промпты" intro="Добавьте задания, на которых хотите сравнивать модели. История старых запусков не изменится после редактирования.">
     <div className="two-col"><Panel title="Добавить промпт"><form onSubmit={submit} className="form-grid">
       <label className="span-2">Название<input name="name" required /></label>
+      <label className="span-2">Краткое описание<input name="description" maxLength={4000} placeholder="Для чего промпт и что проверять" /><small>Только для вас: в модель не уходит, видно в галерее и результатах.</small></label>
       <label className="span-2">Текст промпта<textarea name="prompt" rows={8} required /></label>
       <label className="span-2">Референс-изображения<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { setFiles(Array.from(event.currentTarget.files ?? []).slice(0, 8)); }} /><small>До 8 PNG, JPEG или WebP; они станут частью неизменяемой версии промпта.</small></label>
       {files.length ? <ul className="image-attachments span-2">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => setFiles((current) => current.filter((_, position) => position !== index))}>Убрать</button></li>)}</ul> : null}
       <button className="primary" disabled={create.isPending || uploading}>{uploading || create.isPending ? "Загружаем…" : "Добавить"}</button>{create.error ? <p className="error">{create.error.message}</p> : null}
     </form></Panel>
     <Panel title={`Промптов: ${found.length} из ${tasks.data?.length ?? 0}`}><label className="prompt-search"><input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск по названию и тексту" aria-label="Поиск промптов" /></label><div className="stack">{found.map((task) => <article className="item prompt-item" key={task.id}>
-      <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span>{editing?.taskId === task.id ? null : <h3>{task.currentRevision.name}</h3>}{task.currentRevision.images.length ? <small className="task-image-summary">Изображения: {task.currentRevision.images.map((image) => image.filename).join(", ")}</small> : null}</div><div className="item-actions">{editing?.taskId === task.id ? null : <button type="button" onClick={() => setEditing({ taskId: task.id, name: task.currentRevision.name, prompt: task.currentRevision.prompt, images: task.currentRevision.images, files: [] })}>Редактировать</button>}<button type="button" className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></div>
+      <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span>{editing?.taskId === task.id ? null : <h3>{task.currentRevision.name}</h3>}{editing?.taskId === task.id || !task.description ? null : <small className="task-description">{task.description}</small>}{task.currentRevision.images.length ? <small className="task-image-summary">Изображения: {task.currentRevision.images.map((image) => image.filename).join(", ")}</small> : null}</div><div className="item-actions">{editing?.taskId === task.id ? null : <button type="button" onClick={() => setEditing({ taskId: task.id, name: task.currentRevision.name, description: task.description ?? "", prompt: task.currentRevision.prompt, images: task.currentRevision.images, files: [] })}>Редактировать</button>}<button type="button" className="danger" onClick={() => remove.mutate(task.id)}>В архив</button></div></div>
       {editing?.taskId === task.id ? null : <details className="prompt-preview"><summary>Текст промпта</summary><p>{task.currentRevision.prompt}</p></details>}
-      {editing && editing.taskId === task.id ? <form className="prompt-editor" onSubmit={async (event) => { event.preventDefault(); const prompt = editing.prompt.trim(); const name = editing.name.trim(); if (!prompt || !name) return; try { setUploading(true); await update.mutateAsync({ id: task.id, body: taskUpdateBody(task.currentRevision, prompt, [...editing.images, ...await uploadTaskImages(editing.files)], name) }); } finally { setUploading(false); } }}>
+      {editing && editing.taskId === task.id ? <form className="prompt-editor" onSubmit={async (event) => { event.preventDefault(); const prompt = editing.prompt.trim(); const name = editing.name.trim(); if (!prompt || !name) return; try { setUploading(true); await update.mutateAsync({ id: task.id, body: taskUpdateBody(task.currentRevision, prompt, [...editing.images, ...await uploadTaskImages(editing.files)], name, editing.description.trim()) }); } finally { setUploading(false); } }}>
         <label>Название<input autoFocus value={editing.name} onChange={(event) => { const name = event.currentTarget.value; setEditing((current) => current ? { ...current, name } : current); }} required /></label>
+        <label>Краткое описание<input maxLength={4000} value={editing.description} onChange={(event) => { const description = event.currentTarget.value; setEditing((current) => current ? { ...current, description } : current); }} placeholder="Для чего промпт и что проверять" /></label>
         <label>Текст промпта<textarea rows={10} value={editing.prompt} onChange={(event) => { const prompt = event.currentTarget.value; setEditing((current) => current ? { ...current, prompt } : current); }} required /></label>
         <label>Добавить изображения<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const picked = Array.from(event.currentTarget.files ?? []); setEditing((current) => current ? { ...current, files: picked.slice(0, 8 - current.images.length) } : current); }} /><small>До 8 изображений в версии промпта.</small></label>
         {editing.images.length || editing.files.length ? <ul className="image-attachments">{editing.images.map((image) => <li key={image.id}><span>{image.filename}</span><button type="button" onClick={() => setEditing((current) => current ? { ...current, images: current.images.filter((item) => item.id !== image.id) } : current)}>Убрать</button></li>)}{editing.files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => setEditing((current) => current ? { ...current, files: current.files.filter((_, position) => position !== index) } : current)}>Убрать</button></li>)}</ul> : null}

@@ -36,6 +36,10 @@ describe("cleanupTerminalRunLogs", () => {
     for (const directory of [completedTask, completedFollowup, runningTask, runningFollowup]) {
       for (const name of ["stdout.log", "stderr.log", "display.log"]) write(join(directory, name));
     }
+    for (const directory of [completedTask, runningTask]) {
+      write(join(directory, "omp", "models.db"));
+      write(join(directory, "omp", "agent.db"));
+    }
     write(join(completedRoot, "system-summary.json"));
     write(join(completedTask, "result.json"));
     write(join(completedTask, "workspace", "index.html"));
@@ -58,8 +62,9 @@ describe("cleanupTerminalRunLogs", () => {
       join(completedRoot, "backend.stderr.log"),
       join(completedRoot, "system-metrics.ndjson"),
       ...[completedTask, completedFollowup].flatMap((directory) => ["stdout.log", "stderr.log", "display.log"].map((name) => join(directory, name))),
+      join(completedTask, "omp", "models.db"),
     ]) expect(existsSync(path)).toBe(false);
-    for (const path of [join(completedRoot, "system-summary.json"), join(completedTask, "result.json"), join(completedTask, "workspace", "index.html"), join(runningRoot, "backend.stdout.log"), join(runningTask, "display.log"), join(followupRunningRoot, "backend.stdout.log"), join(runningFollowup, "display.log")]) {
+    for (const path of [join(completedRoot, "system-summary.json"), join(completedTask, "result.json"), join(completedTask, "workspace", "index.html"), join(runningRoot, "backend.stdout.log"), join(runningTask, "display.log"), join(followupRunningRoot, "backend.stdout.log"), join(runningFollowup, "display.log"), join(completedTask, "omp", "agent.db"), join(runningTask, "omp", "models.db")]) {
       expect(existsSync(path)).toBe(true);
     }
   });

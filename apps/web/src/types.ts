@@ -1,10 +1,11 @@
 export type Task = {
   id: string;
+  // Заметка «для себя»: не уходит в модель и не привязана к версии промпта.
+  description?: string;
   currentRevision: {
     id: string;
     taskId: string;
     name: string;
-    description?: string;
     kind: "prompt" | "coding";
     prompt: string;
     fixtureId?: string;
@@ -133,7 +134,7 @@ export type GalleryMetrics = {
 export type GalleryResult = {
   taskRunId: string;
   runId: string;
-  prompt: { id: string; name: string; prompt: string };
+  prompt: { id: string; name: string; description?: string | null; prompt: string };
   model: { id: string; name: string; kind?: Model["kind"]; modelRef?: string };
   reasoningEffort?: string | null;
   profile?: { name: string; context: number | "auto" } | null;
@@ -151,6 +152,7 @@ export type GalleryResult = {
 export type TaskRun = {
   id: string;
   task_revision_id: string;
+  taskDescription?: string | null;
   position: number;
   status: string;
   snapshot_json: string;
