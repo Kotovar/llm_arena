@@ -1,3 +1,4 @@
+import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared";
 import type { GalleryResult, Model, Runner, Task, TaskRun } from "./types.js";
 
 const statusLabels: Record<string, string> = {
@@ -197,12 +198,13 @@ export function launchModeNote({ kind, resultMode, usingOmpAgent, ompUnavailable
 }
 
 // Вкладка браузера показывает ход генерации: свёрнутое окно всё ещё говорит, на каком промпте запуск.
-export function runTabTitle(active: boolean, current: number, total: number, taskName?: string): string {
+export function runTabTitle(active: boolean, current: number, total: number, taskName?: string, followup = false): string {
   if (!active || total <= 0) return "LLM Arena";
   // Вкладка обрезает текст, поэтому счётчик идёт первым, а длинное имя промпта укорачивается.
   const name = taskName?.trim();
   const short = name && name.length > 32 ? `${name.slice(0, 31)}…` : name;
-  return [`⏳ ${current}/${total}`, short, "LLM Arena"].filter(Boolean).join(" · ");
+  // Уточнение идёт поверх готового результата — счётчик промптов тут врёт, что прогон ещё генерируется.
+  return [followup ? "⏳ Уточнение" : `⏳ ${current}/${total}`, short, "LLM Arena"].filter(Boolean).join(" · ");
 }
 
 export function runProgress(total: number, statuses: string[]) {
@@ -273,10 +275,11 @@ export type ReviewScores = {
 };
 
 /** Скорость генерации сравнима только вместе с контекстом и профилем, при которых её измерили. */
-export function measurementConditions(profile?: { name: string; parameters: { context: number | "auto" } }) {
+export function measurementConditions(profile?: { name: string; parameters: { context: number | "auto"; temperature?: number } }) {
   if (!profile) return undefined;
   const context = profile.parameters.context === "auto" ? "контекст авто" : `контекст ${Math.round(profile.parameters.context / 1024)}k`;
-  return `${context} · профиль ${profile.name}`;
+  // Температуру фиксируем в результате: её меняют при перезапуске, и без неё цифры не сравнить.
+  return `${context} · темп. ${profile.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE} · профиль ${profile.name}`;
 }
 
 export function reviewTotal(review: ReviewScores) {
@@ -376,9 +379,11 @@ export function ompModeLabel(useOmpAgent: number) {
   return useOmpAgent === 1 ? "с обвязкой (OMP)" : "без обвязки";
 }
 
-export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string }, runnerName?: string, ompMode?: string) {
+export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string; activityStatus?: string; activeTaskName?: string | null }, runnerName?: string, ompMode?: string) {
   if (run.status === "failed" && run.error) return run.error;
   return [
+    // В списке видно только «Выполняется» — без имени промпта непонятно, над чем агент сейчас работает.
+    run.activeTaskName ? `${run.activityStatus === "running-followup" ? "уточняем" : "промпт"}: ${run.activeTaskName}` : undefined,
     run.task_count ? promptCountLabel(run.task_count) : undefined,
     runnerName ?? run.runner_id,
     run.result_mode === "web" ? "web-приложение" : "текстовый ответ",

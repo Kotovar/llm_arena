@@ -178,6 +178,7 @@ export type Run = {
   reasoning_effort: string | null;
   status: string;
   activityStatus?: string;
+  activeTaskName?: string | null;
   snapshot_json: string | null;
   created_at: string;
   started_at: string | null;

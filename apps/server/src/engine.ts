@@ -161,10 +161,16 @@ export class BenchmarkEngine {
       throw new Error(`${definition.kind} cannot run a local GGUF model`);
     }
     const selectedModel = { ...model, modelRef: run.model_ref ?? model.modelRef };
+    // Перезапуск промпта может попросить другую температуру: подменяем её в профиле, чтобы она
+    // попала и в llama-server, и в снапшоты — иначе по результату не понять, на чём он получен.
+    const effectiveProfile = profile && run.temperature != null
+      ? { ...profile, parameters: { ...profile.parameters, temperature: run.temperature } }
+      : profile;
     assertModelCapabilities(model, definition.kind, run.reasoning_effort, tasks.flatMap((task) => task.images));
 
     const runRoot = join(this.config.dataDir, "runs", run.id);
     mkdirSync(runRoot, { recursive: true });
+    // В снапшоте запуска остаётся профиль как он настроен: разовая температура — свойство конкретного промпта.
     this.store.setRunSnapshot(run.id, { tasks, model: selectedModel, profile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
     const backendStdout = join(runRoot, "backend.stdout.log");
     const backendStderr = join(runRoot, "backend.stderr.log");
@@ -197,7 +203,7 @@ export class BenchmarkEngine {
         const manager = new LlamaCppServerManager(this.config.llamaServer.executable, this.config.llamaServer.startupTimeoutMs, this.supervisor);
         backend = await manager.start(
           { path: model.path!, alias: model.alias!, mmprojPath: model.mmprojPath },
-          profile!.parameters,
+          effectiveProfile!.parameters,
           {
             stdout: (text) => appendFileSync(backendStdout, text),
             stderr: (text) => appendFileSync(backendStderr, text),
@@ -217,7 +223,7 @@ export class BenchmarkEngine {
         if (effectiveTask.kind === "coding" && !fixture) throw new Error(`Fixture ${effectiveTask.fixtureId} not found`);
         const source = fixture?.source ?? this.#emptyFixture();
         const prepared = prepareWorkspace(source, artifactRoot);
-        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture, model: selectedModel, profile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
+        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture, model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
         this.store.startTaskRun(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: "running", position, name: task.name } });
         const stdoutPath = join(artifactRoot, "stdout.log");

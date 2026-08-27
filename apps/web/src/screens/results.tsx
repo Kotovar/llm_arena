@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { useConfirm } from "../confirm.js";
@@ -223,7 +224,7 @@ type PreviewState = { taskRunId: string; resultSha: string; url: string };
 
 export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, onDeleted, deletable }: { taskRun: TaskRun; runId: string; preview: PreviewState | undefined; onPreview: (preview: PreviewState | undefined) => void; onDeleted?: () => void; deletable?: boolean }) {
   const client = useQueryClient();
-  const snapshot = JSON.parse(taskRun.snapshot_json) as { task: Task["currentRevision"]; fixture?: Fixture; profile?: { name: string; parameters: { context: number | "auto" } } };
+  const snapshot = JSON.parse(taskRun.snapshot_json) as { task: Task["currentRevision"]; fixture?: Fixture; model?: { kind?: string }; profile?: { name: string; parameters: { context: number | "auto"; temperature?: number } } };
   const versions = resultVersions(taskRun);
   const selectedKey = versions.find((version) => version.resultSha === taskRun.selectedVersion?.resultSha)?.key;
   const [activeVersionKey, setActiveVersionKey] = useState<string>();
@@ -239,6 +240,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
   const [saved, setSaved] = useState(Boolean(taskRun.review));
   const [shotMissing, setShotMissing] = useState(false);
   const [logView, setLogView] = useState<{ title: string; endpoint: string }>();
+  const [temperature, setTemperature] = useState(() => String((JSON.parse(taskRun.snapshot_json) as { profile?: { parameters?: { temperature?: number } } }).profile?.parameters?.temperature ?? DEFAULT_LLAMA_TEMPERATURE));
   const toast = useToast();
   const previewUrl = activePreview?.taskRunId === taskRun.id && activePreview.resultSha === activeVersion.resultSha ? activePreview.url : undefined;
   const showShot = Boolean(result?.previewImage) && Boolean(activeVersion.resultSha) && !shotMissing;
@@ -257,7 +259,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
   const cancelRun = useMutation({ mutationFn: () => api(`/runs/${runId}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const addFollowup = useMutation({ mutationFn: (prompt: string) => api(`/task-runs/${taskRun.id}/followups`, { method: "POST", body: JSON.stringify({ prompt }) }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const removeTaskRun = useMutation({ mutationFn: () => api(`/task-runs/${taskRun.id}`, { method: "DELETE" }), onSuccess: async () => { onDeleted?.(); await client.invalidateQueries({ queryKey: ["run", runId] }); } });
-  const retryTaskRun = useMutation({ mutationFn: () => api(`/task-runs/${taskRun.id}/retry`, { method: "POST" }), onSuccess: async () => { onDeleted?.(); await client.invalidateQueries({ queryKey: ["run", runId] }); } });
+  const retryTaskRun = useMutation({ mutationFn: (temperature: number | null) => api(`/task-runs/${taskRun.id}/retry`, { method: "POST", body: JSON.stringify({ temperature }) }), onSuccess: async () => { onDeleted?.(); await client.invalidateQueries({ queryKey: ["run", runId] }); } });
   const { confirm, view: confirmView } = useConfirm();
   const cancelFollowup = useMutation({ mutationFn: (id: string) => api(`/followups/${id}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   useEffect(() => { followOutputRef.current = followOutput; }, [followOutput]);
@@ -286,6 +288,16 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     catch { toast("Не удалось скопировать", "error"); }
   }
   function sendFollowup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = event.currentTarget; const prompt = String(new FormData(form).get("prompt") ?? "").trim(); if (prompt) addFollowup.mutate(prompt, { onSuccess: () => form.reset() }); }
+  // Температуру меняют именно на перезапуске: так видно, как она влияет на тот же промпт.
+  const localTemperature = snapshot.model?.kind === "local-gguf" ? snapshot.profile?.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE : undefined;
+  const restartable = taskRun.status !== "pending" && taskRun.status !== "running";
+  function restart() {
+    // Профильную температуру не шлём: подмена разрешена только когда промпт — единственный невыполненный.
+    const value = localTemperature === undefined || Number(temperature) === localTemperature ? null : Number(temperature);
+    if (value !== null && (!Number.isFinite(value) || value < 0 || value > 2)) { toast("Температура должна быть от 0 до 2", "error"); return; }
+    if (taskRun.status !== "completed") { retryTaskRun.mutate(value); return; }
+    confirm({ title: "Запустить промпт заново?", body: `Готовый результат «${snapshot.task.name}», его оценка, уточнения и файлы будут удалены, промпт пройдёт заново${value === null ? "" : ` при температуре ${value}`}.`, action: "Запустить заново", onConfirm: () => retryTaskRun.mutate(value) });
+  }
   const criteria = criteriaForKind(snapshot.task.kind);
   const draftTotal = criteria.reduce((sum, [key]) => sum + draft[key], 0);
   const isSelectedFinal = activeVersion.resultSha === taskRun.selectedVersion?.resultSha;
@@ -316,7 +328,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     {snapshot.fixture?.preview && canUseVersion ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => closePreview.mutate()} closing={closePreview.isPending} /> : <section className={showShot ? "preview-cta with-shot" : "preview-cta"}>{showShot ? <img className="preview-shot" src={`/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(activeVersion.resultSha!)}`} alt={`Снимок web-приложения: ${activeVersion.label}`} loading="lazy" onError={() => setShotMissing(true)} /> : null}<div><span className="mono">Версия готова</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Preview-сервер один: текущий preview будет остановлен перед запуском этой SHA-версии." : "Откроем зафиксированные файлы выбранной SHA-версии."}</p></div><button className="primary" onClick={() => preview.mutate(activeVersion.resultSha!)} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
     {preview.error ? <p className="error">{preview.error.message}</p> : null}
     {result?.finalAnswer ? <details className="answer-surface"><summary><span className="mono">{activeVersion.label}</span><strong>Ответ модели</strong></summary><pre className="answer">{String(result.finalAnswer)}</pre></details> : null}
-    <div className="actions">{taskRun.status === "failed" || taskRun.status === "cancelled" ? <button className="primary" disabled={retryTaskRun.isPending} onClick={() => retryTaskRun.mutate()}>{retryTaskRun.isPending ? "Перезапускаем…" : "Запустить заново"}</button> : null}<Link to="/" search={{ task: snapshot.task.taskId, mode: snapshot.task.kind === "coding" ? "web" as const : "text" as const }}>Повторить на другой модели</Link>{result?.finalAnswer ? <button onClick={() => void copyAnswer()}>Копировать ответ</button> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (artifact !== undefined) { setArtifact(undefined); return; } if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>{artifact === undefined ? "Изменения версии" : "Скрыть изменения"}</button><button onClick={() => setLogView({ title: "Сырые логи", endpoint: logsPath })}>Сырые логи</button><button onClick={() => setLogView({ title: "Ошибки", endpoint: `${logsPath}?stream=stderr` })}>Ошибки</button></div>
+    <div className="actions">{restartable ? <>{localTemperature === undefined ? null : <label className="restart-temperature">Температура<input type="number" min={0} max={2} step={0.05} value={temperature} onChange={(event) => setTemperature(event.currentTarget.value)} /></label>}<button className="primary" disabled={retryTaskRun.isPending} onClick={restart}>{retryTaskRun.isPending ? "Перезапускаем…" : "Запустить заново"}</button></> : null}<Link to="/" search={{ task: snapshot.task.taskId, mode: snapshot.task.kind === "coding" ? "web" as const : "text" as const }}>Повторить на другой модели</Link>{result?.finalAnswer ? <button onClick={() => void copyAnswer()}>Копировать ответ</button> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (artifact !== undefined) { setArtifact(undefined); return; } if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>{artifact === undefined ? "Изменения версии" : "Скрыть изменения"}</button><button onClick={() => setLogView({ title: "Сырые логи", endpoint: logsPath })}>Сырые логи</button><button onClick={() => setLogView({ title: "Ошибки", endpoint: `${logsPath}?stream=stderr` })}>Ошибки</button></div>
     {retryTaskRun.error ? <p className="error">{retryTaskRun.error.message}</p> : null}
     {logView ? <LogDialog key={logView.endpoint} title={logView.title} endpoint={logView.endpoint} onClose={() => setLogView(undefined)} /> : null}
     {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{zedErrorWorkspace ? <><code>{zedErrorWorkspace}</code><button onClick={() => void copyWorkspacePath(zedErrorWorkspace)}>Скопировать путь</button></> : null}</div> : null}
@@ -404,6 +416,8 @@ export function RunDetail({ runId }: { runId: string }) {
   const hasTaskError = run.data.taskRuns?.some((task) => task.error);
   const activityStatus = run.data.activityStatus ?? run.data.status;
   const runningFollowup = activityStatus === "running-followup";
+  const followupTaskRun = activeFollowup ? run.data.taskRuns?.find((task) => (task.followups ?? []).some((item) => item.id === activeFollowup.id)) : undefined;
+  const followupTaskName = followupTaskRun ? (JSON.parse(followupTaskRun.snapshot_json) as { task: { name: string } }).task.name : undefined;
   const isActive = live;
   const scores = reviewSummary(run.data.taskRuns?.map((task) => task.review) ?? [], total);
   const items = railItems(run.data.taskRuns ?? []);
@@ -416,8 +430,8 @@ export function RunDetail({ runId }: { runId: string }) {
   const nextUnrated = items.slice(activeIndex + 1).find((item) => !item.score) ?? items.find((item) => !item.score && item.taskRun.id !== activeId);
   const step = (delta: number) => { const next = items[activeIndex + delta]; if (next) setSelectedTaskRunId(next.taskRun.id); };
   return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", ompModeLabel(run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
-    <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName)} />
-    {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? "Выполняется уточнение" : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
+    <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName ?? followupTaskName, runningFollowup)} />
+    {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? `Уточнение${followupTaskName ? `: ${followupTaskName}` : ""}` : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}${activeTaskName ? `: ${activeTaskName}` : ""}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
     {run.data.error && !hasTaskError ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
     <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive && remaining > 0 ? <button className="primary" disabled={resume.isPending} onClick={() => resume.mutate()}>{resume.isPending ? "Запускаем…" : `К следующему (осталось ${remaining})`}</button> : null}{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}>{items.length ? <div className="run-split"><PromptRail items={items} activeId={activeId!} reviewed={scores.reviewed} onSelect={setSelectedTaskRunId} />
       <div className="run-pane">

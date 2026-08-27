@@ -188,6 +188,7 @@ describe("интерфейс запуска", () => {
     expect(runTabTitle(true, 1, 5)).toBe("⏳ 1/5 · LLM Arena");
     expect(runTabTitle(true, 2, 5, "Falling Sand")).toBe("⏳ 2/5 · Falling Sand · LLM Arena");
     expect(runTabTitle(true, 2, 5, "a".repeat(40))).toBe(`⏳ 2/5 · ${"a".repeat(31)}… · LLM Arena`);
+    expect(runTabTitle(true, 5, 5, "Falling Sand", true)).toBe("⏳ Уточнение · Falling Sand · LLM Arena");
     expect(runTabTitle(false, 5, 5)).toBe("LLM Arena");
     expect(runTabTitle(true, 0, 0)).toBe("LLM Arena");
   });
@@ -260,6 +261,8 @@ describe("подписи списка запусков", () => {
     const completed = { ...failed, error: null, status: "completed" };
     expect(runListMeta(completed, "llama.cpp Chat")).toBe("2 промпта · llama.cpp Chat · текстовый ответ");
     expect(runListMeta({ ...completed, result_mode: "web" }, undefined)).toBe("2 промпта · llama-chat · web-приложение");
+    expect(runListMeta({ ...completed, status: "running", activeTaskName: "Tamagotchi" }, "llama.cpp Chat")).toBe("промпт: Tamagotchi · 2 промпта · llama.cpp Chat · текстовый ответ");
+    expect(runListMeta({ ...completed, activityStatus: "running-followup", activeTaskName: "Tamagotchi" }, "llama.cpp Chat")).toBe("уточняем: Tamagotchi · 2 промпта · llama.cpp Chat · текстовый ответ");
   });
 
   it("различает локальный запуск с обвязкой и без неё", () => {
@@ -301,8 +304,8 @@ describe("подписи списка запусков", () => {
 
   it("подписывает, при каких условиях измерена скорость", () => {
     expect(measurementConditions(undefined)).toBeUndefined();
-    expect(measurementConditions({ name: "Automatic", parameters: { context: "auto" } })).toBe("контекст авто · профиль Automatic");
-    expect(measurementConditions({ name: "Quality", parameters: { context: 102_400 } })).toBe("контекст 100k · профиль Quality");
+    expect(measurementConditions({ name: "Automatic", parameters: { context: "auto" } })).toBe("контекст авто · темп. 0.2 · профиль Automatic");
+    expect(measurementConditions({ name: "Quality", parameters: { context: 102_400, temperature: 0.9 } })).toBe("контекст 100k · темп. 0.9 · профиль Quality");
   });
 });
 

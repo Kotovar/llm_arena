@@ -573,9 +573,27 @@ describe("REST API", () => {
     expect(nothingLeft.statusCode).toBe(400);
     expect(nothingLeft.json().error).toContain("no prompts left");
 
-    const completedRetry = await app.inject({ method: "POST", url: `/api/task-runs/${done.id}/retry` });
-    expect(completedRetry.statusCode).toBe(400);
-    expect(completedRetry.json().error).toContain("failed or stopped");
+    // Успешный результат тоже перезапускается: не понравился ответ — гоняем промпт заново, при желании с другой температурой.
+    const completedRetry = await app.inject({ method: "POST", url: `/api/task-runs/${done.id}/retry`, payload: { temperature: 0.9 } });
+    expect(completedRetry.statusCode).toBe(202);
+    expect(store.listTaskRuns(run.id).map((item) => item.id)).toEqual([tail.id]);
+    expect(store.getRun(run.id)?.temperature).toBe(0.9);
+    expect(store.getRun(run.id)?.status).toBe("pending");
+
+    // Прогон с недовыполненными позициями движок пройдёт одним стартом llama-server: чужая температура туда не должна утечь.
+    store.updateRunStatus(run.id, "completed");
+    const again = store.createTaskRun(run.id, first.currentRevision.id, 0, join(directory, "runs", run.id, "task-c"), { task: first.currentRevision });
+    store.saveTaskRunResult(again.id, { finalAnswer: "ok" });
+    store.deleteTaskRun(tail.id);
+    const leaky = await app.inject({ method: "POST", url: `/api/task-runs/${again.id}/retry`, payload: { temperature: 1.2 } });
+    expect(leaky.statusCode).toBe(400);
+    expect(leaky.json().error).toContain("Finish the remaining prompts");
+    expect(store.getRun(run.id)?.temperature).toBe(0.9);
+
+    // Обычное продолжение прогона возвращает температуру профиля.
+    const resumedAfterRetry = await app.inject({ method: "POST", url: `/api/runs/${run.id}/resume` });
+    expect(resumedAfterRetry.statusCode).toBe(202);
+    expect(store.getRun(run.id)?.temperature).toBe(null);
     await app.close();
     store.close();
   });

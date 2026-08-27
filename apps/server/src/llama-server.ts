@@ -1,4 +1,4 @@
-import type { LlamaProfile } from "@llm-arena/shared";
+import { DEFAULT_LLAMA_TEMPERATURE, type LlamaProfile } from "@llm-arena/shared";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,9 +46,8 @@ export function buildLlamaServerCommand(
     "-fa",
     profile.flashAttention === "auto" ? "auto" : profile.flashAttention ? "on" : "off",
     "--jinja",
-    // Дефолт llama-server (temp 0.8) на длинном контексте срывает tool call в мусорную генерацию.
     "--temp",
-    String(profile.temperature ?? 0.2),
+    String(profile.temperature ?? DEFAULT_LLAMA_TEMPERATURE),
     "-np",
     "1",
     "--cache-reuse",

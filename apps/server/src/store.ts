@@ -50,6 +50,8 @@ type RunRow = {
   use_omp_agent: number;
   model_ref: string | null;
   reasoning_effort: string | null;
+  /** Разовая замена температуры профиля при перезапуске промпта; null — берём температуру профиля. */
+  temperature: number | null;
   status: RunStatus;
   snapshot_json: string | null;
   error: string | null;
@@ -203,6 +205,9 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!runColumns.some((column) => column.name === "reasoning_effort")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN reasoning_effort TEXT");
+  }
+  if (!runColumns.some((column) => column.name === "temperature")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN temperature REAL");
   }
   if (!runColumns.some((column) => column.name === "model_ref")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN model_ref TEXT");
@@ -570,6 +575,9 @@ export function createStore(filename: string) {
     },
     getRun(id: string) {
       return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id);
+    },
+    setRunTemperature(id: string, temperature: number | null) {
+      sqlite.prepare("UPDATE benchmark_runs SET temperature = ? WHERE id = ?").run(temperature, id);
     },
     setRunSnapshot(id: string, snapshot: unknown) {
       sqlite.prepare("UPDATE benchmark_runs SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(snapshot), id);

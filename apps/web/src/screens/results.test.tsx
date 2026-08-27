@@ -152,11 +152,41 @@ describe("журнал: кэш", () => {
   });
 });
 
+describe("перезапуск промпта", () => {
+  it("перезапускает успешный результат с выбранной температурой после подтверждения", async () => {
+    const user = userEvent.setup();
+    const snapshotWithModel = JSON.stringify({
+      task: { id: "revision-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: [], images: [] },
+      model: { kind: "local-gguf" },
+      profile: { name: "Automatic", parameters: { context: 102_400, temperature: 0.2 } },
+    });
+    await renderResult(taskRun({ snapshot_json: snapshotWithModel }));
+
+    const temperature = screen.getByLabelText("Температура");
+    await user.clear(temperature);
+    await user.type(temperature, "0.9");
+    await user.click(screen.getByRole("button", { name: "Запустить заново" }));
+    const dialog = await screen.findByRole("dialog", { hidden: true });
+    await user.click(within(dialog).getByRole("button", { name: "Запустить заново", hidden: true }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === "/api/task-runs/run-task-1/retry")).toBe(true));
+    const call = fetchMock.mock.calls.find(([url]) => url === "/api/task-runs/run-task-1/retry")!;
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({ temperature: 0.9 });
+  });
+
+  it("не показывает температуру для облачной модели", async () => {
+    await renderResult();
+
+    expect(screen.getByRole("button", { name: "Запустить заново" })).toBeDefined();
+    expect(screen.queryByLabelText("Температура")).toBeNull();
+  });
+});
+
 describe("условия замера", () => {
   it("подписывает скорость контекстом и профилем", async () => {
     await renderResult();
 
-    expect(screen.getByText("контекст 100k · профиль Automatic")).toBeDefined();
+    expect(screen.getByText("контекст 100k · темп. 0.2 · профиль Automatic")).toBeDefined();
   });
 });
 

@@ -12,6 +12,7 @@ import {
   createRunSchema,
   createTaskSchema,
   reviewSchema,
+  retryTaskRunSchema,
   modelDirectorySchema,
   selectResultVersionSchema,
   updateModelCapabilitiesSchema,
@@ -198,6 +199,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (run.status !== "failed" && run.status !== "cancelled") return run.status;
     return store.listTaskRuns(run.id).some((taskRun) => taskRun.status === "completed") ? "partial" : run.status;
   };
+  /** Имя промпта, над которым агент работает прямо сейчас: сам промпт или его уточнение. */
+  const activeTaskName = (runId: string) => {
+    const taskRuns = store.listTaskRuns(runId);
+    const active = taskRuns.find((taskRun) => taskRun.status === "running")
+      ?? taskRuns.find((taskRun) => taskRun.followups.some((followup) => followup.status === "pending" || followup.status === "running"));
+    return active ? parseGallerySnapshot(active.snapshot_json)?.task?.name ?? null : null;
+  };
   const withPublicError = <T extends { error: string | null }>(item: T) => {
     const { error, ...result } = item;
     const errorDetails = describeGenerationError(error);
@@ -344,7 +352,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return engine.calibrate(request.params.id);
   });
 
-  app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run) })));
+  app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run), activeTaskName: activeTaskName(run.id) })));
   app.get("/api/leaderboard", async () => {
     type Totals = {
       modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; runCount: number; reviewedTaskRunCount: number;
@@ -541,11 +549,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   // Прогон, упавший на середине группы, доигрывается с первого промпта без результата.
   // Состояние перечитываем прямо перед записью: между проверкой и мутацией мог быть await, а движок работает параллельно.
-  const resumeRun = (runId: string) => {
+  /** Температура задаётся на один перезапуск: любое другое продолжение прогона возвращает профиль. */
+  const resumeRun = (runId: string, temperature: number | null = null) => {
     const run = store.getRun(runId);
     if (!run) throw new Error("Run not found");
     if (run.status === "pending" || run.status === "running") throw new Error("Run is already active");
     if (hasActiveFollowup(run.id)) throw new Error("Active additional prompt must be cancelled before resuming");
+    store.setRunTemperature(run.id, temperature);
     store.updateRunStatus(run.id, "pending");
     engine?.wake();
   };
@@ -604,10 +614,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   // Перезапуск промпта с нуля: старый результат и его файлы уходят, движок проходит позицию заново.
   app.post<{ Params: { id: string } }>("/api/task-runs/:id/retry", async (request, reply) => {
+    const { temperature } = retryTaskRunSchema.parse(request.body ?? {});
     const assertRestartable = () => {
       const taskRun = store.getTaskRun(request.params.id);
       if (!taskRun) throw new Error("Task run not found");
-      if (taskRun.status !== "failed" && taskRun.status !== "cancelled") throw new Error("Only a failed or stopped prompt can be restarted");
+      if (taskRun.status === "pending" || taskRun.status === "running") throw new Error("A running prompt cannot be restarted");
       const run = store.getRun(taskRun.benchmark_run_id);
       if (!run) throw new Error("Run not found");
       if (run.status === "pending" || run.status === "running") throw new Error("Active run must be cancelled before restart");
@@ -615,13 +626,18 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       return taskRun;
     };
     const taskRun = assertRestartable();
+    // llama-server стартует с одной температурой на весь проход, поэтому подмена допустима, только
+    // когда перезапускаемый промпт остаётся единственной невыполненной позицией прогона.
+    if (temperature != null && store.listRunTasks(taskRun.benchmark_run_id).length > store.listTaskRuns(taskRun.benchmark_run_id).length) {
+      throw new Error("Finish the remaining prompts of this run before restarting with another temperature");
+    }
     await preview?.removeTaskRunPreviews?.([taskRun.id]);
     // Пока снимали превью, движок мог снова взять прогон в работу: перепроверяем перед удалением.
     assertRestartable();
     const artifacts = resolve(taskRun.artifact_path);
     if (artifacts.startsWith(`${resolve(config.dataDir, "runs")}/`)) rmSync(artifacts, { recursive: true, force: true });
     store.deleteTaskRun(taskRun.id);
-    resumeRun(taskRun.benchmark_run_id);
+    resumeRun(taskRun.benchmark_run_id, temperature ?? null);
     return reply.code(202).send({ status: "pending" });
   });
   app.get<{ Params: { id: string } }>("/api/task-runs/:id/error-details", async (request) => {
