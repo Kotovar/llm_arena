@@ -48,11 +48,11 @@ fixtures:
     name: Готовое web-приложение
     source: fixtures/web-app
     instructions: |
-      Работай в текущей директории как coding-agent. Создай реальные файлы готового web-приложения, а не вставляй реализацию только в итоговый ответ.
-      Приложение должно запускаться встроенным статическим preview-сервером: сохрани точку входа в index.html и используй браузерные HTML, CSS и JavaScript без обязательной установки зависимостей.
-      Не удаляй server.mjs и check-assets.mjs. Каждый файл, на который ссылается index.html, должен реально существовать рядом: приложение открывают без интернета, поэтому внешние CDN не подойдут.
-      Разделяй код на index.html, styles.css и app.js вместо одного огромного файла. Записывай файл не длиннее примерно 150 строк за один вызов инструмента, длинное дописывай частями.
-      После реализации проверь синтаксис созданных JavaScript-файлов. В итоговом ответе кратко перечисли сделанное.
+      Work in the current directory as a coding agent. Create real files of a finished web application instead of putting the implementation only in your final answer.
+      The application must run under the built-in static preview server: keep the entry point in index.html and use plain browser HTML, CSS and JavaScript that needs no dependency installation.
+      Do not delete server.mjs or check-assets.mjs. Every file referenced by index.html must actually exist next to it: the application is opened without internet access, so external CDNs will not work.
+      Split the code into index.html, styles.css and app.js instead of one huge file. Write at most about 150 lines per tool call and append long content in parts.
+      After implementing, check the syntax of the JavaScript files you created. In the final answer briefly list what you did.
     checks:
       - id: preview-server
         label: Preview server syntax

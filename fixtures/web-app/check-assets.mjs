@@ -14,7 +14,7 @@ try {
   process.exit(1);
 }
 
-if (html.includes("Приложение ещё не реализовано") && html.includes("Coding-agent заменит этот файл во время benchmark.")) {
+if (html.includes("Application is not implemented yet") && html.includes("The coding agent replaces this file during the benchmark.")) {
   console.error("index.html остался исходной заглушкой.");
   process.exit(1);
 }
@@ -32,7 +32,7 @@ const referenced = [...html.matchAll(assetTag)]
   .filter(Boolean);
 
 const missing = [];
-for (const value of [...new Set(referenced)]) {
+for (const value of new Set(referenced)) {
   const target = resolve(root, value.startsWith("/") ? `.${value}` : value);
   if (target !== root && !target.startsWith(`${root}${sep}`)) {
     missing.push(`${value} (выходит за пределы приложения)`);

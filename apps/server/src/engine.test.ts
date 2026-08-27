@@ -218,7 +218,7 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(store.getTaskRevision(task.currentRevision.id)?.kind).toBe("prompt");
     expect(JSON.parse(taskRun.snapshot_json).task).toMatchObject({ kind: "coding", fixtureId: "web-app" });
     expect(readFileSync(join(taskRun.artifact_path, "workspace", "index.html"), "utf8")).toBe("<h1>Готовое приложение</h1>");
-    expect(JSON.parse(taskRun.result_json!).finalAnswer).toContain("Создай реальные файлы");
+    expect(JSON.parse(taskRun.result_json!).finalAnswer).toContain("Create real files");
     // Снимок делается настоящим браузером, поэтому проверяем его только там, где браузер есть.
     if (spawnSync(config.browser, ["--version"]).status === 0) {
       expect(JSON.parse(taskRun.result_json!).previewImage).toBe(true);
@@ -232,7 +232,7 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     const withoutBrowserTaskRun = store.listTaskRuns(withoutBrowser.id)[0]!;
     expect(withoutBrowserTaskRun.status).toBe("completed");
     expect(JSON.parse(withoutBrowserTaskRun.result_json!).previewImage).toBe(false);
-    expect(JSON.parse(withoutBrowserTaskRun.result_json!).finalAnswer).toContain("Создай реальные файлы");
+    expect(JSON.parse(withoutBrowserTaskRun.result_json!).finalAnswer).toContain("Create real files");
     const preview = new PreviewManager(store, config, new ProcessSupervisor("web-preview-test", 100));
     const started = await preview.start(taskRun.id, JSON.parse(taskRun.result_json!).artifacts.resultSha);
     expect(started.resultSha).toBe(JSON.parse(taskRun.result_json!).artifacts.resultSha);
@@ -450,8 +450,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     writeFileSync(
       script,
       `import { readFileSync, writeFileSync } from "node:fs";
-const initial = readFileSync("index.html", "utf8").includes("Приложение ещё не реализовано");
-writeFileSync("index.html", initial ? "<h1>Готово</h1>" : "<h1>Приложение ещё не реализовано</h1><p>Coding-agent заменит этот файл во время benchmark.</p>");
+const initial = readFileSync("index.html", "utf8").includes("Application is not implemented yet");
+writeFileSync("index.html", initial ? "<h1>Готово</h1>" : "<h1>Application is not implemented yet</h1><p>The coding agent replaces this file during the benchmark.</p>");
 console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:0}}));`,
     );
     const config = loadConfig("../../arena.config.yaml");
@@ -487,7 +487,7 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_t
 console.log(JSON.stringify({type:"thread.started",thread_id:"thread"}));
 console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"answer"}}));
 console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:1}}));
-if (input.includes("Дополнительный запрос")) process.exitCode=1;`);
+if (input.includes("Follow-up request")) process.exitCode=1;`);
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = join(root, ".data");
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];

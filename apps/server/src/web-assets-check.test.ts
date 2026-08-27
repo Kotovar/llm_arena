@@ -21,7 +21,7 @@ const run = (cwd: string) => spawnSync(process.execPath, [checker], { cwd, encod
 
 describe("проверка файлов web-приложения", () => {
   it("не принимает нетронутую стартовую заглушку", () => {
-    const result = run(workspace({ "index.html": "<h1>Приложение ещё не реализовано</h1><p>Coding-agent заменит этот файл во время benchmark.</p>" }));
+    const result = run(workspace({ "index.html": "<h1>Application is not implemented yet</h1><p>The coding agent replaces this file during the benchmark.</p>" }));
 
     expect(result.status).toBe(1);
   });

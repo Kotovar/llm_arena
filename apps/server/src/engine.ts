@@ -325,7 +325,7 @@ export class BenchmarkEngine {
       .at(-1)?.finalAnswer ?? (taskRun.result_json ? (JSON.parse(taskRun.result_json) as { finalAnswer?: string }).finalAnswer : undefined);
     const prompt = snapshot.task.kind === "coding"
       ? buildTaskPrompt(followup.prompt, snapshot.fixture?.instructions)
-      : `${previous ? `Предыдущий ответ:\n${previous}\n\n` : ""}Дополнительный запрос:\n${followup.prompt}`;
+      : `${previous ? `Previous answer:\n${previous}\n\n` : ""}Follow-up request:\n${followup.prompt}`;
     const images = snapshot.task.images ?? [];
     assertModelCapabilities(model, definition.kind, run.reasoning_effort, images);
     let backend: Awaited<ReturnType<LlamaCppServerManager["start"]>> | undefined;

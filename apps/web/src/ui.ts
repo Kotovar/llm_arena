@@ -80,9 +80,9 @@ export function launchSummary({ modelName, taskCount, runnerName, resultMode }: 
   ];
 }
 
-export function taskUpdateBody(revision: Task["currentRevision"], prompt: string, images = revision.images) {
+export function taskUpdateBody(revision: Task["currentRevision"], prompt: string, images = revision.images, name = revision.name) {
   return {
-    name: revision.name,
+    name,
     kind: revision.kind,
     prompt,
     tags: revision.tags,
