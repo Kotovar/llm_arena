@@ -110,12 +110,13 @@ export function galleryMatrix(results: GalleryResult[]) {
     const key = `${result.prompt.id}\0${result.model.id}`;
     cells.set(key, [...(cells.get(key) ?? []), result]);
   }
-  const modelList = [...models.values()];
+  // Промптов со временем становится много, поэтому они идут столбцами: моделей в строках заметно меньше.
+  const promptList = [...prompts.values()];
   return {
-    models: modelList,
-    rows: [...prompts.values()].map((prompt) => ({
-      prompt,
-      cells: modelList.map((model) => ({ model, results: (cells.get(`${prompt.id}\0${model.id}`) ?? []).toSorted((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))) })),
+    prompts: promptList,
+    rows: [...models.values()].map((model) => ({
+      model,
+      cells: promptList.map((prompt) => ({ prompt, results: (cells.get(`${prompt.id}\0${model.id}`) ?? []).toSorted((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))) })),
     })),
   };
 }

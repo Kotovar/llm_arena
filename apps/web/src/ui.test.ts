@@ -343,10 +343,11 @@ describe("Gallery", () => {
       result("c1", "p2", "m2"),
     ]);
 
-    expect(matrix.models.map((model) => model.id)).toEqual(["m1", "m2"]);
-    expect(matrix.rows.map((row) => row.prompt.id)).toEqual(["p1", "p2"]);
-    expect(matrix.rows[0]!.cells.map((cell) => cell.results.map((item) => item.taskRunId))).toEqual([["a1", "a2"], ["b1"]]);
-    expect(matrix.rows[1]!.cells.map((cell) => cell.results.map((item) => item.taskRunId))).toEqual([[], ["c1"]]);
+    // Строки — модели, столбцы — промпты.
+    expect(matrix.prompts.map((prompt) => prompt.id)).toEqual(["p1", "p2"]);
+    expect(matrix.rows.map((row) => row.model.id)).toEqual(["m1", "m2"]);
+    expect(matrix.rows[0]!.cells.map((cell) => cell.results.map((item) => item.taskRunId))).toEqual([["a1", "a2"], []]);
+    expect(matrix.rows[1]!.cells.map((cell) => cell.results.map((item) => item.taskRunId))).toEqual([["b1"], ["c1"]]);
   });
 
   it("ставит выбранный главный результат первым в ячейке", () => {
