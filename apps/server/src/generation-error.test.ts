@@ -13,11 +13,11 @@ describe("generation error diagnostics", () => {
     });
   });
 
-  it("limits generic provider details while retaining the raw error for the diagnostic endpoint", () => {
+  it("keeps generic provider details in the diagnostic endpoint, not in visible UI", () => {
     const details = describeGenerationError("provider failure: ".concat("x".repeat(20_000)));
 
     expect(details).toMatchObject({ code: "generation_failed", message: "Генерация завершилась с ошибкой." });
-    expect(details?.details).toHaveLength(280);
+    expect(details?.details).toBe("Подробности доступны в техническом логе.");
     expect(details?.rawSize).toBeGreaterThan(20_000);
   });
 

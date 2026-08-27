@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const quoteFishArg = (value: string) => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
@@ -44,4 +45,14 @@ export function writeExportFile(dataDir: string, filename: string, content: stri
 
 export function writeActiveLauncher(dataDir: string, content: string): string {
   return writeExportFile(dataDir, "active-model.fish", content, true);
+}
+
+export function stopOmpLocalSession(dataDir: string): boolean {
+  const path = activeExportPath(dataDir, "omp-local.session");
+  if (!existsSync(path)) return false;
+  const session = readFileSync(path, "utf8").trim();
+  if (!/^omp-local-\d+-\d+$/u.test(session)) throw new Error("Invalid omp-local session name");
+  execFileSync("zellij", ["delete-session", "--force", session], { stdio: "ignore" });
+  rmSync(path, { force: true });
+  return true;
 }

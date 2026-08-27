@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "./api.js";
@@ -31,7 +31,16 @@ function gib(mib: number) {
 }
 
 function HostCard() {
+  const toast = useToast();
   const gpu = useQuery({ queryKey: ["gpu"], queryFn: () => api<GpuInfo | null>("/gpu"), refetchInterval: 20_000, staleTime: 15_000 });
+  const unload = useMutation({
+    mutationFn: () => api<{ stopped: boolean; stoppedOmp: boolean }>("/external-launcher/unload", { method: "POST" }),
+    onSuccess: async ({ stopped, stoppedOmp }) => {
+      await gpu.refetch();
+      toast(stopped ? "Выгрузка модели подтверждена" : stoppedOmp ? "Сеанс omp-local остановлен; проверьте VRAM" : "Запущенной модели Arena не найдено", stopped ? "success" : "error");
+    },
+    onError: (error) => toast(error.message, "error"),
+  });
   const info = gpu.data;
   if (!info) return <div className="host"><span className="host-label">Локальный узел</span><span><i className="pulse" />127.0.0.1</span></div>;
   const usedShare = Math.min(100, Math.round((info.usedMiB / Math.max(info.totalMiB, 1)) * 100));
@@ -39,6 +48,7 @@ function HostCard() {
     <span className="host-gpu"><i className="pulse" />{info.name}</span>
     <span className="host-vram"><i style={{ width: `${usedShare}%` }} /></span>
     <small>{gib(info.freeMiB)} свободно из {gib(info.totalMiB)}</small>
+    <button type="button" className="host-unload danger" onClick={() => unload.mutate()} disabled={unload.isPending}>{unload.isPending ? "Выгружаем…" : "Выгрузить из VRAM"}</button>
   </div>;
 }
 

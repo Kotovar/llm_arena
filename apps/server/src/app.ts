@@ -20,7 +20,7 @@ import {
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
-import { activeExportPath, renderFishCommand, renderFishLauncher, renderOmpLayout, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
+import { activeExportPath, renderFishCommand, renderFishLauncher, renderOmpLayout, stopOmpLocalSession, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 import { describeGenerationError } from "./generation-error.js";
 import { assertWorkspaceCommit, workspaceVersionDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
@@ -33,6 +33,7 @@ import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 import { readGpuInfo } from "./system-metrics.js";
+import { loadOwnerId, stopOwnedLlamaServers } from "./lifecycle.js";
 
 type EngineLike = {
   wake(): void;
@@ -338,6 +339,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     store.setSetting("externalProfileName", selection.profileName);
     store.setSetting("externalPort", String(selection.port));
     return { ...launcher, ...paths };
+  });
+  app.post("/api/external-launcher/unload", async () => {
+    const stoppedLlamaServers = await stopOwnedLlamaServers(loadOwnerId(config.dataDir));
+    const stoppedOmp = stopOmpLocalSession(config.dataDir);
+    return { stopped: stoppedLlamaServers > 0, stoppedLlamaServers, stoppedOmp };
   });
   app.get<{ Querystring: { modelId?: string } }>("/api/profiles", async (request) => store.listExecutionProfiles(request.query.modelId));
   app.post("/api/profiles", async (request, reply) => {

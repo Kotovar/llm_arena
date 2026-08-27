@@ -41,11 +41,10 @@ export function describeGenerationError(raw: string | null): GenerationErrorDeta
       rawSize,
     };
   }
-  const firstLine = raw.replace(/\s+/gu, " ").trim().slice(0, 280);
   return {
     code: "generation_failed",
     message: "Генерация завершилась с ошибкой.",
-    ...(firstLine ? { details: firstLine } : {}),
+    details: "Подробности доступны в техническом логе.",
     rawSize,
   };
 }

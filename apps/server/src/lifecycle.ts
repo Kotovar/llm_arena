@@ -39,6 +39,62 @@ export function recoverOwnedProcesses(ownerId: string): number {
   return groups.size;
 }
 
+function isProcessGroupRunning(group: number): boolean {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupsToStop(groups: Set<number>, timeoutMs: number): Promise<Set<number>> {
+  const deadline = performance.now() + timeoutMs;
+  let remaining = new Set([...groups].filter(isProcessGroupRunning));
+  while (remaining.size && performance.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    remaining = new Set([...remaining].filter(isProcessGroupRunning));
+  }
+  return remaining;
+}
+
+/** Завершает только серверы llama.cpp, оставшиеся от этой инстанции Arena. */
+export async function stopOwnedLlamaServers(ownerId: string, procRoot = "/proc"): Promise<number> {
+  const groups = new Set<number>();
+  for (const entry of readdirSync(procRoot)) {
+    if (!/^\d+$/u.test(entry) || Number(entry) === process.pid) continue;
+    try {
+      const directory = join(procRoot, entry);
+      const environment = readFileSync(join(directory, "environ"), "utf8").split("\0");
+      if (!environment.includes(`LLM_ARENA_OWNER=${ownerId}`)) continue;
+      const executable = readFileSync(join(directory, "cmdline"), "utf8").split("\0")[0] ?? "";
+      if (!/(?:^|\/)llama-server$/u.test(executable)) continue;
+      const stat = readFileSync(join(directory, "stat"), "utf8");
+      const processGroup = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
+      if (Number.isInteger(processGroup) && processGroup > 1) groups.add(processGroup);
+    } catch {
+      // Process exited or belongs to another user.
+    }
+  }
+  for (const group of groups) {
+    try {
+      process.kill(-group, "SIGTERM");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
+  const remaining = await waitForProcessGroupsToStop(groups, 2_000);
+  for (const group of remaining) {
+    try {
+      process.kill(-group, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
+  return groups.size - (await waitForProcessGroupsToStop(remaining, 2_000)).size;
+}
+
 export function acquireInstanceLock(dataDir: string): () => void {
   mkdirSync(dataDir, { recursive: true });
   const path = join(dataDir, "server.lock");

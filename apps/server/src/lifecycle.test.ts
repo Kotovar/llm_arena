@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { acquireInstanceLock } from "./lifecycle.js";
+import { acquireInstanceLock, stopOwnedLlamaServers } from "./lifecycle.js";
 
 const directories: string[] = [];
 
@@ -31,5 +31,24 @@ describe("acquireInstanceLock", () => {
     const release = acquireInstanceLock(dataDir);
     expect(() => acquireInstanceLock(dataDir)).toThrow(`LLM Arena server is already running as PID ${process.pid}`);
     release();
+  });
+});
+
+describe("stopOwnedLlamaServers", () => {
+  it("targets only llama-server processes owned by this Arena instance", async () => {
+    const proc = directory();
+    const owner = "arena-owner";
+    const processEntry = (pid: string, environment: string, command: string) => {
+      const path = join(proc, pid);
+      mkdirSync(path);
+      writeFileSync(join(path, "environ"), environment);
+      writeFileSync(join(path, "cmdline"), command);
+      writeFileSync(join(path, "stat"), `${pid} (process) S 1 999999999 1 1 1 1 1 1 1 1`);
+    };
+    processEntry("101", `LLM_ARENA_OWNER=${owner}\0`, "/opt/llama.cpp/llama-server\0-m\0model.gguf\0");
+    processEntry("102", `LLM_ARENA_OWNER=${owner}\0`, "/usr/bin/node\0server.js\0");
+    processEntry("103", "LLM_ARENA_OWNER=another-arena\0", "/opt/llama.cpp/llama-server\0-m\0model.gguf\0");
+
+    await expect(stopOwnedLlamaServers(owner, proc)).resolves.toBe(1);
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -271,6 +271,41 @@ describe("REST API", () => {
     expect((await app.inject({ method: "POST", url: `/api/task-runs/${missing.id}/open-in-zed` })).statusCode).toBe(404);
     await app.close();
     store.close();
+  });
+
+  it("unloads the Arena-owned omp-local session", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-omp-unload-api-"));
+    directories.push(directory);
+    const bin = join(directory, "bin");
+    const log = join(directory, "zellij.log");
+    mkdirSync(bin);
+    const zellij = join(bin, "zellij");
+    writeFileSync(zellij, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$ZELLIJ_LOG\"\n");
+    chmodSync(zellij, 0o755);
+    mkdirSync(join(directory, "exports"));
+    writeFileSync(join(directory, "exports", "omp-local.session"), "omp-local-100-200\n");
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${bin}:${originalPath}`;
+    process.env.ZELLIJ_LOG = log;
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const app = buildApp({ store, config });
+
+    try {
+      const unloaded = await app.inject({ method: "POST", url: "/api/external-launcher/unload" });
+
+      expect(unloaded.statusCode).toBe(200);
+      expect(unloaded.json()).toEqual({ stopped: false, stoppedLlamaServers: 0, stoppedOmp: true });
+      expect(readFileSync(log, "utf8").trim()).toBe("delete-session --force omp-local-100-200");
+      expect(existsSync(join(directory, "exports", "omp-local.session"))).toBe(false);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      delete process.env.ZELLIJ_LOG;
+      await app.close();
+      store.close();
+    }
   });
 
   it("discovers and safely connects a GGUF file from the persisted directory", async () => {
