@@ -53,6 +53,7 @@ function runnerImages(dataDir: string, images: readonly TaskImage[]) {
 export class BenchmarkEngine {
   readonly #controllers = new Map<string, AbortController>();
   readonly #taskControllers = new Map<string, AbortController>();
+  readonly #stopReasons = new Map<string, string>();
   readonly #listeners = new Map<string, Set<(event: RunEvent) => void>>();
   #pumping: Promise<void> | undefined;
   #stopping = false;
@@ -109,16 +110,17 @@ export class BenchmarkEngine {
       this.store.updateRunStatus(
         run.id,
         controller.signal.aborted ? "cancelled" : failedTask ? "failed" : "completed",
-        failedTask?.error ?? undefined,
+        this.#stopReasons.get(run.id) ?? failedTask?.error ?? undefined,
       );
     } catch (error) {
       const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed");
-      const message = failedTask?.error ?? (error as Error).message;
+      const message = this.#stopReasons.get(run.id) ?? failedTask?.error ?? (error as Error).message;
       this.store.updateRunStatus(run.id, controller.signal.aborted ? "cancelled" : "failed", message);
       // При явной отмене техническая ошибка оборванного вызова — шум, а не то, что стоит показывать.
       if (!controller.signal.aborted) this.#emit({ type: "run.error", runId: run.id, data: { message } });
     } finally {
       this.#controllers.delete(run.id);
+      this.#stopReasons.delete(run.id);
       this.#emit({ type: "run.status", runId: run.id, data: { status: this.store.getRun(run.id)?.status } });
     }
     return true;
@@ -172,8 +174,18 @@ export class BenchmarkEngine {
     let backend:
       | Awaited<ReturnType<LlamaCppServerManager["start"]>>
       | undefined;
+    const maxTemperatureC = this.config.defaults.gpuMaxTemperatureC;
     const gpuSampler = model.kind === "local-gguf"
-      ? startGpuSampler(this.supervisor, this.config.nvidiaSmi, join(runRoot, "system-metrics.ndjson"))
+      ? startGpuSampler(this.supervisor, this.config.nvidiaSmi, join(runRoot, "system-metrics.ndjson"), {
+        maxTemperatureC,
+        // Карта уже несколько секунд держит критическую температуру: гасим прогон вместе с llama-server.
+        onOverheat: (sample) => {
+          const message = `Прогон остановлен: видеокарта нагрелась до ${sample.temperatureC} °C при пороге ${maxTemperatureC} °C`;
+          this.#stopReasons.set(run.id, message);
+          this.#emit({ type: "run.error", runId: run.id, data: { message } });
+          void this.cancel(run.id).catch(() => undefined);
+        },
+      })
       : undefined;
     try {
       if (model.kind === "local-gguf") {

@@ -52,13 +52,31 @@ export function parseGpuSample(line: string): GpuSample | undefined {
   };
 }
 
-export function startGpuSampler(supervisor: ProcessSupervisor, executable: string, path: string) {
+/**
+ * Одиночный выброс температуры — обычное дело, останавливать из-за него прогон незачем.
+ * Срабатываем, только когда карта держит критическую температуру несколько замеров подряд.
+ */
+export function overheatWatcher(maxTemperatureC: number, samplesInARow = 3): (sample: GpuSample) => boolean {
+  let hot = 0;
+  let fired = false;
+  return (sample) => {
+    if (!maxTemperatureC || fired) return false;
+    hot = sample.temperatureC >= maxTemperatureC ? hot + 1 : 0;
+    if (hot < samplesInARow) return false;
+    fired = true;
+    return true;
+  };
+}
+
+export function startGpuSampler(supervisor: ProcessSupervisor, executable: string, path: string, guard?: { maxTemperatureC: number; onOverheat: (sample: GpuSample) => void }, argv: string[] = []) {
+  const overheated = overheatWatcher(guard?.maxTemperatureC ?? 0);
   const samples: GpuSample[] = [];
   let buffer = "";
   writeFileSync(path, "");
   const child = supervisor.spawn({
     argv: [
       executable,
+      ...argv,
       "--query-gpu=memory.total,memory.used,memory.free,utilization.gpu,utilization.memory,temperature.gpu,power.draw",
       "--format=csv,noheader,nounits",
       "--loop-ms=1000",
@@ -72,6 +90,7 @@ export function startGpuSampler(supervisor: ProcessSupervisor, executable: strin
         if (!sample) continue;
         samples.push(sample);
         appendFileSync(path, `${JSON.stringify(sample)}\n`);
+        if (overheated(sample)) guard!.onOverheat(sample);
       }
     },
   });
@@ -83,6 +102,7 @@ export function startGpuSampler(supervisor: ProcessSupervisor, executable: strin
       return {
         samples: samples.length,
         peakVramMiB: Math.max(...samples.map((sample) => sample.memoryUsedMiB)),
+        peakTemperatureC: Math.max(...samples.map((sample) => sample.temperatureC)),
         averageVramMiB: samples.reduce((sum, sample) => sum + sample.memoryUsedMiB, 0) / samples.length,
         averageGpuUtilizationPercent:
           samples.reduce((sum, sample) => sum + sample.gpuUtilizationPercent, 0) / samples.length,

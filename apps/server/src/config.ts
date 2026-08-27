@@ -16,6 +16,9 @@ const configSchema = z.object({
     checkTimeoutMs: z.number().int().positive(),
     processGraceMs: z.number().int().positive(),
     vramReserveMiB: z.number().int().positive(),
+    // 0 отключает термозащиту. Это политика «прогон уже деградировал от троттлинга, хватит»,
+    // а не спасение железа: от перегрева карту защищают драйвер и BIOS.
+    gpuMaxTemperatureC: z.number().int().min(0).default(87),
   }),
   runners: z.array(runnerDefinitionSchema).min(1),
   fixtures: z.array(fixtureManifestSchema).default([]),
