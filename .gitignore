@@ -13,3 +13,4 @@ coverage/
 *.safetensors
 arena.config.local.yaml
 docs/superpowers
+.prompts
