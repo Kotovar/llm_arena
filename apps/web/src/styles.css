@@ -208,14 +208,24 @@ td.mono, .pareto-list .mono { color: #d9e1ed; font-size: 13px; }
 .scatter line { stroke: var(--line-strong); stroke-width: 1; }
 .scatter line.scatter-grid { stroke: var(--line); stroke-dasharray: 3 4; }
 /* Цвет точки задаётся атрибутом fill: правило с цветом здесь перебивало бы его и красило все точки одинаково. */
-.scatter circle { fill-opacity: 0.75; }
+.scatter .scatter-dot { fill-opacity: 0.75; }
 .scatter text { fill: var(--muted); font-size: 11px; }
+.scatter-point { transition: opacity .15s ease; }
+.scatter-point.dimmed { opacity: .45; }
+.scatter-point:hover, .scatter:hover .scatter-point.dimmed:hover { opacity: 1; }
+.scatter:hover .scatter-point:not(:hover) .scatter-point-label { opacity: .35; }
+.scatter-tip rect { fill: var(--surface-3); stroke: var(--line-strong); }
+.scatter-tip text { fill: #d7dcea; font-size: 11px; }
+.scatter-tip .scatter-tip-title { fill: white; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .scatter-point { transition: none; } }
 .analytics-scroll { overflow-x: auto; }
 .analytics-scroll > table { width: max-content; min-width: 100%; }
 .analytics-table, .heatmap { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 13px; }
 .analytics-table caption, .heatmap caption { margin-bottom: 8px; color: var(--muted); font-size: 12px; text-align: left; }
 .analytics-table th, .analytics-table td, .heatmap th, .heatmap td { padding: 8px 8px; border-bottom: 1px solid var(--line); text-align: left; }
 .heatmap td { width: 110px; text-align: right; }
+/* Насыщенная ячейка светлее собственного текста, поэтому чернила на ней тёмные. */
+.heatmap td.heatmap-strong { color: var(--surface-0); font-weight: 600; }
 .heatmap th[scope="col"]:not(:first-child) { width: 110px; text-align: right; }
 .slice-hint { margin: -8px 0 16px; color: var(--muted); font-size: 12px; }
 .analytics-table th[scope="row"], .heatmap th[scope="row"] { font-weight: 600; }

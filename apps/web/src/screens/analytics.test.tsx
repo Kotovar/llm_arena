@@ -79,7 +79,7 @@ describe("аналитика решений", () => {
 
     expect(await screen.findByRole("img", { name: "Качество и скорость" })).toBeTruthy();
     expect(screen.getByText("Pareto: 1 связка")).toBeTruthy();
-    const fills = [...document.querySelectorAll(".scatter circle")].map((circle) => circle.getAttribute("fill"));
+    const fills = [...document.querySelectorAll(".scatter .scatter-dot")].map((circle) => circle.getAttribute("fill"));
     expect(new Set(fills).size).toBe(2);
     // Опознавать связку по одному цвету нельзя: у каждой точки есть подпись.
     expect([...document.querySelectorAll(".scatter-point-label")].map((label) => label.textContent)).toEqual(["Локальная · Скорость", "Медленная"]);
@@ -87,6 +87,20 @@ describe("аналитика решений", () => {
     expect(within(table).getByText("Локальная · Скорость")).toBeTruthy();
     expect(within(table).getByText("15,5 ГиБ")).toBeTruthy();
     expect(within(table).getByText("42 токенов/с")).toBeTruthy();
+  });
+
+  it("показывает подробности точки при наведении и приглушает недоминирующие", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("img", { name: "Качество и скорость" });
+
+    // Точка вне короткого списка приглушена: щит и график должны говорить одно и то же.
+    const dimmed = [...document.querySelectorAll(".scatter-point")].filter((group) => group.classList.contains("dimmed"));
+    expect(dimmed).toHaveLength(1);
+
+    await user.hover(document.querySelector(".scatter-point .scatter-hit")!);
+
+    expect(document.querySelector(".scatter-tip")!.textContent).toContain("промптов: 3");
   });
 
   it("раскладывает виды по вкладкам", async () => {
@@ -106,14 +120,14 @@ describe("аналитика решений", () => {
     await renderInApp(<AnalyticsPage />, "/analytics");
     await screen.findByRole("img", { name: "Качество и скорость" });
 
-    expect(document.querySelectorAll(".scatter circle")).toHaveLength(2);
+    expect(document.querySelectorAll(".scatter .scatter-dot")).toHaveLength(2);
 
     cleanup();
     vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : [point({ medianTokensPerSecond: null })]), { status: 200, headers: { "content-type": "application/json" } })));
     await renderInApp(<AnalyticsPage />, "/analytics");
 
     const table = await screen.findByRole("table", { name: "Те же связки числами" });
-    expect(document.querySelectorAll(".scatter circle")).toHaveLength(0);
+    expect(document.querySelectorAll(".scatter .scatter-dot")).toHaveLength(0);
     expect(within(table).getByText("Локальная · Скорость")).toBeTruthy();
   });
 
