@@ -221,9 +221,10 @@ a { color: var(--signal); text-decoration: none; }
 .pair-verdict button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }
 .prompt-tags-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 12px 0; }
 .prompt-tags-form label { flex: 1 1 240px; color: var(--muted); font-size: 12px; }
-.prompt-tags-form input { display: block; width: 100%; margin-top: 6px; padding: 9px; }
-/* Кнопка живёт в одной строке с полем, поэтому и высота у неё та же. */
-.prompt-tags-form button { padding: 9px 15px; }
+/* Поле и кнопка стоят в одной строке, поэтому у них общие метрики: шрифт, интерлиньяж и отступы.
+   Иначе кнопка берёт размер шрифта страницы, а поле — мелкий шрифт подписи, и высоты расходятся. */
+.prompt-tags-form input, .prompt-tags-form button { padding: 9px 14px; font-size: 13px; line-height: 1.4; }
+.prompt-tags-form input { display: block; width: 100%; margin-top: 6px; }
 .prompt-tags-form small { flex: 1 1 100%; margin: 0; color: var(--muted); font-size: 12px; }
 .gallery-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .gallery-tags button { padding: 7px 13px; border-radius: 999px; font-size: 12px; }

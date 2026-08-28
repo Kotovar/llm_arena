@@ -89,5 +89,7 @@ describe("responsive result layout", () => {
     expect(css).toMatch(/\.prompt-tags-form\s*\{[^}]*align-items:\s*end/);
     // Пояснение уходит на свою строку: внутри label оно опускало бы кнопку ниже поля.
     expect(css).toMatch(/\.prompt-tags-form small\s*\{[^}]*flex:\s*1 1 100%/);
+    // Одинаковые метрики поля и кнопки: разный размер шрифта давал разную высоту.
+    expect(css).toMatch(/\.prompt-tags-form input, \.prompt-tags-form button\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*1\.4/);
   });
 });
