@@ -1285,6 +1285,46 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("ranks only the chosen workload slice", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-tags-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const agentTask = store.createTask({ name: "Agent", kind: "prompt", prompt: "Answer", tags: ["coding-agent"] });
+    const plainTask = store.createTask({ name: "Plain", kind: "prompt", prompt: "Answer", tags: [] });
+    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
+    const model = store.createModel({ name: "Agent Model", kind: "cloud", provider: "openai", modelRef: "agent" });
+    const other = store.createModel({ name: "Plain Model", kind: "cloud", provider: "openai", modelRef: "plain" });
+
+    const run = store.createRun({ taskRevisionIds: [agentTask.currentRevision.id, plainTask.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    for (const [position, revisionId] of [agentTask.currentRevision.id, agentTask.currentRevision.id, plainTask.currentRevision.id].entries()) {
+      const taskRun = store.createTaskRun(run.id, revisionId, position, join(directory, `a${position}`), { task: { id: revisionId } });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: "A" });
+      await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/review`, payload: review(position === 2 ? 4 : 8) });
+    }
+    const plainRun = store.createRun({ taskRevisionIds: [plainTask.currentRevision.id], modelId: other.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const plainTaskRun = store.createTaskRun(plainRun.id, plainTask.currentRevision.id, 0, join(directory, "p0"), { task: { id: plainTask.currentRevision.id } });
+    store.saveTaskRunResult(plainTaskRun.id, { finalAnswer: "P" });
+    await app.inject({ method: "PUT", url: `/api/task-runs/${plainTaskRun.id}/review`, payload: review(9) });
+
+    const tagged = await app.inject({ method: "GET", url: "/api/leaderboard?tag=coding-agent" });
+    expect(tagged.json()).toEqual([expect.objectContaining({ modelName: "Agent Model", reviewedTaskRunCount: 2, scorePercent: 80 })]);
+
+    // Промпты без тегов — такой же явный срез, а не «всё остальное вперемешку».
+    const untagged = await app.inject({ method: "GET", url: "/api/leaderboard?untagged=1" });
+    expect((untagged.json() as Array<{ modelName: string; reviewedTaskRunCount: number }>).map((entry) => [entry.modelName, entry.reviewedTaskRunCount]))
+      .toEqual([["Plain Model", 1], ["Agent Model", 1]]);
+
+    const all = await app.inject({ method: "GET", url: "/api/leaderboard" });
+    expect((all.json() as Array<{ modelName: string; reviewedTaskRunCount: number }>).find((entry) => entry.modelName === "Agent Model")?.reviewedTaskRunCount).toBe(3);
+
+    expect((await app.inject({ method: "GET", url: "/api/leaderboard?tag=%20" })).statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
   it("aggregates the leaderboard by model, weighting by reviewed task run and keeping archived models", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-"));
     directories.push(directory);

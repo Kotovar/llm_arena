@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderInApp } from "../test-harness.js";
 import { Launcher } from "./launcher.js";
 
-function task(id: string, name: string) {
-  return { id, currentRevision: { id: `${id}-rev`, taskId: id, name, kind: "coding", prompt: `Промпт ${name}`, revision: 1, contentHash: "h", tags: [], images: [] } };
+function task(id: string, name: string, tags: string[] = []) {
+  return { id, currentRevision: { id: `${id}-rev`, taskId: id, name, kind: "coding", prompt: `Промпт ${name}`, revision: 1, contentHash: "h", tags, images: [] } };
 }
 
 let payloads: Record<string, unknown>;
@@ -118,5 +118,19 @@ describe("профиль локальной модели", () => {
     await user.click(await screen.findByRole("button", { name: /Запустить/u }));
 
     await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ repeatCount: 3, warmupAttempt: true })]));
+  });
+
+  it("фильтрует список промптов по тегу, не трогая уже выбранное", async () => {
+    const user = userEvent.setup();
+    payloads["/api/tasks"] = [task("task-1", "Аквариум", ["web"]), task("task-2", "Песок")];
+    await renderInApp(<Launcher />, "/");
+    await screen.findByText("Аквариум");
+
+    await user.click(screen.getByRole("button", { name: "web" }));
+
+    expect(screen.queryByText("Песок")).toBeNull();
+    // Скрытый промпт остаётся выбранным: тег прячет строки, а не снимает выбор.
+    await user.click(await screen.findByRole("button", { name: /Запустить/u }));
+    await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ taskRevisionIds: ["task-1-rev", "task-2-rev"] })]));
   });
 });

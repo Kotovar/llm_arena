@@ -94,6 +94,18 @@ type TaskRunRow = {
   created_at: string;
 };
 
+type LeaderboardTaskRunRow = {
+  run_id: string;
+  model_id: string;
+  model_ref: string | null;
+  tags_json: string | null;
+  correctness: number | null;
+  code_quality: number | null;
+  ui_quality: number | null;
+  instruction_following: number | null;
+  generation_tps: number | null;
+};
+
 type TaskAttemptRow = {
   id: string;
   task_run_id: string;
@@ -672,6 +684,23 @@ export function createStore(filename: string) {
         LEFT JOIN task_runs ON task_runs.benchmark_run_id = benchmark_runs.id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
         GROUP BY benchmark_runs.sequence
+        ORDER BY benchmark_runs.sequence
+      `);
+    },
+    /**
+     * Строки лидерборда по промптам: срез по тегам берётся из версии промпта, какой её видела модель,
+     * а не из текущих тегов задачи. Запуск без промптов остаётся строкой с пустыми полями.
+     */
+    listLeaderboardTaskRuns() {
+      return all<LeaderboardTaskRunRow>(`
+        SELECT benchmark_runs.id AS run_id, benchmark_runs.model_id, benchmark_runs.model_ref,
+               task_revisions.tags_json,
+               reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following,
+               json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value') AS generation_tps
+        FROM benchmark_runs
+        LEFT JOIN task_runs ON task_runs.benchmark_run_id = benchmark_runs.id
+        LEFT JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
+        LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
         ORDER BY benchmark_runs.sequence
       `);
     },

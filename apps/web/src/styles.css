@@ -171,7 +171,10 @@ a { color: var(--signal); text-decoration: none; }
 .leaderboard-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }.leaderboard-table { width: 100%; min-width: 520px; border-collapse: collapse; background: #101828; }.leaderboard-table th, .leaderboard-table td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--line); }.leaderboard-table tbody tr:last-child > * { border-bottom: 0; }.leaderboard-table thead { background: #1b253c; }.leaderboard-table thead th { color: #d9e1ed; font-size: 13px; }.leaderboard-score { color: var(--good); font: 600 13px ui-monospace, monospace; }.leaderboard-unranked { color: var(--muted); }
 .leaderboard-thin { display: block; margin-top: 3px; color: var(--warn); font: 400 10px Inter, ui-sans-serif, system-ui, sans-serif; }
 .leaderboard-note { color: var(--muted); font-size: 11px; }
-.leaderboard-filters { display: flex; gap: 8px; margin-bottom: 14px; }.leaderboard-filters button { padding: 7px 13px; border-radius: 999px; font-size: 12px; }.leaderboard-filters button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }
+.prompt-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.prompt-tags button { padding: 5px 11px; border-radius: 999px; font-size: 12px; }
+.prompt-tags button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }
+.leaderboard-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }.leaderboard-filters button { padding: 7px 13px; border-radius: 999px; font-size: 12px; }.leaderboard-filters button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }
 .leaderboard-table a { color: inherit; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
 .leaderboard-table a:hover { color: var(--signal); text-decoration-color: currentColor; }
 .compare-table { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #131826; }

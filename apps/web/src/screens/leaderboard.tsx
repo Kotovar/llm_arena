@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Empty, Page, Panel, useData } from "../shell.js";
-import type { LeaderboardEntry } from "../types.js";
+import type { LeaderboardEntry, Task } from "../types.js";
 import { plural } from "../ui.js";
 
 // Ниже этого порога средняя ещё слишком шумная, чтобы читать её как результат модели.
@@ -39,8 +39,20 @@ function Row({ entry, place }: { entry: LeaderboardEntry; place?: number }) {
   </tr>;
 }
 
+/** Срез нагрузки: «без тегов» — отдельный вариант, а не значение тега, иначе он столкнётся с тегом с таким именем. */
+type Slice = { kind: "all" } | { kind: "untagged" } | { kind: "tag"; tag: string };
+
+function sliceQuery(slice: Slice) {
+  if (slice.kind === "untagged") return "?untagged=1";
+  return slice.kind === "tag" ? `?tag=${encodeURIComponent(slice.tag)}` : "";
+}
+
 export function LeaderboardPage() {
-  const leaderboard = useData<LeaderboardEntry[]>("leaderboard", "/leaderboard");
+  const [slice, setSlice] = useState<Slice>({ kind: "all" });
+  const query = sliceQuery(slice);
+  const leaderboard = useData<LeaderboardEntry[]>(`leaderboard${query}`, `/leaderboard${query}`);
+  const tasks = useData<Task[]>("tasks", "/tasks");
+  const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.currentRevision.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const [kind, setKind] = useState<KindFilter>("all");
   // Места считаются внутри выбранной группы: локальная модель не должна выглядеть седьмой среди облачных.
   const shown = leaderboard.data?.filter((entry) => kind === "all" || entry.modelKind === kind) ?? [];
@@ -50,8 +62,9 @@ export function LeaderboardPage() {
   return <Page title="Лидерборд моделей" eyebrow="Лидерборд" intro="Доля набранных баллов по оценённым промптам во всех запусках модели. Максимум за промпт зависит от типа задачи, поэтому счёт нормализован. Средние по критериям — из десяти.">
     {leaderboard.isPending ? <Empty>Считаем результаты…</Empty> : null}
     {leaderboard.error ? <p className="error">{leaderboard.error.message}</p> : null}
-    {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length ? <Empty>Пока нет ни одного запуска.</Empty> : null}
-    {leaderboard.data?.length ? <Panel title={`Моделей: ${shown.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель оценена", "модели оценены", "моделей оценены")} меньше чем на {CONFIDENT_SAMPLE} промптах</span> : undefined}>
+    {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length && slice.kind === "all" ? <Empty>Пока нет ни одного запуска.</Empty> : null}
+    {leaderboard.data && (leaderboard.data.length > 0 || slice.kind !== "all") ? <Panel title={`Моделей: ${shown.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель оценена", "модели оценены", "моделей оценены")} меньше чем на {CONFIDENT_SAMPLE} промптах</span> : undefined}>
+      {tags.length ? <div className="leaderboard-filters" role="group" aria-label="Срез нагрузки"><button type="button" className={slice.kind === "all" ? "active" : ""} aria-pressed={slice.kind === "all"} onClick={() => setSlice({ kind: "all" })}>Вся нагрузка</button>{tags.map((tag) => <button type="button" key={tag} className={slice.kind === "tag" && slice.tag === tag ? "active" : ""} aria-pressed={slice.kind === "tag" && slice.tag === tag} onClick={() => setSlice({ kind: "tag", tag })}>{tag}</button>)}<button type="button" className={slice.kind === "untagged" ? "active" : ""} aria-pressed={slice.kind === "untagged"} onClick={() => setSlice({ kind: "untagged" })}>Без тегов</button></div> : null}
       <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{kindFilters.map(([value, label]) => <button type="button" key={value} className={kind === value ? "active" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>)}</div>
       {shown.length ? <div className="leaderboard-scroll"><table className="leaderboard-table"><thead><tr>
         <th scope="col">#</th>
@@ -64,7 +77,7 @@ export function LeaderboardPage() {
       </tr></thead><tbody>
         {ranked.map((entry, index) => <Row key={entry.modelId} entry={entry} place={index + 1} />)}
         {unranked.map((entry) => <Row key={entry.modelId} entry={entry} />)}
-      </tbody></table></div> : <Empty>В этой группе пока нет запусков.</Empty>}
+      </tbody></table></div> : <Empty>В этом срезе пока нет оценённых запусков.</Empty>}
     </Panel> : null}
   </Page>;
 }

@@ -60,6 +60,11 @@ const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict(
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
 const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
+// Срез нагрузки: либо один тег, либо явный срез «без тегов»; обе метки сразу — противоречие.
+const leaderboardSliceSchema = z.object({
+  tag: z.string().trim().min(1).optional(),
+  untagged: z.literal("1").optional().transform((value) => value === "1"),
+}).strict().refine((value) => !(value.tag && value.untagged), "Choose either a tag or the untagged slice");
 const deleteRunsSchema = z.object({ runIds: z.array(z.string().uuid()).min(1) }).strict();
 /** Обмен промптами между машинами: только то, что человек пишет руками. Картинки и теги остаются на месте. */
 const importTasksSchema = z.array(z.object({
@@ -404,20 +409,24 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
 
   app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run), activeTaskName: activeTaskName(run.id) })));
-  app.get("/api/leaderboard", async () => {
+  app.get<{ Querystring: { tag?: string; untagged?: string } }>("/api/leaderboard", async (request) => {
+    const slice = parse(leaderboardSliceSchema, request.query);
     type Totals = {
-      modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; runCount: number; reviewedTaskRunCount: number;
+      modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; runs: Set<string>; reviewedTaskRunCount: number;
       scoreSum: number; possibleSum: number; speedSum: number; speedSamples: number;
       correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; visualReviewed: number;
     };
     const totals = new Map<string, Totals>();
-    for (const run of store.listRuns()) {
-      const model = store.getModel(run.model_id);
-      const entry = totals.get(run.model_id) ?? {
-        modelId: run.model_id,
-        modelName: model?.name ?? run.model_ref ?? run.model_id.slice(0, 8),
+    for (const row of store.listLeaderboardTaskRuns()) {
+      const tags = row.tags_json === null ? undefined : JSON.parse(row.tags_json) as string[];
+      if (slice.tag !== undefined && !tags?.includes(slice.tag)) continue;
+      if (slice.untagged && tags?.length !== 0) continue;
+      const model = store.getModel(row.model_id);
+      const entry = totals.get(row.model_id) ?? {
+        modelId: row.model_id,
+        modelName: model?.name ?? row.model_ref ?? row.model_id.slice(0, 8),
         modelKind: model?.kind ?? "cloud",
-        runCount: 0,
+        runs: new Set<string>(),
         reviewedTaskRunCount: 0,
         scoreSum: 0,
         possibleSum: 0,
@@ -429,26 +438,32 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         instructionFollowing: 0,
         visualReviewed: 0,
       };
-      entry.runCount += 1;
-      entry.reviewedTaskRunCount += run.reviewed_count;
-      entry.scoreSum += run.review_score ?? 0;
-      entry.possibleSum += run.review_possible ?? 0;
-      entry.speedSum += (run.generation_tps ?? 0) * run.generation_samples;
-      entry.speedSamples += run.generation_samples;
-      entry.correctness += run.correctness_sum ?? 0;
-      entry.codeQuality += run.code_quality_sum ?? 0;
-      entry.uiQuality += run.ui_quality_sum ?? 0;
-      entry.instructionFollowing += run.instruction_following_sum ?? 0;
-      entry.visualReviewed += run.visual_reviewed_count;
-      totals.set(run.model_id, entry);
+      entry.runs.add(row.run_id);
+      if (row.correctness !== null) {
+        entry.reviewedTaskRunCount += 1;
+        entry.scoreSum += row.correctness + row.code_quality! + row.ui_quality! + row.instruction_following!;
+        // Визуал не применяется к текстовому ответу, поэтому и максимум у него меньше.
+        entry.possibleSum += row.ui_quality === 0 ? 30 : 40;
+        entry.correctness += row.correctness;
+        entry.codeQuality += row.code_quality!;
+        entry.uiQuality += row.ui_quality!;
+        entry.instructionFollowing += row.instruction_following!;
+        if (row.ui_quality !== 0) entry.visualReviewed += 1;
+      }
+      if (row.generation_tps !== null) {
+        entry.speedSum += row.generation_tps;
+        entry.speedSamples += 1;
+      }
+      totals.set(row.model_id, entry);
     }
     // Максимум за промпт зависит от типа задачи, поэтому сравниваем долю набранного, а не сырую сумму.
     return [...totals.values()]
-      .map(({ scoreSum, possibleSum, speedSum, speedSamples, correctness, codeQuality, uiQuality, instructionFollowing, visualReviewed, ...entry }) => {
+      .map(({ scoreSum, possibleSum, speedSum, speedSamples, correctness, codeQuality, uiQuality, instructionFollowing, visualReviewed, runs, ...entry }) => {
         // Визуал делим на число задач, где он применялся: у текстовых ответов его нет.
         const average = (sum: number, count: number) => count ? Math.round((sum / count) * 10) / 10 : null;
         return {
           ...entry,
+          runCount: runs.size,
           scorePercent: possibleSum ? Math.round((scoreSum / possibleSum) * 1000) / 10 : null,
           // Средняя по замерам всех промптов модели: контекст и профиль у них разные, поэтому цифра ориентировочная.
           generationTokensPerSecond: speedSamples ? Math.round((speedSum / speedSamples) * 10) / 10 : null,
