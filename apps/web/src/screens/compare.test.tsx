@@ -25,9 +25,19 @@ const runs = [
 ];
 
 let posted: Array<{ url: string; body: unknown }>;
+let blindPair: unknown;
 
 beforeEach(() => {
   posted = [];
+  blindPair = {
+    remaining: 1,
+    pair: {
+      taskName: "Аквариум",
+      prompt: "Сделай аквариум",
+      sides: [{ taskRunId: "task-run-1", answer: "Ответ один" }, { taskRunId: "task-run-2", answer: "Ответ два" }],
+      reveal: ["Кальмар", "Осьминог"],
+    },
+  };
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST") {
       posted.push({ url, body: JSON.parse(String(init.body)) });
@@ -37,6 +47,7 @@ beforeEach(() => {
       : url === "/api/models" ? [{ id: "model-1", name: "Кальмар", kind: "cloud", provider: "openai", modelRef: "squid" }, { id: "model-2", name: "Осьминог", kind: "cloud", provider: "openai", modelRef: "octopus" }]
       : url === "/api/runners" ? [{ id: "codex", name: "Codex", kind: "codex", exec: ["codex"], default: true }]
       : url === "/api/reviews/pair" ? []
+      : url === "/api/reviews/pair/next" ? blindPair
       : url === "/api/runs/run-1" ? { ...runs[0], taskRuns: [taskRun("task-run-1")] }
       : url === "/api/runs/run-2" ? { ...runs[1], taskRuns: [taskRun("task-run-2")] }
       : [];
@@ -49,32 +60,43 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("слепое парное сравнение", () => {
-  it("прячет модели до явного показа", async () => {
+describe("слепая очередь", () => {
+  it("показывает ответы без моделей и раскрывает их только после вердикта", async () => {
     const user = userEvent.setup();
-    await renderInApp(<ComparePage />, "/compare?left=run-1&right=run-2");
+    await renderInApp(<ComparePage />, "/compare");
 
-    expect(await screen.findByText("Вариант A")).toBeTruthy();
-    expect(screen.queryAllByText(/Кальмар/u)).toEqual([]);
-    expect(screen.queryAllByText(/Осьминог/u)).toEqual([]);
+    expect(await screen.findByText("Ответ один")).toBeTruthy();
+    expect(screen.getByText("Ответ два")).toBeTruthy();
+    // До вердикта в очереди нет имён моделей.
+    const queue = screen.getByText("Ответ один").closest("section")!;
+    expect(queue.textContent).not.toMatch(/Кальмар|Осьминог/u);
 
-    await user.click(screen.getByRole("button", { name: "Показать модели" }));
-
-    expect((await screen.findAllByText(/Кальмар/u)).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Осьминог/u).length).toBeGreaterThan(0);
-  });
-
-  it("сохраняет вердикт по паре результатов", async () => {
-    const user = userEvent.setup();
-    await renderInApp(<ComparePage />, "/compare?left=run-1&right=run-2");
-
-    await user.click(await screen.findByRole("button", { name: "A лучше" }));
+    await user.click(screen.getByRole("button", { name: "A лучше" }));
 
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]!.url).toBe("/api/reviews/pair");
-    // Стороны перемешаны жребием, поэтому проверяем пару и то, что победитель — показанный вариант A.
-    const body = posted[0]!.body as { leftTaskRunId: string; rightTaskRunId: string; winner: string };
-    expect([body.leftTaskRunId, body.rightTaskRunId].sort()).toEqual(["task-run-1", "task-run-2"]);
-    expect(body.winner).toBe("left");
+    expect(posted[0]!.body).toMatchObject({ leftTaskRunId: "task-run-1", rightTaskRunId: "task-run-2", winner: "left" });
+    expect(await screen.findByText("Кальмар")).toBeTruthy();
+    expect(screen.getByText("Осьминог")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Следующая пара" })).toBeTruthy();
+  });
+
+  it("сообщает, что сравнивать пока нечего", async () => {
+    blindPair = { remaining: 0, pair: null };
+    await renderInApp(<ComparePage />, "/compare");
+
+    expect(await screen.findByText("Слепая очередь пуста")).toBeTruthy();
+  });
+});
+
+describe("ручное сравнение запусков", () => {
+  it("сохраняет вердикт по выбранной паре результатов", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<ComparePage />, "/compare?left=run-1&right=run-2");
+
+    await user.click(await screen.findByRole("button", { name: "Ничья" }));
+
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]!.body).toMatchObject({ leftTaskRunId: "task-run-1", rightTaskRunId: "task-run-2", winner: "tie" });
   });
 });

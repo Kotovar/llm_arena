@@ -763,6 +763,39 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     reply.type("text/plain");
     return createReadStream(path);
   });
+  /**
+   * Слепая очередь: пару выбирает сервер, поэтому судья не знает, чьи ответы перед ним.
+   * Имена моделей отдаём отдельным полем — интерфейс показывает его только после вердикта.
+   */
+  app.get("/api/reviews/pair/next", async () => {
+    const judged = new Set(store.listPairReviews().map((review) => [review.first_task_run_id, review.second_task_run_id].join("|")));
+    const byRevision = new Map<string, ReturnType<typeof store.listCompletedResults>>();
+    for (const row of store.listCompletedResults()) {
+      byRevision.set(row.task_revision_id, [...(byRevision.get(row.task_revision_id) ?? []), row]);
+    }
+    const candidates = [...byRevision.values()].flatMap((results) => results.flatMap((left, index) => results
+      .slice(index + 1)
+      // Модель против самой себя ничего не решает, а уже осуждённую пару показывать второй раз незачем.
+      .filter((right) => right.model_id !== left.model_id && !judged.has([left.id, right.id].sort().join("|")))
+      .map((right) => [left, right] as const)));
+    const pair = candidates[Math.floor(Math.random() * candidates.length)];
+    if (!pair) return { pair: null, remaining: 0 };
+    const sides = Math.random() < 0.5 ? [pair[0], pair[1]] : [pair[1], pair[0]];
+    const answer = (row: (typeof sides)[number]) => {
+      try { return (JSON.parse(row.result_json ?? "{}") as { finalAnswer?: string }).finalAnswer ?? ""; }
+      catch { return ""; }
+    };
+    return {
+      remaining: candidates.length,
+      pair: {
+        taskName: sides[0]!.task_name,
+        prompt: sides[0]!.task_prompt,
+        // Ни модели, ни раннера, ни метрик: скорость выдала бы локальный запуск не хуже имени.
+        sides: sides.map((row) => ({ taskRunId: row.id, answer: answer(row) })),
+        reveal: sides.map((row) => store.getModel(row.model_id)?.name ?? row.model_ref ?? "Неизвестная модель"),
+      },
+    };
+  });
   app.get("/api/reviews/pair", async () => store.listPairReviews().map((row) => ({
     taskRunIds: [row.first_task_run_id, row.second_task_run_id],
     winnerTaskRunId: row.winner_task_run_id,

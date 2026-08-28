@@ -106,6 +106,17 @@ type LeaderboardTaskRunRow = {
   generation_tps: number | null;
 };
 
+type CompletedResultRow = {
+  id: string;
+  task_revision_id: string;
+  result_json: string | null;
+  snapshot_json: string;
+  model_id: string;
+  model_ref: string | null;
+  task_name: string;
+  task_prompt: string;
+};
+
 type PairReviewRow = {
   id: string;
   first_task_run_id: string;
@@ -781,6 +792,19 @@ export function createStore(filename: string) {
         ON CONFLICT(first_task_run_id, second_task_run_id) DO UPDATE SET winner_task_run_id = excluded.winner_task_run_id, comment = excluded.comment, updated_at = excluded.updated_at
       `).run(randomUUID(), first, second, winnerTaskRunId, comment, updatedAt);
       return one<PairReviewRow>("SELECT * FROM pair_reviews WHERE first_task_run_id = ? AND second_task_run_id = ?", first, second)!;
+    },
+    /** Завершённые результаты, из которых собирается слепая очередь: модель нужна, чтобы не сравнивать её с собой. */
+    listCompletedResults() {
+      return all<CompletedResultRow>(`
+        SELECT task_runs.id, task_runs.task_revision_id, task_runs.result_json, task_runs.snapshot_json,
+               benchmark_runs.model_id, benchmark_runs.model_ref,
+               task_revisions.name AS task_name, task_revisions.prompt AS task_prompt
+        FROM task_runs
+        JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
+        JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
+        WHERE task_runs.status = 'completed'
+        ORDER BY task_runs.created_at
+      `);
     },
     listPairReviews() {
       return all<PairReviewRow>("SELECT * FROM pair_reviews ORDER BY updated_at");

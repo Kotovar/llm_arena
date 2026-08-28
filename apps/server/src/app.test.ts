@@ -1325,6 +1325,45 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("подбирает слепую пару из разных моделей и не отдаёт её опознавательных признаков", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-blind-queue-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай аквариум", tags: [] });
+    const first = store.createModel({ name: "Кальмар", kind: "cloud", provider: "openai", modelRef: "squid" });
+    const second = store.createModel({ name: "Осьминог", kind: "cloud", provider: "openai", modelRef: "octopus" });
+    const result = (modelId: string, answer: string) => {
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, answer), { task: task.currentRevision, model: { name: "Кальмар" } });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: answer, metrics: { generationTokensPerSecond: { value: 90, source: "llama.cpp" } } });
+      return taskRun;
+    };
+    const left = result(first.id, "Ответ первой");
+    const right = result(second.id, "Ответ второй");
+    // Второй результат той же модели: пара «модель против себя» в очередь попасть не должна.
+    result(first.id, "Ещё один ответ первой");
+
+    const queued = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
+    const body = queued.json() as { remaining: number; pair: { taskName: string; sides: Array<{ taskRunId: string; answer: string }>; reveal: string[] } };
+    expect(body.remaining).toBe(2);
+    expect(body.pair.taskName).toBe("Аквариум");
+    expect(body.pair.sides.map((side) => side.taskRunId).includes(left.id) || body.pair.sides.map((side) => side.taskRunId).includes(right.id)).toBe(true);
+    expect(body.pair.sides.map((side) => side.answer).every((answer) => answer.length > 0)).toBe(true);
+    // В карточке пары нет ни модели, ни раннера, ни метрик — только ответ.
+    expect(JSON.stringify(body.pair.sides)).not.toMatch(/Кальмар|Осьминог|generationTokensPerSecond|codex/u);
+    expect(body.pair.reveal).toHaveLength(2);
+
+    const [a, b] = body.pair.sides;
+    await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: a!.taskRunId, rightTaskRunId: b!.taskRunId, winner: "left" } });
+    const after = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
+    expect((after.json() as { remaining: number }).remaining).toBe(1);
+    await app.close();
+    store.close();
+  });
+
   it("ranks only the chosen workload slice", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-tags-"));
     directories.push(directory);
