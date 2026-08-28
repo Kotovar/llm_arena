@@ -187,6 +187,9 @@ a { color: var(--signal); text-decoration: none; }
 .analytics-table, .heatmap { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 13px; }
 .analytics-table caption, .heatmap caption { margin-bottom: 8px; color: var(--muted); font-size: 12px; text-align: left; }
 .analytics-table th, .analytics-table td, .heatmap th, .heatmap td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.heatmap td { width: 110px; text-align: right; }
+.heatmap th[scope="col"]:not(:first-child) { width: 110px; text-align: right; }
+.slice-hint { margin: -6px 0 16px; color: var(--muted); font-size: 12px; }
 .analytics-table th[scope="row"], .heatmap th[scope="row"] { font-weight: 600; }
 .pareto-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .pareto-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }

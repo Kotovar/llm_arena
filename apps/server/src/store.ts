@@ -124,6 +124,7 @@ type DecisionRow = {
   status: "completed" | "failed";
   result_json: string | null;
   run_id: string;
+  run_status: RunStatus;
   model_id: string;
   execution_profile_id: string | null;
   tags_json: string;
@@ -846,7 +847,7 @@ export function createStore(filename: string) {
     listDecisionRows() {
       return all<DecisionRow>(`
         SELECT task_runs.id, task_runs.status, task_runs.result_json,
-               benchmark_runs.id AS run_id, benchmark_runs.model_id, benchmark_runs.execution_profile_id,
+               benchmark_runs.id AS run_id, benchmark_runs.status AS run_status, benchmark_runs.model_id, benchmark_runs.execution_profile_id,
                task_revisions.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following
         FROM task_runs

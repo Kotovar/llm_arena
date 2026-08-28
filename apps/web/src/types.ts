@@ -241,6 +241,9 @@ export type DecisionPoint = {
   tag: string | null;
   untagged: boolean;
   sampleCount: number;
+  runCount: number;
+  /** Прогоны, оборванные целиком: упавшие на старте или остановленные вручную. */
+  interruptedRunCount: number;
   qualityPercent: number | null;
   medianTokensPerSecond: number | null;
   medianDurationMs: number | null;

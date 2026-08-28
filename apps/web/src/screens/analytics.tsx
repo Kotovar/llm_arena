@@ -69,7 +69,8 @@ export function paretoShortlist(points: DecisionPoint[]) {
 function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: DecisionPoint) => string | null }) {
   // Точку без качества или скорости рисовать нечем, но из таблицы она не исчезает.
   const plotted = points.filter((point) => point.qualityPercent !== null && point.medianTokensPerSecond !== null);
-  const maxSpeed = Math.max(...plotted.map((point) => point.medianTokensPerSecond!), 1);
+  // Запас справа: иначе самая быстрая связка прилипает к оси, а подпись уезжает за край.
+  const maxSpeed = Math.max(...plotted.map((point) => point.medianTokensPerSecond!), 1) * 1.15;
   const x = (speed: number) => 60 + (speed / maxSpeed) * 540;
   const y = (quality: number) => 280 - (quality / 100) * 250;
   return <>
@@ -81,19 +82,32 @@ function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: De
       <text x="620" y="305" textAnchor="end" className="scatter-axis">Скорость, токенов/с</text>
       <text x="52" y="34" textAnchor="end" className="scatter-tick">100</text>
       <text x="52" y="284" textAnchor="end" className="scatter-tick">0</text>
-      <text x="620" y="296" textAnchor="end" className="scatter-tick">{speedLabel(maxSpeed)}</text>
+      <text x="620" y="296" textAnchor="end" className="scatter-tick">{Math.round(maxSpeed)}</text>
       {plotted.map((point) => <g key={pointKey(point)}>
         {/* Подпись у каждой точки: опознавать связку по одному цвету нельзя. */}
         <circle cx={x(point.medianTokensPerSecond!)} cy={y(point.qualityPercent!)} r="7" fill={color(point) ?? "none"} stroke={color(point) ?? "var(--line-strong)"} strokeWidth="2">
           <title>{`${pointLabel(point)}: ${point.qualityPercent}% · ${speedLabel(point.medianTokensPerSecond!)}`}</title>
         </circle>
-        <text className="scatter-point-label" x={x(point.medianTokensPerSecond!) + 11} y={y(point.qualityPercent!) + 4}>{pointLabel(point)}</text>
+        {(() => {
+          const cx = x(point.medianTokensPerSecond!);
+          const right = cx > 420;
+          return <text className="scatter-point-label" x={right ? cx - 11 : cx + 11} y={y(point.qualityPercent!) + 4} textAnchor={right ? "end" : "start"}>{pointLabel(point)}</text>;
+        })()}
       </g>)}
     </svg>
     <ul className="scatter-legend">{points.map((point) => <li key={pointKey(point)}><span className="legend-mark" style={color(point) ? { background: color(point)!, borderColor: color(point)! } : undefined} />{pointLabel(point)}</li>)}</ul>
     <table className="analytics-table">
       <caption>Те же связки числами</caption>
-      <thead><tr><th scope="col">Связка</th><th scope="col">Доля баллов</th><th scope="col">Скорость</th><th scope="col">Время</th><th scope="col">Пик VRAM</th><th scope="col">Доля неудач</th><th scope="col">Замеров</th></tr></thead>
+      <thead><tr>
+        <th scope="col">Связка</th>
+        <th scope="col" title="Доля набранных баллов по оценённым промптам.">Доля баллов</th>
+        <th scope="col" title="Медиана скорости генерации по замерам этой связки.">Скорость</th>
+        <th scope="col" title="Медиана времени одного промпта, а не суммы прогона.">Время промпта</th>
+        <th scope="col" title="Наибольший наблюдавшийся расход видеопамяти среди прогонов связки.">Пик VRAM</th>
+        <th scope="col" title="Промпты, завершившиеся ошибкой или непройденной проверкой.">Неудачных промптов</th>
+        <th scope="col" title="Прогоны, упавшие целиком или остановленные вручную.">Сорванных прогонов</th>
+        <th scope="col" title="Сколько промптов вошло в эту связку.">Промптов</th>
+      </tr></thead>
       <tbody>{points.map((point) => <tr key={`${point.modelId}-${point.profileId ?? ""}`}>
         <th scope="row">{pointLabel(point)}</th>
         <td className="mono">{point.qualityPercent === null ? "—" : `${point.qualityPercent}%`}</td>
@@ -101,19 +115,22 @@ function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: De
         <td className="mono">{point.medianDurationMs === null ? "—" : formatDuration(point.medianDurationMs)}</td>
         <td className="mono">{point.peakVramMiB === null ? "—" : formatVram(point.peakVramMiB)}</td>
         <td className="mono">{`${Math.round(point.failureRate * 100)}%`}</td>
+        <td className="mono">{`${point.interruptedRunCount} из ${point.runCount}`}</td>
         <td className="mono">{point.sampleCount}</td>
       </tr>)}</tbody>
     </table>
   </>;
 }
 
-function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPoint[] }> }) {
+function Heatmap({ slices, tagged }: { slices: Array<{ label: string; points: DecisionPoint[] }>; tagged: boolean }) {
   const keys = new Map<string, string>();
   for (const slice of slices) for (const point of slice.points) keys.set(pointKey(point), pointLabel(point));
+  // Без тегов сравнивать нечего: единственный столбец «Без тегов» — это просто общий результат.
+  if (!tagged) return <Empty>Срез нагрузки — это тег промпта, а тегов пока нет. Проставьте промптам теги (например «код» или «текст») на странице «Промпты», и здесь появится сравнение по видам работы.</Empty>;
   if (!keys.size) return <Empty>Пока нет ни одного замера по срезам нагрузки.</Empty>;
   const quality = (points: DecisionPoint[], key: string) => points.find((point) => pointKey(point) === key)?.qualityPercent ?? null;
   return <table className="heatmap">
-    <caption>Доля баллов по срезам нагрузки</caption>
+    <caption>Доля баллов по срезам нагрузки. Столбец «Без тегов» — промпты, которым тег не проставлен.</caption>
     <thead><tr><th scope="col">Связка</th>{slices.map((slice) => <th scope="col" key={slice.label}>{slice.label}</th>)}</tr></thead>
     <tbody>{[...keys].map(([key, label]) => <tr key={key}>
       <th scope="row">{label}</th>
@@ -158,12 +175,13 @@ export function AnalyticsPage() {
         {views.map(([value, label]) => <button type="button" role="tab" key={value} aria-selected={view === value} className={view === value ? "active" : ""} onClick={() => setView(value)}>{label}</button>)}
       </div>
       <Panel title={views.find(([value]) => value === view)![1]} action={view === "scatter" ? <span className="mono">{`Pareto: ${shortlist.length} ${plural(shortlist.length, "связка", "связки", "связок")}`}</span> : undefined}>
-        {view === "slices" ? <Heatmap slices={heatmapSlices} /> : <>
+        {view === "slices" ? <Heatmap slices={heatmapSlices} tagged={tags.length > 0} /> : <>
           <div className="leaderboard-filters" role="group" aria-label="Срез нагрузки">
             <button type="button" className={slice.kind === "all" ? "active" : ""} aria-pressed={slice.kind === "all"} onClick={() => setSlice({ kind: "all" })}>Вся нагрузка</button>
             {tags.map((tag) => <button type="button" key={tag} className={slice.kind === "tag" && slice.tag === tag ? "active" : ""} aria-pressed={slice.kind === "tag" && slice.tag === tag} onClick={() => setSlice({ kind: "tag", tag })}>{tag}</button>)}
             <button type="button" className={slice.kind === "untagged" ? "active" : ""} aria-pressed={slice.kind === "untagged"} onClick={() => setSlice({ kind: "untagged" })}>Без тегов</button>
           </div>
+          <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, «Без тегов» — только по тем, которым тег не проставлен.</p>
           {view === "scatter"
             ? points.data.length ? <Scatter points={points.data} color={color} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
             : shortlist.length

@@ -802,7 +802,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     };
     type Point = {
       modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; profileId: string | null; profileName: string | null;
-      tag: string | null; untagged: boolean; sampleCount: number; failed: number; scoreSum: number; possibleSum: number;
+      tag: string | null; untagged: boolean; sampleCount: number; failed: number;
+      runs: Map<string, "completed" | "interrupted">; scoreSum: number; possibleSum: number;
       speed: number[]; duration: number[]; peakVramMiB: number | null; estimatedCostPerRun: number | null;
     };
     const points = new Map<string, Point>();
@@ -824,6 +825,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         untagged: Boolean(slice.untagged),
         sampleCount: 0,
         failed: 0,
+        runs: new Map<string, "completed" | "interrupted">(),
         scoreSum: 0,
         possibleSum: 0,
         speed: [],
@@ -833,6 +835,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       };
       point.sampleCount += 1;
       if (row.status === "failed") point.failed += 1;
+      // Прогон может сорваться целиком — упасть на старте бэкенда или быть остановленным вручную.
+      // Промптовые неудачи этого не показывают, поэтому считаем сорванные прогоны отдельно.
+      point.runs.set(row.run_id, row.run_status === "failed" || row.run_status === "cancelled" ? "interrupted" : "completed");
       if (row.correctness !== null) {
         point.scoreSum += row.correctness + row.code_quality! + row.ui_quality! + row.instruction_following!;
         point.possibleSum += row.ui_quality === 0 ? 30 : 40;
@@ -850,8 +855,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       if (vram !== null) point.peakVramMiB = Math.max(point.peakVramMiB ?? 0, vram);
       points.set(key, point);
     }
-    return [...points.values()].map(({ scoreSum, possibleSum, speed, duration, failed, ...point }) => ({
+    return [...points.values()].map(({ scoreSum, possibleSum, speed, duration, failed, runs, ...point }) => ({
       ...point,
+      runCount: runs.size,
+      interruptedRunCount: [...runs.values()].filter((status) => status === "interrupted").length,
       qualityPercent: possibleSum ? round((scoreSum / possibleSum) * 100) : null,
       medianTokensPerSecond: median(speed),
       medianDurationMs: median(duration),

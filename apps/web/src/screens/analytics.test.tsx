@@ -16,6 +16,8 @@ function point(overrides: Partial<DecisionPoint> = {}): DecisionPoint {
     tag: null,
     untagged: false,
     sampleCount: 3,
+    runCount: 2,
+    interruptedRunCount: 1,
     qualityPercent: 80,
     medianTokensPerSecond: 42,
     medianDurationMs: 1000,
@@ -82,11 +84,11 @@ describe("аналитика решений", () => {
     await renderInApp(<AnalyticsPage />, "/analytics");
     await screen.findByRole("img", { name: "Качество и скорость" });
 
-    expect(screen.queryByRole("table", { name: "Доля баллов по срезам нагрузки" })).toBeNull();
+    expect(screen.queryByRole("table", { name: /Доля баллов по срезам нагрузки/u })).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Срезы нагрузки" }));
 
-    expect(await screen.findByRole("table", { name: "Доля баллов по срезам нагрузки" })).toBeTruthy();
+    expect(await screen.findByRole("table", { name: /Доля баллов по срезам нагрузки/u })).toBeTruthy();
     expect(screen.queryByRole("img", { name: "Качество и скорость" })).toBeNull();
   });
 
@@ -115,5 +117,15 @@ describe("аналитика решений", () => {
     await waitFor(() => expect(requested).toContain("/api/analytics/decision-points?tag=web"));
     const table = await screen.findByRole("table", { name: "Те же связки числами" });
     await waitFor(() => expect(within(table).queryByText("Медленная")).toBeNull());
+  });
+
+  it("показывает сорванные прогоны отдельно от неудачных промптов", async () => {
+    await renderInApp(<AnalyticsPage />, "/analytics");
+
+    const table = await screen.findByRole("table", { name: "Те же связки числами" });
+    const row = within(table).getByText("Локальная · Скорость").closest("tr")!;
+    // Прогон, упавший целиком, не даёт неудачного промпта — иначе такие срывы не видно вовсе.
+    expect(within(row).getByText("0%")).toBeTruthy();
+    expect(within(row).getByText("1 из 2")).toBeTruthy();
   });
 });

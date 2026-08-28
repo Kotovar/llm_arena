@@ -1443,6 +1443,11 @@ describe("REST API", () => {
     await measured(agentTask.currentRevision.id, 2, 50, "failed");
     // Промпт из другого среза: в срез coding-agent он попасть не должен.
     await measured(plainTask.currentRevision.id, 3, 5, "completed", 2);
+    // Прогон, оборванный целиком: промптовых неудач он не даёт, но в цифрах должен быть виден.
+    const interrupted = store.createRun({ taskRevisionIds: [agentTask.currentRevision.id], modelId: model.id, executionProfileId: profile.id, runnerId: "llama-chat", resultMode: "text" });
+    const interruptedTaskRun = store.createTaskRun(interrupted.id, agentTask.currentRevision.id, 0, join(directory, "cancelled"), { task: { id: agentTask.currentRevision.id } });
+    store.saveTaskRunResult(interruptedTaskRun.id, { finalAnswer: "A", metrics: { generationTokensPerSecond: { value: 42 }, totalDurationMs: { value: 1000 } } }, "completed");
+    store.updateRunStatus(interrupted.id, "cancelled");
 
     const sliced = await app.inject({ method: "GET", url: "/api/analytics/decision-points?tag=coding-agent" });
     expect(sliced.json()).toEqual([expect.objectContaining({
@@ -1451,17 +1456,19 @@ describe("REST API", () => {
       profileName: "Скорость",
       tag: "coding-agent",
       untagged: false,
-      sampleCount: 3,
+      sampleCount: 4,
       qualityPercent: 80,
       medianTokensPerSecond: 42,
       medianDurationMs: 1000,
       peakVramMiB: 15100,
-      failureRate: expect.closeTo(0.33, 2),
+      failureRate: expect.closeTo(0.25, 2),
+      runCount: 2,
+      interruptedRunCount: 1,
       estimatedCostPerRun: null,
     })]);
 
     const all = await app.inject({ method: "GET", url: "/api/analytics/decision-points" });
-    expect((all.json() as Array<{ sampleCount: number; tag: string | null; untagged: boolean }>)[0]).toMatchObject({ sampleCount: 4, tag: null, untagged: false });
+    expect((all.json() as Array<{ sampleCount: number; tag: string | null; untagged: boolean }>)[0]).toMatchObject({ sampleCount: 5, tag: null, untagged: false });
 
     const untagged = await app.inject({ method: "GET", url: "/api/analytics/decision-points?untagged=1" });
     expect((untagged.json() as Array<{ sampleCount: number; untagged: boolean; qualityPercent: number | null }>)[0]).toMatchObject({ sampleCount: 1, untagged: true, qualityPercent: 20 });
