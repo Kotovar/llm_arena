@@ -139,7 +139,8 @@ export function ComparePage() {
   const left = selected.left ?? "";
   const right = selected.right ?? "";
   const select = (side: "left" | "right") => (value: string) => void navigate({ to: "/compare", search: { ...selected, [side]: value || undefined } });
-  const [tab, setTab] = useState<"blind" | "manual">("blind");
+  // Приходим по ссылке «Сравнить с другим запуском» — открываем ту вкладку, где этот запуск виден.
+  const [tab, setTab] = useState<"blind" | "manual">(left || right ? "manual" : "blind");
   const client = useQueryClient();
   const pairReviews = useData<PairReview[]>("pair-reviews", "/reviews/pair");
   const savePair = useMutation({
@@ -149,7 +150,8 @@ export function ComparePage() {
   const [preview, setPreview] = useState<PreviewState>();
   useStopPreviewOnUnmount(preview);
   const startPreview = useMutation({ mutationFn: (taskRun: TaskRun) => api<PreviewState>(`/task-runs/${taskRun.id}/preview`, { method: "POST" }), onSuccess: setPreview });
-  const stopPreview = useMutation({ mutationFn: () => api("/preview", { method: "DELETE" }), onSuccess: () => setPreview(undefined) });
+  // Гасим ровно свой preview: пустой DELETE снял бы и пару, запущенную на вкладке слепого теста.
+  const stopPreview = useMutation({ mutationFn: () => preview ? stopPreviewTarget(preview) : Promise.resolve(), onSuccess: () => setPreview(undefined) });
   const leftRun = useQuery({ queryKey: ["compare", left], queryFn: () => api<Run>(`/runs/${left}`), enabled: Boolean(left) });
   const rightRun = useQuery({ queryKey: ["compare", right], queryFn: () => api<Run>(`/runs/${right}`), enabled: Boolean(right) });
   const rows = matchTaskRuns(leftRun.data?.taskRuns ?? [], rightRun.data?.taskRuns ?? []);

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Empty, Page, Panel, useData } from "../shell.js";
-import type { LeaderboardEntry, PairSummary, Task } from "../types.js";
-import { plural } from "../ui.js";
+import type { LeaderboardEntry, PairSummary } from "../types.js";
+import { formatMetricValue, plural } from "../ui.js";
 
 // Ниже этого порога средняя ещё слишком шумная, чтобы читать её как результат модели.
 const CONFIDENT_SAMPLE = 3;
@@ -26,11 +26,12 @@ const criteriaColumns = [
 function costLabel(entry: LeaderboardEntry) {
   if (entry.estimatedCostPerRun === null) return "—";
   const value = entry.estimatedCostPerRun;
-  return `≈ ${value < 1 ? value.toFixed(2) : value.toFixed(1)} за прогон`;
+  return `≈ $${value < 1 ? value.toFixed(2) : value.toFixed(1)} за прогон`;
 }
 
+// Единица скорости общая с аналитикой и галереей: «т/с» и «токенов/с» на соседних экранах читались как разные метрики.
 function speedLabel(entry: LeaderboardEntry) {
-  return entry.generationTokensPerSecond === null ? "—" : `~${entry.generationTokensPerSecond.toFixed(1)} т/с`;
+  return entry.generationTokensPerSecond === null ? "—" : `~${formatMetricValue("generationTokensPerSecond", entry.generationTokensPerSecond)}`;
 }
 
 /** Счёт слепых дуэлей: до порога уверенности показываем сам счёт, а не процент от трёх пар. */
@@ -54,22 +55,11 @@ function Row({ entry, place, pair }: { entry: LeaderboardEntry; place?: number; 
   </tr>;
 }
 
-/** Срез нагрузки: «без тегов» — отдельный вариант, а не значение тега, иначе он столкнётся с тегом с таким именем. */
-type Slice = { kind: "all" } | { kind: "untagged" } | { kind: "tag"; tag: string };
-
-function sliceQuery(slice: Slice) {
-  if (slice.kind === "untagged") return "?untagged=1";
-  return slice.kind === "tag" ? `?tag=${encodeURIComponent(slice.tag)}` : "";
-}
-
 export function LeaderboardPage() {
-  const [slice, setSlice] = useState<Slice>({ kind: "all" });
-  const query = sliceQuery(slice);
-  const leaderboard = useData<LeaderboardEntry[]>(`leaderboard${query}`, `/leaderboard${query}`);
-  const pairs = useData<PairSummary[]>(`pair-summary${query}`, `/reviews/pair/summary${query}`);
+  // Срез по тегам живёт в аналитике: здесь он делил и без того редкие оценки на ещё более редкие.
+  const leaderboard = useData<LeaderboardEntry[]>("leaderboard", "/leaderboard");
+  const pairs = useData<PairSummary[]>("pair-summary", "/reviews/pair/summary");
   const pairFor = (modelId: string) => pairs.data?.find((summary) => summary.modelId === modelId);
-  const tasks = useData<Task[]>("tasks", "/tasks");
-  const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const [kind, setKind] = useState<KindFilter>("all");
   const [headToHead, setHeadToHead] = useState(false);
   // Места считаются внутри выбранной группы: локальная модель не должна выглядеть седьмой среди облачных.
@@ -80,10 +70,8 @@ export function LeaderboardPage() {
   return <Page title="Лидерборд моделей" eyebrow="Лидерборд" intro="Доля набранных баллов по оценённым промптам во всех запусках модели. Максимум за промпт зависит от типа задачи, поэтому счёт нормализован. Средние по критериям — из десяти.">
     {leaderboard.isPending ? <Empty>Считаем результаты…</Empty> : null}
     {leaderboard.error ? <p className="error">{leaderboard.error.message}</p> : null}
-    {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length && slice.kind === "all" ? <Empty>Пока нет ни одного запуска.</Empty> : null}
-    {leaderboard.data && (leaderboard.data.length > 0 || slice.kind !== "all") ? <Panel title={`Моделей: ${shown.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель оценена", "модели оценены", "моделей оценены")} меньше чем на {CONFIDENT_SAMPLE} промптах</span> : undefined}>
-      {/* Срез существует только вместе с тегами: без них «Вся нагрузка» и «Без тегов» — одно и то же. */}
-      {tags.length ? <div className="leaderboard-filters" role="group" aria-label="Срез нагрузки"><button type="button" className={slice.kind === "all" ? "active" : ""} aria-pressed={slice.kind === "all"} onClick={() => setSlice({ kind: "all" })}>Вся нагрузка</button>{tags.map((tag) => <button type="button" key={tag} className={slice.kind === "tag" && slice.tag === tag ? "active" : ""} aria-pressed={slice.kind === "tag" && slice.tag === tag} onClick={() => setSlice({ kind: "tag", tag })}>{tag}</button>)}<button type="button" className={slice.kind === "untagged" ? "active" : ""} aria-pressed={slice.kind === "untagged"} onClick={() => setSlice({ kind: "untagged" })}>Без тегов</button></div> : null}
+    {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length ? <Empty>Пока нет ни одного запуска.</Empty> : null}
+    {leaderboard.data?.length ? <Panel title={`Моделей: ${shown.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель оценена", "модели оценены", "моделей оценены")} меньше чем на {CONFIDENT_SAMPLE} промптах</span> : undefined}>
       <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{kindFilters.map(([value, label]) => <button type="button" key={value} className={kind === value ? "active" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>)}</div>
       {shown.length ? <div className="leaderboard-scroll"><table className="leaderboard-table"><thead><tr>
         <th scope="col">#</th>
@@ -91,14 +79,14 @@ export function LeaderboardPage() {
         <th scope="col">Доля баллов</th>
         {criteriaColumns.map(([key, label, hint]) => <th scope="col" key={key} title={hint}>{label}</th>)}
         <th scope="col" title="Средняя скорость генерации по всем замерам модели. Контекст и профиль у промптов разные, поэтому цифра ориентировочная.">Скорость</th>
-        <th scope="col" title="Оценка пользователя: месячная подписка, поделённая на ожидаемое число прогонов. Не цена провайдера и не факт по токенам.">Цена прогона</th>
+        <th scope="col" title="Оценка пользователя: месячная подписка в долларах, поделённая на ожидаемое число прогонов. Не цена провайдера и не факт по токенам.">Цена прогона</th>
         <th scope="col" title="Слепые дуэли: доля побед среди решённых пар. Это не доля баллов — там оценка по критериям, здесь прямое сравнение двух результатов. Пока пар мало, показан счёт.">Доля побед</th>
         <th scope="col">Прогонов</th>
         <th scope="col">Оценено промптов</th>
       </tr></thead><tbody>
         {ranked.map((entry, index) => <Row key={entry.modelId} entry={entry} place={index + 1} pair={pairFor(entry.modelId)} />)}
         {unranked.map((entry) => <Row key={entry.modelId} entry={entry} pair={pairFor(entry.modelId)} />)}
-      </tbody></table></div> : <Empty>В этом срезе пока нет оценённых запусков.</Empty>}
+      </tbody></table></div> : <Empty>Пока нет оценённых запусков.</Empty>}
       {/* Содержимое рисуем только раскрытым: свёрнутая таблица дублировала бы имена моделей на странице. */}
       {pairs.data?.length ? <details className="head-to-head" open={headToHead} onToggle={(event) => setHeadToHead(event.currentTarget.open)}><summary>Кто кого в слепых дуэлях</summary>{headToHead ? <>
         <p className="slice-hint">Доля баллов — оценка по критериям, доля побед — прямое сравнение двух результатов вслепую. Это разные вопросы, и их не складывают.</p>

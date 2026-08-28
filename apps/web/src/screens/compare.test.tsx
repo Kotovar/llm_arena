@@ -12,7 +12,7 @@ function taskRun(id: string) {
     taskName: "Аквариум",
     position: 0,
     status: "completed",
-    snapshot_json: JSON.stringify({ task: { name: "Аквариум", kind: "prompt" } }),
+    snapshot_json: JSON.stringify({ task: { name: "Аквариум", kind: "prompt" }, fixture: { preview: { command: ["node"] } } }),
     result_json: JSON.stringify({ finalAnswer: "Готово", metrics: { totalDurationMs: { value: 1000, source: "runner" } } }),
     error: null,
     followups: [],
@@ -25,6 +25,7 @@ const runs = [
 ];
 
 let posted: Array<{ url: string; body: unknown }>;
+let deleted: unknown[];
 let requests: string[];
 let blindPair: unknown;
 
@@ -32,6 +33,7 @@ const requestedPairs = () => requests.filter((url) => url === "/api/reviews/pair
 
 beforeEach(() => {
   posted = [];
+  deleted = [];
   requests = [];
   blindPair = {
     remaining: 1,
@@ -48,13 +50,16 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     requests.push(url);
     if (init?.method === "POST") {
-      posted.push({ url, body: JSON.parse(String(init.body)) });
-      const body = url.endsWith("/preview") ? { url: `http://127.0.0.1:4321/${url.split("/")[3]}` }
+      posted.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
+      const body = url.endsWith("/preview") ? { taskRunId: url.split("/")[3], resultSha: "a".repeat(40), url: `http://127.0.0.1:4321/${url.split("/")[3]}` }
         : url === "/api/reviews/pair" ? { reveal: ["Кальмар", "Осьминог"] }
         : {};
       return new Response(JSON.stringify(body), { status: 201, headers: { "content-type": "application/json" } });
     }
-    if (init?.method === "DELETE") return new Response(null, { status: 204 });
+    if (init?.method === "DELETE") {
+      deleted.push(init.body ? JSON.parse(String(init.body)) : null);
+      return new Response(null, { status: 204 });
+    }
     const body = url === "/api/runs" ? runs
       : url === "/api/models" ? [{ id: "model-1", name: "Кальмар", kind: "cloud", provider: "openai", modelRef: "squid" }, { id: "model-2", name: "Осьминог", kind: "cloud", provider: "openai", modelRef: "octopus" }]
       : url === "/api/runners" ? [{ id: "codex", name: "Codex", kind: "codex", exec: ["codex"], default: true }]
@@ -154,6 +159,26 @@ describe("ручное сравнение запусков", () => {
 
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]!.body).toMatchObject({ leftTaskRunId: "task-run-1", rightTaskRunId: "task-run-2", winner: "tie" });
+  });
+
+  it("открывается сразу на ручном сравнении, когда запуск пришёл ссылкой", async () => {
+    await renderInApp(<ComparePage />, "/compare?left=run-1");
+
+    // Со слепой вкладки выбранный ссылкой запуск не виден вовсе.
+    expect(await screen.findByRole("tab", { name: "Ручное сравнение", selected: true })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Слепой тест", selected: false })).toBeTruthy();
+  });
+
+  it("гасит только свой preview, а не пару слепого теста", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<ComparePage />, "/compare?left=run-1&right=run-2");
+
+    await user.click(await screen.findByRole("tab", { name: "Ручное сравнение" }));
+    await user.click(await screen.findByRole("button", { name: "Preview первого" }));
+    await user.click(await screen.findByRole("button", { name: "Остановить preview" }));
+
+    await waitFor(() => expect(deleted).toHaveLength(1));
+    expect(deleted[0]).toMatchObject({ taskRunId: "task-run-1" });
   });
 
   it("берёт пару из выбранного среза", async () => {

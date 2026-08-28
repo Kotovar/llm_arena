@@ -54,16 +54,13 @@ describe("лидерборд", () => {
     expect(within(row).getByText("1")).toBeTruthy();
   });
 
-  it("запрашивает лидерборд по выбранному срезу нагрузки", async () => {
-    const user = userEvent.setup();
+  it("не делит лидерборд на срезы: чипсов тегов здесь нет", async () => {
     await renderInApp(<LeaderboardPage />);
     await screen.findByText("Локальная");
 
-    await user.click(await screen.findByRole("button", { name: "coding-agent" }));
-
-    expect(await screen.findByText("Облачная")).toBeTruthy();
-    await waitFor(() => expect(screen.queryByText("Локальная")).toBeNull());
-    expect(requested).toContain("/api/leaderboard?tag=coding-agent");
+    expect(screen.queryByRole("group", { name: "Срез нагрузки" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "coding-agent" })).toBeNull();
+    expect(requested.some((url) => url.includes("/api/leaderboard?"))).toBe(false);
   });
 
   it("показывает цену прогона как оценку и молчит, когда её не вводили", async () => {
@@ -71,7 +68,7 @@ describe("лидерборд", () => {
 
     const priced = (await screen.findByText("Облачная")).closest("tr")!;
     const free = screen.getByText("Локальная").closest("tr")!;
-    expect(within(priced).getByText("≈ 0.20 за прогон")).toBeTruthy();
+    expect(within(priced).getByText("≈ $0.20 за прогон")).toBeTruthy();
     expect(within(free).getAllByText("—").length).toBeGreaterThan(0);
   });
 
