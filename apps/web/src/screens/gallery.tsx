@@ -2,7 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
-import { Empty, Page, Panel, useData } from "../shell.js";
+import { ArrowRightIcon, CloseIcon } from "../icons.js";
+import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { GalleryMetrics, GalleryResult, ResultVersion } from "../types.js";
 import { formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, measurementConditions, plural } from "../ui.js";
 import { ResultPreview } from "./results.js";
@@ -95,9 +96,9 @@ function GalleryDetail({ result, onClose }: { result: GalleryResult; onClose: ()
     };
   }, []);
   return <dialog className="gallery-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
-    <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span><h2>{result.prompt.name}</h2>{result.prompt.description ? <p className="task-description">{result.prompt.description}</p> : null}</div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}>✕</button></header>
-    <div className="gallery-detail-grid"><section><Screenshot result={result} className="gallery-detail-shot" />{preview ? <ResultPreview url={preview.url} target={preview} onClose={() => stop.mutate()} closing={stop.isPending} title="Версия по SHA" /> : <section className="preview-cta"><div><span className="mono">Готовая версия</span><strong>Запустить web-приложение</strong><p>Preview соберёт эту версию и заменит текущий запущенный preview.</p></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview"}<span>→</span></button></section>}{start.error || stop.error ? <p className="error">{(start.error ?? stop.error)?.message}</p> : null}</section>
-      <aside className="gallery-details"><dl>{detailRows(result).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button>}{feature.error ? <p className="error">{feature.error.message}</p> : null}<ResultMetrics metrics={result.metrics} /><details className="final-prompt"><summary>Итоговый промпт</summary><pre>{result.prompt.prompt}</pre>{result.followupPrompts?.map((prompt, index) => <div key={index}><strong>Уточнение {index + 1}</strong><pre>{prompt}</pre></div>)}</details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть полный результат запуска →</Link></aside>
+    <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span><h2>{result.prompt.name}</h2>{result.prompt.description ? <p className="task-description">{result.prompt.description}</p> : null}</div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
+    <div className="gallery-detail-grid"><section><Screenshot result={result} className="gallery-detail-shot" />{preview ? <ResultPreview url={preview.url} target={preview} onClose={() => stop.mutate()} closing={stop.isPending} title="Версия по SHA" /> : <section className="preview-cta"><div><span className="mono">Готовая версия</span><strong>Запустить web-приложение</strong><p>Preview соберёт эту версию и заменит текущий запущенный preview.</p></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview"}<ArrowRightIcon /></button></section>}{start.error || stop.error ? <p className="error">{(start.error ?? stop.error)?.message}</p> : null}</section>
+      <aside className="gallery-details"><dl>{detailRows(result).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button>}{feature.error ? <p className="error">{feature.error.message}</p> : null}<ResultMetrics metrics={result.metrics} /><details className="final-prompt"><summary>Итоговый промпт</summary><pre>{result.prompt.prompt}</pre>{result.followupPrompts?.map((prompt, index) => <div key={index}><strong>Уточнение {index + 1}</strong><pre>{prompt}</pre></div>)}</details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть полный результат запуска <ArrowRightIcon /></Link></aside>
     </div>
   </dialog>;
 }
@@ -114,9 +115,9 @@ export function GalleryPage() {
   const toggleTag = (tag: string) => setSelectedTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]);
   const matrix = galleryMatrix(visible);
   return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея" intro="Итоговые web-результаты.">
-    {gallery.isPending ? <Empty>Загружаем выбранные результаты…</Empty> : null}
+    {gallery.isPending ? <Skeleton rows={4} /> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
-    {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty>Пока нет успешных web-результатов с выбранной версией. Запустите web-задачу и выберите итоговую версию на странице результата.</Empty> : null}
+    {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty action={<Link to="/">Запустить web-задачу</Link>}>Пока нет успешных web-результатов с выбранной версией. Итоговую версию выбирают на странице результата.</Empty> : null}
     {tags.length ? <div className="gallery-tags" role="group" aria-label="Теги промптов">
       <button type="button" className={selectedTags.length ? "" : "active"} aria-pressed={selectedTags.length === 0} onClick={() => setSelectedTags([])}>Все промпты</button>
       {tags.map((tag) => <button type="button" key={tag} className={selectedTags.includes(tag) ? "active" : ""} aria-pressed={selectedTags.includes(tag)} onClick={() => toggleTag(tag)}>{tag}</button>)}

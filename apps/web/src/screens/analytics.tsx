@@ -1,7 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api.js";
-import { Empty, Page, Panel, useData } from "../shell.js";
+import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { DecisionPoint, Task } from "../types.js";
 import { formatDuration, formatMetricValue, formatVram, plural } from "../ui.js";
 
@@ -72,7 +72,32 @@ export function paretoShortlist(points: DecisionPoint[]) {
   return measured.filter((point) => !measured.some((other) => other !== point && dominates(other, point)));
 }
 
-function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: DecisionPoint) => string | null }) {
+/**
+ * Раскладка подписей: подпись ставится рядом со своей точкой и сдвигается вниз,
+ * пока не разойдётся с уже поставленными. Иначе кучные связки пишут имена друг поверх друга.
+ */
+const LABEL_TOP = 36;
+const LABEL_BOTTOM = 300;
+
+export function labelPlacer() {
+  const placed: Array<{ x: number; y: number }> = [];
+  const clashes = (x: number, offset: number) => placed.some((item) => Math.abs(item.y - offset) < 13 && Math.abs(item.x - x) < 150);
+  return (x: number, y: number) => {
+    let offset = y;
+    while (offset <= LABEL_BOTTOM && clashes(x, offset)) offset += 13;
+    // Внизу графика место кончается быстрее, чем подписи: упёрлись — идём вверх от собственной точки.
+    if (offset > LABEL_BOTTOM) {
+      offset = y;
+      while (offset >= LABEL_TOP && clashes(x, offset)) offset -= 13;
+    }
+    const placedOffset = Math.min(Math.max(offset, LABEL_TOP), LABEL_BOTTOM);
+    placed.push({ x, y: placedOffset });
+    return placedOffset;
+  };
+}
+
+function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color: (point: DecisionPoint) => string | null; shortlist: DecisionPoint[] }) {
+  const [hovered, setHovered] = useState<string>();
   // Точку без качества или скорости рисовать нечем, но из таблицы она не исчезает.
   const plotted = points.filter((point) => point.qualityPercent !== null && point.medianTokensPerSecond !== null);
   const fastest = Math.max(...plotted.map((point) => point.medianTokensPerSecond!), 1);
@@ -83,6 +108,12 @@ function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: De
   const qualityTicks = [0, 25, 50, 75, 100];
   const x = (speed: number) => 60 + (speed / maxSpeed) * 540;
   const y = (quality: number) => 280 - (quality / 100) * 250;
+  // Радиус говорит, на скольких промптах держится точка: две оценки и двадцать выглядели одинаково веско.
+  const widest = Math.max(...plotted.map((point) => point.sampleCount), 1);
+  const radius = (point: DecisionPoint) => 5 + Math.round((point.sampleCount / widest) * 4);
+  const best = new Set(shortlist.map(pointKey));
+  const placeLabel = labelPlacer();
+  const active = plotted.find((point) => pointKey(point) === hovered);
   return <>
     {plotted.length ? null : <Empty>Ни у одной связки нет одновременно оценки и замера скорости.</Empty>}
     <svg className="scatter" role="img" aria-label="Качество и скорость" viewBox="0 0 640 320">
@@ -98,17 +129,31 @@ function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: De
       <line x1="60" y1="280" x2="620" y2="280" />
       <text x="60" y="20" className="scatter-axis">Доля баллов, %</text>
       <text x="620" y="313" textAnchor="end" className="scatter-axis">Скорость, токенов/с</text>
-      {plotted.map((point) => <g key={pointKey(point)}>
-        {/* Подпись у каждой точки: опознавать связку по одному цвету нельзя. */}
-        <circle cx={x(point.medianTokensPerSecond!)} cy={y(point.qualityPercent!)} r="7" fill={color(point) ?? "none"} stroke={color(point) ?? "var(--line-strong)"} strokeWidth="2">
-          <title>{`${pointLabel(point)}: ${point.qualityPercent}% · ${speedLabel(point.medianTokensPerSecond!)}`}</title>
-        </circle>
-        {(() => {
-          const cx = x(point.medianTokensPerSecond!);
-          const right = cx > 420;
-          return <text className="scatter-point-label" x={right ? cx - 11 : cx + 11} y={y(point.qualityPercent!) + 4} textAnchor={right ? "end" : "start"}>{pointLabel(point)}</text>;
-        })()}
-      </g>)}
+      {plotted.map((point) => {
+        const cx = x(point.medianTokensPerSecond!);
+        const cy = y(point.qualityPercent!);
+        const right = cx > 420;
+        const dimmed = best.size > 0 && !best.has(pointKey(point));
+        return <g key={pointKey(point)} className={dimmed ? "scatter-point dimmed" : "scatter-point"} onMouseEnter={() => setHovered(pointKey(point))} onMouseLeave={() => setHovered(undefined)}>
+          {/* Прозрачная мишень крупнее самой точки: попадать курсором в семь пикселей неудобно. */}
+          <circle className="scatter-hit" cx={cx} cy={cy} r="16" fill="transparent" />
+          <circle className="scatter-dot" cx={cx} cy={cy} r={radius(point)} fill={color(point) ?? "none"} stroke={color(point) ?? "var(--line-strong)"} strokeWidth="2" />
+          {/* Подпись у каждой точки: опознавать связку по одному цвету нельзя. */}
+          <text className="scatter-point-label" x={right ? cx - 13 : cx + 13} y={placeLabel(cx, cy + 4)} textAnchor={right ? "end" : "start"}>{pointLabel(point)}</text>
+        </g>;
+      })}
+      {active ? (() => {
+        const cx = x(active.medianTokensPerSecond!);
+        const cy = y(active.qualityPercent!);
+        const lines = [pointLabel(active), `${active.qualityPercent}% · ${speedLabel(active.medianTokensPerSecond!)}`, `промптов: ${active.sampleCount}`];
+        const width = Math.max(...lines.map((line) => line.length)) * 6 + 16;
+        const left = Math.min(Math.max(cx - width / 2, 4), 636 - width);
+        const top = cy > 90 ? cy - 66 : cy + 20;
+        return <g className="scatter-tip" pointerEvents="none">
+          <rect x={left} y={top} width={width} height="58" rx="8" />
+          {lines.map((line, index) => <text key={line} x={left + 8} y={top + 18 + index * 15} className={index === 0 ? "scatter-tip-title" : undefined}>{line}</text>)}
+        </g>;
+      })() : null}
     </svg>
     <ul className="scatter-legend">{points.map((point) => <li key={pointKey(point)}><span className="legend-mark" style={color(point) ? { background: color(point)!, borderColor: color(point)! } : undefined} />{pointLabel(point)}</li>)}</ul>
     <div className="analytics-scroll"><table className="analytics-table">
@@ -150,7 +195,10 @@ function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPo
       {slices.map((slice) => {
         const value = quality(slice.points, key);
         // Ячейка без замера остаётся пустой: ноль здесь означал бы «модель провалилась».
-        return <td key={slice.label} className="mono" style={value === null ? undefined : { background: `color-mix(in srgb, var(--series-1) ${Math.round(value)}%, transparent)` }}>{value === null ? "—" : `${value}%`}</td>;
+        if (value === null) return <td key={slice.label} className="mono">—</td>;
+        // Заливка доходит только до 60% густоты: дальше светлый текст на ней падает ниже 4.5:1,
+        // а тёмный набирает свои 4.5:1 лишь к 92% — между ними не проходит ни один цвет чернил.
+        return <td key={slice.label} className="mono" style={{ background: `color-mix(in srgb, var(--series-1) ${Math.round(value * 0.6)}%, transparent)` }}>{`${value}%`}</td>;
       })}
     </tr>)}</tbody>
   </table></div>;
@@ -188,7 +236,7 @@ export function AnalyticsPage() {
   const views = viewsFor(tags.length > 0);
   return <Page title="Аналитика решений" eyebrow="Аналитика" intro="Одна точка — модель с конкретным профилем на выбранном срезе нагрузки. Неизмеренное не рисуется нулём: такие связки видно только в таблице.">
     {points.error ? <p className="error">{points.error.message}</p> : null}
-    {points.isPending ? <Empty>Считаем точки решения…</Empty> : null}
+    {points.isPending ? <Skeleton rows={5} /> : null}
     {points.data ? <>
       <div className="compare-tabs" role="tablist" aria-label="Вид аналитики">
         {views.map(([value, label]) => <button type="button" role="tab" key={value} aria-selected={view === value} className={view === value ? "active" : ""} onClick={() => setView(value)}>{label}</button>)}
@@ -204,7 +252,7 @@ export function AnalyticsPage() {
             <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, «Без тегов» — только по тем, которым тег не проставлен.</p>
           </> : null}
           {view === "scatter"
-            ? points.data.length ? <Scatter points={points.data} color={color} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
+            ? points.data.length ? <Scatter points={points.data} color={color} shortlist={shortlist} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
             : shortlist.length
               ? <ul className="pareto-list">{shortlist.map((point) => <li key={pointKey(point)}><strong>{pointLabel(point)}</strong><span className="mono">{point.qualityPercent}% · {speedLabel(point.medianTokensPerSecond!)}{point.peakVramMiB === null ? "" : ` · ${formatVram(point.peakVramMiB)}`}</span></li>)}</ul>
               : <Empty>Ни одной связки с оценкой и замером скорости в этом срезе.</Empty>}

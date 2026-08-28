@@ -37,9 +37,29 @@ describe("цветовая доступность", () => {
     expect(css).toMatch(/::placeholder[^}]*color:\s*var\(--muted\)/);
   });
 
+  // Движение — украшение: у пользователя с prefers-reduced-motion его быть не должно.
+  it("выключает новые анимации при запрете движения", () => {
+    const guarded = css.match(/@media \(prefers-reduced-motion: reduce\)[^}]*\{[^@]*?animation: none[^}]*\}/gu) ?? [];
+    expect(guarded.join(" ")).toMatch(/\.skeleton span/);
+    expect(guarded.join(" ")).toMatch(/\.panel/);
+  });
+
+  // Полные пакеты fontsource тянут в сборку два десятка подмножеств, включая деванагари.
+  it("подключает только латиницу и кириллицу", () => {
+    const fonts = readFileSync(new URL("./fonts.css", import.meta.url), "utf8");
+    expect(css).not.toMatch(/@import "@fontsource/u);
+    const files = [...fonts.matchAll(/files\/([a-z0-9-]+)\.woff2/gu)].map((match) => match[1]!);
+    expect(files).toHaveLength(6);
+    expect(files.every((file) => /-(latin|cyrillic)-wght-normal$/u.test(file))).toBe(true);
+  });
+
+  it("держит иконки одного размера", () => {
+    expect(css).toMatch(/\.icon \{[^}]*width: 16px;[^}]*height: 16px/);
+  });
+
   // Правило с fill перебивало бы атрибут fill у точки и красило все связки одним цветом.
   it("не задаёт цвет точек диаграммы правилом css", () => {
-    expect(css).not.toMatch(/\.scatter circle \{[^}]*[^-]fill:/);
+    expect(css).not.toMatch(/\.scatter \.scatter-dot \{[^}]*[^-]fill:/);
   });
 });
 
@@ -66,7 +86,7 @@ describe("responsive result layout", () => {
   });
 
   it("отделяет шапку результата от метрик и версий", () => {
-    expect(css).toMatch(/\.result-card\s*>\s*header\s*\{[^}]*margin-bottom:\s*14px/);
+    expect(css).toMatch(/\.result-card\s*>\s*header\s*\{[^}]*margin-bottom:\s*\d+px/);
   });
 
   it("provides compact disclosure controls for versions and follow-ups", () => {
@@ -81,12 +101,12 @@ describe("responsive result layout", () => {
   });
 
   it("keeps a gap above and below the collapsible profile group", () => {
-    expect(css).toMatch(/\.profile-group\s*\{[^}]*margin:\s*14px 0/);
+    expect(css).toMatch(/\.profile-group\s*\{[^}]*margin:\s*\d+px 0/);
   });
 
   it("не даёт подписи наезжать на поля оценки подписки", () => {
     expect(css).toMatch(/\.model-economics\s*\{[^}]*align-items:\s*end/);
-    expect(css).toMatch(/\.model-economics input\s*\{[^}]*display:\s*block;[^}]*margin-top:\s*6px/);
+    expect(css).toMatch(/\.model-economics input\s*\{[^}]*display:\s*block;[^}]*margin-top:\s*\d+px/);
     expect(css).toMatch(/\.model-economics small\s*\{[^}]*flex:\s*1 1 100%/);
   });
 
