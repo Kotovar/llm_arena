@@ -45,7 +45,7 @@ importers:
       '@fontsource-variable/noto-sans':
         specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource/pt-serif':
+      '@fontsource-variable/noto-serif':
         specifier: ^5.3.0
         version: 5.3.0
       '@llm-arena/shared':
@@ -418,8 +418,8 @@ packages:
   '@fontsource-variable/noto-sans@5.3.0':
     resolution: {integrity: sha512-e3ZuxzY9AL2psXPZlhwhnYrHUHv6PMoyK9MQ7croF0CUgURLqu9EMjW7q2FgVLwij1tjLsIHQrnwQ8aUcg4BiA==}
 
-  '@fontsource/pt-serif@5.3.0':
-    resolution: {integrity: sha512-ST+j/byBGZw6H+TQMX78o6Qlngfj2Va/Q9fAJxq54Is1ZQk1/FhBIuqyJcLmnpi0trG8V/hWO9Bx6ZY09A0DBQ==}
+  '@fontsource-variable/noto-serif@5.3.0':
+    resolution: {integrity: sha512-GxGAScLRifXH02gDoJGroO/NIX83It7m1TYPPp1bhNPaii6/+GBYKxl/uL5GabFe0PBfiUV92wA4MdMdEDUu6A==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -1592,7 +1592,7 @@ snapshots:
 
   '@fontsource-variable/noto-sans@5.3.0': {}
 
-  '@fontsource/pt-serif@5.3.0': {}
+  '@fontsource-variable/noto-serif@5.3.0': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
