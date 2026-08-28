@@ -78,4 +78,10 @@ describe("responsive result layout", () => {
   it("keeps a gap above and below the collapsible profile group", () => {
     expect(css).toMatch(/\.profile-group\s*\{[^}]*margin:\s*14px 0/);
   });
+
+  it("не даёт подписи наезжать на поля оценки подписки", () => {
+    expect(css).toMatch(/\.model-economics\s*\{[^}]*align-items:\s*end/);
+    expect(css).toMatch(/\.model-economics input\s*\{[^}]*display:\s*block;[^}]*margin-top:\s*6px/);
+    expect(css).toMatch(/\.model-economics small\s*\{[^}]*flex:\s*1 1 100%/);
+  });
 });
