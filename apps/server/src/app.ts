@@ -564,6 +564,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         // она не версионируется, поэтому берётся текущая.
         taskName: taskRunName(taskRun) ?? `Промпт ${taskRun.position + 1}`,
         taskDescription: store.taskDescriptionByRevision(taskRun.task_revision_id),
+        attempts: store.taskRunAggregate(taskRun.id) ?? null,
       })),
     };
   });

@@ -6,8 +6,8 @@ import { api, apiText } from "../api.js";
 import { useConfirm } from "../confirm.js";
 import { Empty, Page, Panel, Status, useData } from "../shell.js";
 import { useToast } from "../toast.js";
-import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, Runner, Task, TaskRun } from "../types.js";
-import { checkStatusLabel, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
+import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
+import { attemptSummary, checkStatusLabel, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
@@ -324,6 +324,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     {activeVersion.error ? <GenerationError error={activeVersion.error} errorDetails={activeVersion.errorDetails} endpoint={errorDetailsPath} /> : null}
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button onClick={() => cancel.mutate()} disabled={cancel.isPending || cancelRun.isPending}>Пропустить промпт</button><button className="danger" onClick={() => cancelRun.mutate()} disabled={cancelRun.isPending}>Остановить весь прогон</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
     {result ? <MetricStrip result={result} conditions={measurementConditions(snapshot.profile)} /> : null}
+    {taskRun.attempts ? <p className="attempt-summary mono">{attemptSummary(taskRun.attempts)}</p> : null}
     <ChecksStrip result={result} />
     {snapshot.fixture?.preview && canUseVersion ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => closePreview.mutate()} closing={closePreview.isPending} /> : <section className={showShot ? "preview-cta with-shot" : "preview-cta"}>{showShot ? <img className="preview-shot" src={`/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(activeVersion.resultSha!)}`} alt={`Снимок web-приложения: ${activeVersion.label}`} loading="lazy" onError={() => setShotMissing(true)} /> : null}<div><span className="mono">Версия готова</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Preview-сервер один: текущий preview будет остановлен перед запуском этой SHA-версии." : "Откроем зафиксированные файлы выбранной SHA-версии."}</p></div><button className="primary" onClick={() => preview.mutate(activeVersion.resultSha!)} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
     {preview.error ? <p className="error">{preview.error.message}</p> : null}
@@ -385,6 +386,22 @@ function TabTitle({ text }: { text: string }) {
   return null;
 }
 
+/** Условия прогона как они были зафиксированы: воспроизвести результат без них нельзя. */
+function Environment({ environment, profile }: { environment: RunEnvironment; profile: { name?: string; parameters?: Record<string, unknown> } | undefined }) {
+  const version = (probe: { path: string; version: string | null } | null) => probe ? `${probe.path}${probe.version ? ` · ${probe.version}` : " · версия не определена"}` : null;
+  const rows: Array<[string, string | null]> = [
+    ["Runner", `${environment.runnerKind} · ${version(environment.runner)}`],
+    ["llama-server", version(environment.llamaServer)],
+    ["Видеокарта", environment.gpu ? `${environment.gpu.name} · ${environment.gpu.totalMiB} MiB` : null],
+    ["SHA модели", environment.ggufSha256],
+    ["Профиль", profile?.name ?? null],
+  ];
+  return <details className="run-environment"><summary><strong>Условия прогона</strong></summary>
+    <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd className="mono">{value ?? "не определено"}</dd></div>)}</dl>
+    {profile?.parameters ? <pre className="mono">{JSON.stringify(profile.parameters, null, 2)}</pre> : null}
+  </details>;
+}
+
 export function RunDetail({ runId }: { runId: string }) {
   const client = useQueryClient();
   const navigate = useNavigate();
@@ -406,7 +423,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const resume = useMutation({ mutationFn: () => api(`/runs/${runId}/resume`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   if (run.error) return <Page title="Запуск не найден" eyebrow="Результат" intro="Он мог быть удалён вместе с файлами, либо сервер сейчас недоступен."><p className="error">{run.error.message}</p><p className="actions"><Link to="/runs">← Ко всем результатам</Link></p></Page>;
   if (!run.data) return <Page title="Загрузка запуска" eyebrow="Результат"><Empty>Читаем сохранённые данные…</Empty></Page>;
-  const snapshot = run.data.snapshot_json ? JSON.parse(run.data.snapshot_json) as { tasks?: unknown[]; benchmark?: { tasks?: unknown[] }; model?: { name?: string; modelRef?: string }; reasoningEffort?: string | null } : undefined;
+  const snapshot = run.data.snapshot_json ? JSON.parse(run.data.snapshot_json) as { tasks?: unknown[]; benchmark?: { tasks?: unknown[] }; model?: { name?: string; modelRef?: string }; reasoningEffort?: string | null; environment?: RunEnvironment; profile?: { name?: string; parameters?: Record<string, unknown> } } : undefined;
   // benchmark — снапшоты запусков, сделанных до отказа от этой сущности.
   const total = snapshot?.tasks?.length ?? snapshot?.benchmark?.tasks?.length ?? run.data.taskRuns?.length ?? 0;
   const progress = runProgress(total, run.data.taskRuns?.map((task) => task.status) ?? []);
@@ -432,6 +449,7 @@ export function RunDetail({ runId }: { runId: string }) {
   return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", ompModeLabel(run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName ?? followupTaskName, runningFollowup)} />
     {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? `Уточнение${followupTaskName ? `: ${followupTaskName}` : ""}` : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}${activeTaskName ? `: ${activeTaskName}` : ""}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
+    {snapshot?.environment ? <Environment environment={snapshot.environment} profile={snapshot.profile} /> : null}
     {run.data.error && !hasTaskError ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
     <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive && remaining > 0 ? <button className="primary" disabled={resume.isPending} onClick={() => resume.mutate()}>{resume.isPending ? "Запускаем…" : `К следующему (осталось ${remaining})`}</button> : null}{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}>{items.length ? <div className="run-split"><PromptRail items={items} activeId={activeId!} reviewed={scores.reviewed} onSelect={setSelectedTaskRunId} />
       <div className="run-pane">

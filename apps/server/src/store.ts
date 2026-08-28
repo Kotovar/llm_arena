@@ -51,6 +51,9 @@ type RunRow = {
   use_omp_agent: number;
   model_ref: string | null;
   reasoning_effort: string | null;
+  /** Сколько раз прогнать каждый промпт; 1 — обычный однократный прогон. */
+  repeat_count: number;
+  warmup_attempt: number;
   /** Разовая замена температуры профиля при перезапуске промпта; null — берём температуру профиля. */
   temperature: number | null;
   status: RunStatus;
@@ -88,6 +91,16 @@ type TaskRunRow = {
   selected_followup_id: string | null;
   started_at: string | null;
   finished_at: string | null;
+  created_at: string;
+};
+
+type TaskAttemptRow = {
+  id: string;
+  task_run_id: string;
+  attempt: number;
+  status: RunStatus;
+  result_json: string | null;
+  error: string | null;
   created_at: string;
 };
 
@@ -194,6 +207,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS run_tasks (run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(run_id, position));
     CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS task_attempts (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, attempt INTEGER NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, attempt));
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_run_followups (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, task_run_id TEXT NOT NULL, position INTEGER NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, position));
@@ -216,6 +230,10 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!runColumns.some((column) => column.name === "temperature")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN temperature REAL");
+  }
+  if (!runColumns.some((column) => column.name === "repeat_count")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1");
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN warmup_attempt INTEGER NOT NULL DEFAULT 0");
   }
   if (!runColumns.some((column) => column.name === "model_ref")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN model_ref TEXT");
@@ -607,8 +625,8 @@ export function createStore(filename: string) {
         const id = randomUUID();
         const createdAt = now();
         sqlite
-          .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
-          .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, createdAt);
+          .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, repeat_count, warmup_attempt, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+          .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, input.repeatCount ?? 1, input.warmupAttempt ? 1 : 0, createdAt);
         const insertTask = sqlite.prepare("INSERT INTO run_tasks (run_id, task_revision_id, position) VALUES (?, ?, ?)");
         input.taskRevisionIds.forEach((taskRevisionId, position) => insertTask.run(id, taskRevisionId, position));
         return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
@@ -680,6 +698,39 @@ export function createStore(filename: string) {
     },
     updateTaskRunResult(id: string, result: unknown) {
       sqlite.prepare("UPDATE task_runs SET result_json = ? WHERE id = ?").run(JSON.stringify(result), id);
+    },
+    /** Повторная попытка того же промпта: нулевая — прогревочная, её цифры в медианы не идут. */
+    recordTaskAttempt(taskRunId: string, attempt: number, result: unknown, status: Exclude<RunStatus, "pending" | "running">, error?: string) {
+      sqlite
+        .prepare("INSERT INTO task_attempts (id, task_run_id, attempt, status, result_json, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(randomUUID(), taskRunId, attempt, status, JSON.stringify(result), error ?? null, now());
+    },
+    listTaskAttempts(taskRunId: string) {
+      return all<TaskAttemptRow>("SELECT * FROM task_attempts WHERE task_run_id = ? ORDER BY attempt", taskRunId);
+    },
+    taskRunAggregate(taskRunId: string) {
+      const measured = this.listTaskAttempts(taskRunId).filter((row) => row.attempt > 0);
+      if (measured.length < 2) return undefined;
+      const completed = measured.filter((row) => row.status === "completed");
+      const metric = (name: "generationTokensPerSecond" | "totalDurationMs") => completed
+        .map((row) => (JSON.parse(row.result_json ?? "{}") as { metrics?: Record<string, { value?: number | null }> }).metrics?.[name]?.value)
+        .filter((value): value is number => typeof value === "number");
+      const summarize = (values: number[]) => values.length
+        ? { median: values.toSorted((left, right) => left - right)[Math.floor(values.length / 2)]!, min: Math.min(...values), max: Math.max(...values) }
+        : { median: null, min: null, max: null };
+      const speed = summarize(metric("generationTokensPerSecond"));
+      const duration = summarize(metric("totalDurationMs"));
+      return {
+        attempts: measured.length,
+        completedAttempts: completed.length,
+        failedAttempts: measured.length - completed.length,
+        medianTokensPerSecond: speed.median,
+        minTokensPerSecond: speed.min,
+        maxTokensPerSecond: speed.max,
+        medianDurationMs: duration.median,
+        minDurationMs: duration.min,
+        maxDurationMs: duration.max,
+      };
     },
     getTaskRun(id: string) {
       const row = one<TaskRunRow>("SELECT * FROM task_runs WHERE id = ?", id);

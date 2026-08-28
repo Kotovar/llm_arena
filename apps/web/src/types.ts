@@ -151,11 +151,25 @@ export type GalleryResult = {
   metrics?: GalleryMetrics;
 };
 
+/** Сводка повторов промпта: приходит только когда повторов было больше одного. */
+export type TaskRunAggregate = {
+  attempts: number;
+  completedAttempts: number;
+  failedAttempts: number;
+  medianTokensPerSecond: number | null;
+  minTokensPerSecond: number | null;
+  maxTokensPerSecond: number | null;
+  medianDurationMs: number | null;
+  minDurationMs: number | null;
+  maxDurationMs: number | null;
+};
+
 export type TaskRun = {
   id: string;
   task_revision_id: string;
   taskName?: string;
   taskDescription?: string | null;
+  attempts?: TaskRunAggregate | null;
   position: number;
   status: string;
   snapshot_json: string;
@@ -195,4 +209,13 @@ export type Run = {
   reviewed_count?: number;
   task_count?: number;
   taskRuns?: TaskRun[];
+};
+
+/** Паспорт условий прогона из снапшота: неизвестное поле — `null`, а не догадка. */
+export type RunEnvironment = {
+  runnerKind: string;
+  gpu: { name: string; totalMiB: number; usedMiB: number; freeMiB: number } | null;
+  runner: { path: string; version: string | null };
+  llamaServer: { path: string; version: string | null } | null;
+  ggufSha256: string | null;
 };

@@ -312,6 +312,42 @@ describe("run queue", () => {
     expect(store.listRuns()[0]).toMatchObject({ generation_tps: 60, generation_samples: 1, task_count: 2 });
   });
 
+  it("aggregates repeated attempts and leaves the warm-up out of the medians", () => {
+    const store = testStore();
+    const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/one", { task: task.currentRevision });
+    const measured = (tps: number, durationMs: number) => ({ metrics: { generationTokensPerSecond: { value: tps }, totalDurationMs: { value: durationMs } } });
+    // Прогрев идёт нулевой попыткой: его холодные цифры не должны тянуть медиану.
+    store.recordTaskAttempt(taskRun.id, 0, measured(5, 9000), "completed");
+    store.recordTaskAttempt(taskRun.id, 1, measured(40, 1200), "completed");
+    store.recordTaskAttempt(taskRun.id, 2, measured(42, 1000), "completed");
+    store.recordTaskAttempt(taskRun.id, 3, measured(50, 800), "completed");
+    store.recordTaskAttempt(taskRun.id, 4, {}, "failed", "Runner exited 1");
+
+    expect(store.listTaskAttempts(taskRun.id).map((item) => item.attempt)).toEqual([0, 1, 2, 3, 4]);
+    expect(store.taskRunAggregate(taskRun.id)).toMatchObject({
+      medianTokensPerSecond: 42,
+      minTokensPerSecond: 40,
+      maxTokensPerSecond: 50,
+      medianDurationMs: 1000,
+      completedAttempts: 3,
+      failedAttempts: 1,
+    });
+  });
+
+  it("has no aggregate for a prompt that was run once", () => {
+    const store = testStore();
+    const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/one", { task: task.currentRevision });
+    store.recordTaskAttempt(taskRun.id, 1, { metrics: { generationTokensPerSecond: { value: 40 } } }, "completed");
+
+    expect(store.taskRunAggregate(taskRun.id)).toBeUndefined();
+  });
+
   it("drops the visual criterion from the maximum when it was not applied", () => {
     const store = testStore();
     const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });

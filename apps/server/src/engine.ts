@@ -13,7 +13,7 @@ import { createRunner } from "./runners/index.js";
 import { createLiveOutput } from "./runners/live-output.js";
 import type { ArenaStore } from "./store.js";
 import { completedResultVersions } from "./result-versions.js";
-import { readGpuInfo, startGpuSampler, type GpuInfo } from "./system-metrics.js";
+import { readExecutableVersion, readGpuInfo, startGpuSampler, type GpuInfo } from "./system-metrics.js";
 import { buildTaskPrompt } from "./task-prompt.js";
 import { describeGenerationError } from "./generation-error.js";
 import { taskImagePath } from "./task-images.js";
@@ -30,6 +30,16 @@ type EngineRuntime = {
   };
   fetch: (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number }>;
   readGpuInfo: (executable: string) => GpuInfo;
+  readExecutableVersion: (executable: string) => string | null;
+};
+
+/** Неизменяемый паспорт условий прогона: чего узнать не удалось, то `null`, а не догадка. */
+type RunEnvironment = {
+  runnerKind: ArenaConfig["runners"][number]["kind"];
+  gpu: GpuInfo | null;
+  runner: { path: string; version: string | null };
+  llamaServer: { path: string; version: string | null } | null;
+  ggufSha256: string | null;
 };
 
 function assertModelCapabilities(
@@ -68,6 +78,7 @@ export class BenchmarkEngine {
       createLlamaManager: () => new LlamaCppServerManager(config.llamaServer.executable, config.llamaServer.startupTimeoutMs, supervisor),
       fetch: globalThis.fetch,
       readGpuInfo,
+      readExecutableVersion,
     },
   ) {}
 
@@ -148,6 +159,26 @@ export class BenchmarkEngine {
     return true;
   }
 
+  #environment(
+    definition: ArenaConfig["runners"][number],
+    isLocal: boolean,
+    ggufSha256: string | null,
+  ): RunEnvironment {
+    const version = (executable: string) => {
+      try { return this.runtime.readExecutableVersion(executable); } catch { return null; }
+    };
+    let gpu: GpuInfo | null = null;
+    try { gpu = this.runtime.readGpuInfo(this.config.nvidiaSmi); } catch { gpu = null; }
+    const llamaServerPath = this.config.llamaServer.executable;
+    return {
+      runnerKind: definition.kind,
+      gpu,
+      runner: { path: definition.exec[0]!, version: version(definition.exec[0]!) },
+      llamaServer: isLocal ? { path: llamaServerPath, version: version(llamaServerPath) } : null,
+      ggufSha256,
+    };
+  }
+
   async #execute(run: NonNullable<ReturnType<ArenaStore["claimNextRun"]>>, signal: AbortSignal): Promise<void> {
     const tasks = this.store.listRunTasks(run.id);
     const model = this.store.getModel(run.model_id);
@@ -171,7 +202,7 @@ export class BenchmarkEngine {
     const runRoot = join(this.config.dataDir, "runs", run.id);
     mkdirSync(runRoot, { recursive: true });
     // В снапшоте запуска остаётся профиль как он настроен: разовая температура — свойство конкретного промпта.
-    this.store.setRunSnapshot(run.id, { tasks, model: selectedModel, profile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
+    this.store.setRunSnapshot(run.id, { tasks, model: selectedModel, profile, environment: this.#environment(definition, model.kind === "local-gguf", profile?.ggufSha256 ?? null), resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: { ...definition, env: Object.keys(definition.env) } });
     const backendStdout = join(runRoot, "backend.stdout.log");
     const backendStderr = join(runRoot, "backend.stderr.log");
     // Возобновление после сбоя: позиции с уже созданным task_run пропускаем, идём с первого невыполненного.
@@ -212,6 +243,8 @@ export class BenchmarkEngine {
         );
         this.#emit({ type: "backend.ready", runId: run.id, data: { port: backend.port, startupDurationMs: backend.startupDurationMs } });
       }
+      // Повторы включают учёт попыток: при одном прогоне никаких лишних строк не появляется.
+      const repeated = run.repeat_count > 1 || run.warmup_attempt === 1;
       for (const [position, task] of tasks.entries()) {
         if (signal.aborted) break;
         if (executed.has(position)) continue;
@@ -240,26 +273,47 @@ export class BenchmarkEngine {
         const taskController = new AbortController();
         const taskSignal = AbortSignal.any([signal, taskController.signal]);
         this.#taskControllers.set(taskRun.id, taskController);
+        const agentInput = {
+          definition,
+          prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
+          images: runnerImages(this.config.dataDir, effectiveTask.images),
+          taskKind: effectiveTask.kind,
+          useOmpAgent: run.use_omp_agent === 1,
+          workspace: prepared.workspace,
+          modelRef: selectedModel.modelRef,
+          reasoningEffort: run.reasoning_effort,
+          taskDataDir: artifactRoot,
+          timeoutMs: this.config.defaults.taskTimeoutMs,
+          signal: taskSignal,
+          ...(backend ? { baseUrl: backend.baseUrl } : {}),
+          runId: run.id,
+          taskRunId: taskRun.id,
+          stdoutPath,
+          stderrPath,
+          displayPath,
+        };
+        // Повтор меряет скорость, а не даёт вторую версию ответа: он идёт в своём workspace и
+        // записывается только попыткой, чтобы не трогать выбранный результат промпта.
+        const measure = async (attempt: number) => {
+          const attemptRoot = join(artifactRoot, `attempt-${attempt}`);
+          const attemptWorkspace = prepareWorkspace(source, attemptRoot);
+          const paths = { stdoutPath: join(attemptRoot, "stdout.log"), stderrPath: join(attemptRoot, "stderr.log"), displayPath: join(attemptRoot, "display.log") };
+          for (const path of Object.values(paths)) writeFileSync(path, "");
+          try {
+            const attemptResult = await this.#runAgent({ ...agentInput, ...paths, workspace: attemptWorkspace.workspace, taskDataDir: attemptRoot });
+            const failure = attemptResult.exitCode === 0 ? undefined : `Runner exited ${attemptResult.exitCode}`;
+            this.store.recordTaskAttempt(taskRun.id, attempt, attemptResult, failure ? "failed" : "completed", failure);
+          } catch (error) {
+            this.store.recordTaskAttempt(taskRun.id, attempt, {}, taskSignal.aborted ? "cancelled" : "failed", (error as Error).message);
+          }
+        };
+        const repeats = repeated ? run.repeat_count : 1;
+        // Прогрев греет кэши и KV-слот; его цифры не идут в медианы, поэтому он нулевая попытка.
+        if (repeated && run.warmup_attempt === 1 && !taskSignal.aborted) {
+          await measure(0);
+          if (backend && !taskSignal.aborted && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
+        }
         try {
-          const agentInput = {
-            definition,
-            prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
-            images: runnerImages(this.config.dataDir, effectiveTask.images),
-            taskKind: effectiveTask.kind,
-            useOmpAgent: run.use_omp_agent === 1,
-            workspace: prepared.workspace,
-            modelRef: selectedModel.modelRef,
-            reasoningEffort: run.reasoning_effort,
-            taskDataDir: artifactRoot,
-            timeoutMs: this.config.defaults.taskTimeoutMs,
-            signal: taskSignal,
-            ...(backend ? { baseUrl: backend.baseUrl } : {}),
-            runId: run.id,
-            taskRunId: taskRun.id,
-            stdoutPath,
-            stderrPath,
-            displayPath,
-          };
           let result;
           // ponytail: одна повторная попытка. Сорванный tool call недетерминирован, второй прогон обычно проходит.
           for (let attempt = 0; ; attempt += 1) {
@@ -285,9 +339,18 @@ export class BenchmarkEngine {
           const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, taskSignal);
           const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
-          this.store.saveTaskRunResult(taskRun.id, saved, status, status === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
+          const failure = status === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined;
+          this.store.saveTaskRunResult(taskRun.id, saved, status, failure);
+          if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, saved, status, failure);
         } catch (error) {
-          this.store.saveTaskRunResult(taskRun.id, {}, taskSignal.aborted ? "cancelled" : "failed", (error as Error).message);
+          const failure = (error as Error).message;
+          const status = taskSignal.aborted ? "cancelled" as const : "failed" as const;
+          this.store.saveTaskRunResult(taskRun.id, {}, status, failure);
+          if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, {}, status, failure);
+        }
+        for (let attempt = 2; attempt <= repeats && !taskSignal.aborted; attempt += 1) {
+          if (backend && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
+          await measure(attempt);
         }
         this.#taskControllers.delete(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: this.store.getTaskRun(taskRun.id)?.status } });

@@ -265,6 +265,22 @@ export function formatMetricValue(name: string, value: number) {
   return String(oneDecimal(value));
 }
 
+/**
+ * Сводка повторов промпта: медиана честнее среднего, когда один прогон случайно провалился по скорости,
+ * а размах показывает, стоит ли этой медиане верить.
+ */
+export function attemptSummary(aggregate: { attempts: number; completedAttempts: number; medianTokensPerSecond: number | null; minTokensPerSecond: number | null; maxTokensPerSecond: number | null; medianDurationMs: number | null; minDurationMs: number | null; maxDurationMs: number | null }) {
+  const range = (name: string, min: number | null, max: number | null) =>
+    min === null || max === null || min === max ? "" : ` (${formatMetricValue(name, min)} — ${formatMetricValue(name, max)})`;
+  const measure = (label: string, name: string, median: number | null, min: number | null, max: number | null) =>
+    median === null ? null : `${label}: ${formatMetricValue(name, median)}${range(name, min, max)}`;
+  return [
+    `Повторов: ${aggregate.completedAttempts} из ${aggregate.attempts}`,
+    measure(aggregate.completedAttempts > 1 ? "медиана скорости" : "скорость", "generationTokensPerSecond", aggregate.medianTokensPerSecond, aggregate.minTokensPerSecond, aggregate.maxTokensPerSecond),
+    measure(aggregate.completedAttempts > 1 ? "медиана времени" : "время", "totalDurationMs", aggregate.medianDurationMs, aggregate.minDurationMs, aggregate.maxDurationMs),
+  ].filter(Boolean).join(" · ");
+}
+
 export function formatMeasuredMetric(name: string, item?: { value: number | null; source?: string }) {
   if (item?.value === null || item?.value === undefined) return "N/A";
   return `${item.source === "estimated" ? "≈ " : ""}${formatMetricValue(name, item.value)}`;

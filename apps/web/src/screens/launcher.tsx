@@ -25,6 +25,8 @@ export function Launcher() {
   const [cloudModelRef, setCloudModelRef] = useState("");
   const [profileId, setProfileId] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
+  const [repeatCount, setRepeatCount] = useState(1);
+  const [warmupAttempt, setWarmupAttempt] = useState(false);
   const [promptQuery, setPromptQuery] = useState("");
   useEffect(() => {
     if (!tasks.data) return;
@@ -74,7 +76,7 @@ export function Launcher() {
     mutationFn: async () => {
       if (!selectedModel || !selectedRunner || !selectedTasks.length) throw new Error("Выберите модель и хотя бы один промпт");
       if (imageError) throw new Error(imageError);
-      return api<Run>("/runs", { method: "POST", body: JSON.stringify({ taskRevisionIds: selectedTasks.map((task) => task.currentRevision.id), modelId: selectedModel.id, executionProfileId: selectedModel.kind === "local-gguf" ? selectedProfile?.id ?? null : null, runnerId: selectedRunner.id, resultMode, useOmpAgent: usingOmpAgent, modelRef: selectedModel.kind === "cloud" ? effectiveModelRef : undefined, reasoningEffort: effectiveEffort || null }) });
+      return api<Run>("/runs", { method: "POST", body: JSON.stringify({ taskRevisionIds: selectedTasks.map((task) => task.currentRevision.id), modelId: selectedModel.id, executionProfileId: selectedModel.kind === "local-gguf" ? selectedProfile?.id ?? null : null, runnerId: selectedRunner.id, resultMode, useOmpAgent: usingOmpAgent, modelRef: selectedModel.kind === "cloud" ? effectiveModelRef : undefined, reasoningEffort: effectiveEffort || null, repeatCount, warmupAttempt: repeatCount > 1 && warmupAttempt }) });
     },
     onSuccess: (run) => navigate({ to: "/runs/$runId", params: { runId: run.id } }),
   });
@@ -102,7 +104,7 @@ export function Launcher() {
         </div>
         <span className="launch-mode-note">{modeNote}</span>
       </div>
-      <details className="advanced"><summary>Дополнительные настройки</summary><label>Способ запуска<select value={runnerChoices.some((runner) => runner.id === runnerOverride) ? runnerOverride : ""} onChange={(event) => { const runner = runnerChoices.find((item) => item.id === event.currentTarget.value); setUseOmpAgent(isLocalModel && runner?.kind === "omp"); setRunnerOverride(event.currentTarget.value); }}><option value="">Автоматически: {automaticRunner?.name ?? "не определён"}</option>{runnerChoices.map((runner) => <option key={runner.id} value={runner.id}>{runner.name}</option>)}</select></label></details>
+      <details className="advanced"><summary>Дополнительные настройки</summary><label>Способ запуска<select value={runnerChoices.some((runner) => runner.id === runnerOverride) ? runnerOverride : ""} onChange={(event) => { const runner = runnerChoices.find((item) => item.id === event.currentTarget.value); setUseOmpAgent(isLocalModel && runner?.kind === "omp"); setRunnerOverride(event.currentTarget.value); }}><option value="">Автоматически: {automaticRunner?.name ?? "не определён"}</option>{runnerChoices.map((runner) => <option key={runner.id} value={runner.id}>{runner.name}</option>)}</select></label><label>Повторов каждого промпта<select value={repeatCount} onChange={(event) => setRepeatCount(Number(event.currentTarget.value))}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select><small>Повторы измеряют разброс скорости: ответ и оценка остаются от первого прогона.</small></label>{repeatCount > 1 ? <label className="checkbox-row"><input type="checkbox" checked={warmupAttempt} onChange={(event) => setWarmupAttempt(event.currentTarget.checked)} />Прогревочный прогон перед замерами</label> : null}</details>
       <div className="launch-footer"><dl className="launch-summary" aria-label="Параметры запуска">{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl><div className="launch-action"><div><strong>{selectedTasks.length ? promptCountLabel(selectedTasks.length) : "Выберите хотя бы один промпт"}</strong><small>{imageError ?? (selectedRunner ? `через ${selectedRunner.name}` : "Добавьте модель и промпт")}</small></div><button className="primary launch-button" onClick={() => launch.mutate()} disabled={launch.isPending || !selectedModel || !selectedTasks.length || !selectedRunner || Boolean(imageError)}>{launch.isPending ? "Создаём запуск…" : "Запустить"}<span>→</span></button></div></div>
       {launch.error ? <p className="error">{launch.error.message}</p> : null}
     </section>

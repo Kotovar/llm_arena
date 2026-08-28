@@ -37,6 +37,16 @@ export function readGpuInfo(executable: string): GpuInfo {
   return gpu;
 }
 
+/**
+ * Проба версии исполняемого файла для провенанса прогона: не смогли узнать — это `null`,
+ * а не повод остановить прогон.
+ */
+export function readExecutableVersion(executable: string): string | null {
+  const result = spawnSync(executable, ["--version"], { encoding: "utf8", timeout: 5000 });
+  if (result.status !== 0) return null;
+  return `${result.stdout}\n${result.stderr}`.trim().split("\n")[0]?.trim() || null;
+}
+
 export function parseGpuSample(line: string): GpuSample | undefined {
   const values = line.split(",").map((value) => Number(value.trim()));
   if (values.length !== 7 || values.some((value) => !Number.isFinite(value))) return undefined;

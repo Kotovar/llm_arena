@@ -107,4 +107,16 @@ describe("профиль локальной модели", () => {
 
     await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ executionProfileId: "quality" })]));
   });
+
+  it("отправляет число повторов и прогрев", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<Launcher />, "/");
+    await user.click(await screen.findByText("Дополнительные настройки"));
+
+    await user.selectOptions(await screen.findByLabelText(/Повторов каждого промпта/u), "3");
+    await user.click(await checkbox("Прогревочный прогон"));
+    await user.click(await screen.findByRole("button", { name: /Запустить/u }));
+
+    await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ repeatCount: 3, warmupAttempt: true })]));
+  });
 });

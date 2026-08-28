@@ -154,6 +154,9 @@ export const createRunSchema = z.object({
   useOmpAgent: z.boolean().default(false),
   modelRef: z.string().trim().min(1).optional(),
   reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).nullable().default(null),
+  // Повторы нужны, чтобы одиночный выброс не выдавали за скорость модели; больше пяти — это уже отдельный прогон.
+  repeatCount: z.number().int().min(1).max(5).default(1),
+  warmupAttempt: z.boolean().default(false),
 });
 
 const measuredSources = z.enum([

@@ -288,6 +288,27 @@ describe("список промптов запуска", () => {
     expect(screen.queryByRole("button", { name: "Удалить промпт" })).toBeNull();
   });
 
+  it("показывает зафиксированные условия прогона", async () => {
+    const withEnvironment = {
+      ...run,
+      snapshot_json: JSON.stringify({
+        tasks: [{}, {}, {}],
+        model: { name: "Модель" },
+        profile: { name: "Quality", parameters: { context: 102_400 } },
+        environment: { runnerKind: "omp", gpu: { name: "Test GPU", totalMiB: 16_303, usedMiB: 1, freeMiB: 2 }, runner: { path: "/bin/omp", version: "omp 1.2.3" }, llamaServer: null, ggufSha256: null },
+      }),
+    };
+    fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/runs/") ? withEnvironment : []), { status: 200, headers: { "content-type": "application/json" } }));
+    await renderInApp(<RunDetail runId="run-1" />);
+
+    const block = await screen.findByText("Условия прогона");
+    const details = block.closest("details")!;
+    expect(within(details).getByText(/omp 1\.2\.3/u)).toBeDefined();
+    expect(within(details).getByText(/Test GPU/u)).toBeDefined();
+    // Незапущенный llama-server и неизвестная SHA не должны выглядеть как факты.
+    expect(within(details).getAllByText("не определено")).toHaveLength(2);
+  });
+
   it("ведёт к следующему неоценённому промпту", async () => {
     const user = userEvent.setup();
     await renderInApp(<RunDetail runId="run-1" />);

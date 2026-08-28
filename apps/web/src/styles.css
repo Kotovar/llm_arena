@@ -67,6 +67,8 @@ a { color: var(--signal); text-decoration: none; }
 .advanced { padding: 15px 26px; border-bottom: 1px solid var(--line); color: var(--muted); }
 .advanced summary { cursor: pointer; font-size: 13px; }
 .advanced label { display: block; max-width: 500px; margin-top: 15px; }
+.advanced .checkbox-row { display: flex; align-items: center; gap: 8px; }
+.advanced .checkbox-row input { width: auto; margin: 0; }
 .launch-footer { display: grid; gap: 18px; padding: 22px 26px 26px; }
 .launch-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--line); }.launch-summary > div { display: block; min-width: 0; padding: 11px 12px; background: #131a2c; }.launch-summary dt { color: var(--muted); font: 500 11px Inter, ui-sans-serif, system-ui, sans-serif; }.launch-summary dd { overflow: hidden; margin-top: 5px; color: #d9e1ed; font: 600 12px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
 .launch-action { display: flex; justify-content: space-between; align-items: center; gap: 20px; }.launch-action strong, .launch-action small { display: block; }.launch-action small { margin-top: 5px; color: var(--muted); }
@@ -205,6 +207,14 @@ dl { margin: 0; }dl div { display: grid; grid-template-columns: 130px 1fr; paddi
 .manual-profile { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #121723; }
 .manual-profile summary { color: var(--signal); cursor: pointer; font-size: 12px; font-weight: 700; }
 .manual-profile > .form-grid { margin-top: 14px; }
+.attempt-summary { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.run-environment { margin: 14px 0; }
+.run-environment > summary { cursor: pointer; color: var(--signal); font-size: 12px; font-weight: 700; }
+.run-environment dl { display: grid; gap: 6px; margin: 12px 0 0; }
+.run-environment dl > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.run-environment dt { min-width: 120px; color: var(--muted); }
+.run-environment dd { margin: 0; overflow-wrap: anywhere; }
+.run-environment pre { margin: 12px 0 0; overflow-x: auto; }
 .profile-group { margin: 14px 0; }
 .profile-group > summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; color: var(--signal); font-size: 12px; font-weight: 700; }
 .profile-group-content { display: grid; gap: 15px; margin-top: 14px; }

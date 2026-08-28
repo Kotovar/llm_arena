@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betterResult, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { attemptSummary, betterResult, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -434,5 +434,17 @@ describe("название модели в истории", () => {
     expect(runModelName({ model_id: "0123456789abcdef", snapshot_json: null }, models)).toBe("01234567");
     expect(runModelName({ model_id: "0123456789abcdef", snapshot_json: "{не json" }, models)).toBe("01234567");
     expect(runModelName({ model_id: "0123456789abcdef", snapshot_json: JSON.stringify({ model: {} }) }, models)).toBe("01234567");
+  });
+});
+
+describe("сводка повторов", () => {
+  it("показывает медиану и размах, когда замеров несколько", () => {
+    expect(attemptSummary({ attempts: 3, completedAttempts: 3, medianTokensPerSecond: 42, minTokensPerSecond: 40, maxTokensPerSecond: 50, medianDurationMs: 1000, minDurationMs: 800, maxDurationMs: 1200 }))
+      .toBe("Повторов: 3 из 3 · медиана скорости: 42 токенов/с (40 токенов/с — 50 токенов/с) · медиана времени: 1 с (0,8 с — 1,2 с)");
+  });
+
+  it("не выдаёт единственный удавшийся замер за медиану", () => {
+    expect(attemptSummary({ attempts: 3, completedAttempts: 1, medianTokensPerSecond: 40, minTokensPerSecond: 40, maxTokensPerSecond: 40, medianDurationMs: null, minDurationMs: null, maxDurationMs: null }))
+      .toBe("Повторов: 1 из 3 · скорость: 40 токенов/с");
   });
 });
