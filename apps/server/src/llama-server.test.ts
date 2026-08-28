@@ -19,6 +19,18 @@ describe("llama-server command", () => {
     expect(explicit[explicit.indexOf("--temp") + 1]).toBe("0.9");
   });
 
+  it("forwards a configured sampling seed to llama.cpp", () => {
+    const command = buildLlamaServerCommand(
+      "/bin/llama-server",
+      { path: "/models/a.gguf", alias: "a" },
+      { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 512, ubatchSize: 256, flashAttention: "auto", cacheReuse: 128, seed: 42 },
+      8080,
+      "/tmp/arena-slots",
+    );
+
+    expect(command.slice(command.indexOf("--seed"), command.indexOf("--seed") + 2)).toEqual(["--seed", "42"]);
+  });
+
   it("renders native automatic fitting without an exact context", () => {
     const command = buildLlamaServerCommand(
       "/bin/llama-server",

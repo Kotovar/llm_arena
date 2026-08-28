@@ -51,6 +51,8 @@ export type LlamaParameters = {
   fit?: boolean;
   fitTargetMiB?: number;
   fitContextMin?: number;
+  temperature?: number;
+  seed?: number;
 };
 
 export type Profile = {

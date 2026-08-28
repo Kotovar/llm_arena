@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
 import { api } from "../api.js";
 import { useConfirm } from "../confirm.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
+import { useToast } from "../toast.js";
 import type { AppSettings, CalibrationResult, ExternalLauncher, LlamaParameters, LocalModelFile, Model, ModelCatalog, Profile, Runner } from "../types.js";
 import { chooseRunner, defaultLocalProfile, formatDuration, latestProfiles, visionProjectorFiles } from "../ui.js";
 
@@ -52,9 +53,54 @@ function ModelCapabilitiesForm({ model, files, pending, save }: { model: Model; 
   </form>;
 }
 
+function NewProfileForm({ modelId, source, pending, create }: { modelId: string; source: Profile; pending: boolean; create: (input: { modelId: string; name: string; parameters: LlamaParameters }) => Promise<Profile> }) {
+  const [open, setOpen] = useState(false);
+  return <details className="manual-profile" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Добавить профиль</summary><form className="form-grid" onSubmit={(event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(event.currentTarget);
+    const contextValue = String(data.get("context") ?? "auto").trim();
+    const gpuLayersValue = String(data.get("nGpuLayers") ?? "auto").trim();
+    const cpuMoe = String(data.get("nCpuMoe") ?? "").trim();
+    const context: LlamaParameters["context"] = contextValue === "auto" ? "auto" : Number(contextValue);
+    const nGpuLayers: LlamaParameters["nGpuLayers"] = gpuLayersValue === "auto" ? "auto" : gpuLayersValue === "all" ? "all" : Number(gpuLayersValue);
+    void create({ modelId, name: String(data.get("profileName") ?? ""), parameters: {
+      context,
+      nGpuLayers,
+      ...(cpuMoe ? { nCpuMoe: Number(cpuMoe) } : {}),
+      cacheTypeK: String(data.get("cacheTypeK")),
+      cacheTypeV: String(data.get("cacheTypeV")),
+      batchSize: Number(data.get("batchSize")),
+      ubatchSize: Number(data.get("ubatchSize")),
+      flashAttention: String(data.get("flashAttention")) === "auto" ? "auto" : String(data.get("flashAttention")) === "on",
+      cacheReuse: Number(data.get("cacheReuse")),
+      fit: data.get("fit") === "on",
+      ...(data.get("fit") === "on" ? { fitTargetMiB: Number(data.get("fitTargetMiB")), fitContextMin: Number(data.get("fitContextMin")) } : {}),
+      ...(source.parameters.temperature === undefined ? {} : { temperature: source.parameters.temperature }),
+      ...(source.parameters.seed === undefined ? {} : { seed: source.parameters.seed }),
+    } }).then(() => { form.reset(); setOpen(false); }).catch(() => undefined);
+  }}>
+    <label className="span-2">Название профиля<input name="profileName" placeholder="Например, Скорость 32k" required /><small>Отдельное имя создаёт вариант для выбора при запуске; изменение существующего имени создаёт новую ревизию.</small></label>
+    <label>Контекст, токенов<input name="context" defaultValue={source.parameters.context} pattern="auto|[0-9]+" required /></label>
+    <label>GPU-слои<input name="nGpuLayers" defaultValue={source.parameters.nGpuLayers} pattern="auto|all|[0-9]+" required /></label>
+    <label>Точность K-кеша<select name="cacheTypeK" defaultValue={source.parameters.cacheTypeK}><option>q8_0</option><option>q4_0</option><option>f16</option></select></label>
+    <label>Точность V-кеша<select name="cacheTypeV" defaultValue={source.parameters.cacheTypeV}><option>q8_0</option><option>q4_0</option><option>f16</option></select></label>
+    <label>Batch<input name="batchSize" type="number" min="1" defaultValue={source.parameters.batchSize} required /></label>
+    <label>Micro-batch<input name="ubatchSize" type="number" min="1" defaultValue={source.parameters.ubatchSize} required /></label>
+    <label>Flash Attention<select name="flashAttention" defaultValue={source.parameters.flashAttention === "auto" ? "auto" : source.parameters.flashAttention ? "on" : "off"}><option value="auto">Автоматически</option><option value="on">Включить</option><option value="off">Выключить</option></select></label>
+    <label>Переиспользование KV<input name="cacheReuse" type="number" min="0" defaultValue={source.parameters.cacheReuse} required /></label>
+    <label>Эксперты на CPU<input name="nCpuMoe" type="number" min="0" defaultValue={source.parameters.nCpuMoe ?? ""} placeholder="не переносить" /></label>
+    <label><input name="fit" type="checkbox" defaultChecked={source.parameters.fit} />Автоподбор загрузки</label>
+    <label>Резерв VRAM, MiB<input name="fitTargetMiB" type="number" min="1" defaultValue={source.parameters.fitTargetMiB ?? 750} required /></label>
+    <label>Минимальный контекст<input name="fitContextMin" type="number" min="4096" defaultValue={source.parameters.fitContextMin ?? 100000} required /></label>
+    <button className="primary" disabled={pending}>{pending ? "Создаём профиль…" : "Создать профиль"}</button>
+  </form></details>;
+}
+
 export function ModelsPage() {
   const client = useQueryClient();
   const { confirm, view: confirmView } = useConfirm();
+  const toast = useToast();
   const models = useData<Model[]>("models", "/models");
   const profiles = useData<Profile[]>("profiles", "/profiles");
   const runners = useData<Runner[]>("runners", "/runners");
@@ -91,6 +137,14 @@ export function ModelsPage() {
   const createCloud = useMutation({
     mutationFn: (body: unknown) => api("/models", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: async () => { setCloudModelRef(""); await invalidateModels(); },
+  });
+  const createProfile = useMutation({
+    mutationFn: (body: { modelId: string; name: string; parameters: LlamaParameters }) => api<Profile>("/profiles", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: async (profile) => { toast(`Профиль «${profile.name}» создан.`); await client.invalidateQueries({ queryKey: ["profiles"] }); },
+  });
+  const deleteProfile = useMutation({
+    mutationFn: (profile: Profile) => api(`/profiles/${profile.id}`, { method: "DELETE" }),
+    onSuccess: async (_, profile) => { toast(`Профиль «${profile.name}» удалён.`); await client.invalidateQueries({ queryKey: ["profiles"] }); },
   });
   const calibrate = useMutation({
     mutationFn: (id: string) => api<CalibrationResult>(`/profiles/${id}/calibrate`, { method: "POST" }),
@@ -221,14 +275,18 @@ export function ModelsPage() {
           {rename.error && rename.variables?.modelId === model.id ? <p className="error">{rename.error.message}</p> : null}
           {model.kind === "local-gguf" ? <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} /> : null}
           {saveCapabilities.error && saveCapabilities.variables?.modelId === model.id ? <p className="error">{saveCapabilities.error.message}</p> : null}
+          {model.kind === "local-gguf" && modelProfiles[0] ? <details className="profile-group" open><summary><span>Профили запуска</span><span>{modelProfiles.length}</span></summary><div className="profile-group-content">
+          <NewProfileForm modelId={model.id} source={modelProfiles[0]} pending={createProfile.isPending} create={createProfile.mutateAsync} />
+          {createProfile.error ? <p className="error">{createProfile.error.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для omp-local</span> : null}</div>
             <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div></dl>
             {report ? <div className="gpu-report"><strong>{report.gpu.name}</strong><span>VRAM: {report.gpu.usedMiB} MiB занято · {report.gpu.freeMiB} MiB свободно из {report.gpu.totalMiB} MiB</span></div> : null}
             {calibrate.error && calibrate.variables === profile.id ? <p className="error">{calibrate.error.message}</p> : null}
             {activate.error && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? <p className="error">{activate.error.message}</p> : null}
-            <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending && calibrate.variables === profile.id}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : profile.parameters.fit ? "Проверить автоконфигурацию" : "Проверить профиль"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name}>{activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button></div>
-          </section>; })}
+            <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending && calibrate.variables === profile.id}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : profile.parameters.fit ? "Проверить автоконфигурацию" : "Проверить профиль"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name}>{activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button><button className="danger" aria-label={`Удалить профиль «${profile.name}»`} disabled={modelProfiles.length <= 1 || (deleteProfile.isPending && deleteProfile.variables?.id === profile.id)} onClick={() => confirm({ title: "Удалить профиль?", body: `Профиль «${profile.name}» и его ревизии будут удалены. Результаты прошлых запусков останутся.`, action: "Удалить", onConfirm: () => deleteProfile.mutate(profile) })}>{deleteProfile.isPending && deleteProfile.variables?.id === profile.id ? "Удаляем…" : "Удалить"}</button></div>
+            {deleteProfile.error && deleteProfile.variables?.id === profile.id ? <p className="error">{deleteProfile.error.message}</p> : null}
+          </section>; })}</div></details> : null}
           <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button>{checking ? <span className="check-badge"><span className="spinner" />Ждём ответ модели…</span> : diagnostics[model.id] ? <span className={diagnostics[model.id]?.ok ? "check-badge check-pass" : "check-badge check-fail"}>{diagnostics[model.id]?.ok ? "✓" : "✕"} {diagnostics[model.id]?.title}</span> : <small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small>}<button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { confirm({ title: "Отключить модель?", body: `«${model.name}» пропадёт из списка. Результаты прошлых запусков останутся, файл модели не удаляется.`, action: "Отключить", onConfirm: () => disconnect.mutate(model.id) }); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
           {diagnostics[model.id]?.detail ? <p className="model-check-detail">{diagnostics[model.id]?.detail}</p> : null}
           {disconnect.error && disconnect.variables === model.id ? <p className="error">{disconnect.error.message}</p> : null}

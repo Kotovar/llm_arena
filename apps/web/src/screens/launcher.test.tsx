@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderInApp } from "../test-harness.js";
@@ -10,8 +10,10 @@ function task(id: string, name: string) {
 }
 
 let payloads: Record<string, unknown>;
+let runBodies: unknown[];
 
 beforeEach(() => {
+  runBodies = [];
   payloads = {
     "/api/tasks": [task("task-1", "Аквариум"), task("task-2", "Песок")],
     "/api/models": [{ id: "model-1", name: "Модель", kind: "cloud", provider: "openai", modelRef: "model", path: null, alias: null, capabilities: { toolUse: true, vision: false, reasoning: false }, mmprojPath: null }],
@@ -21,7 +23,13 @@ beforeEach(() => {
     "/api/runs": [],
     "/api/gallery": [],
   };
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(payloads[url] ?? {}), { status: 200, headers: { "content-type": "application/json" } })));
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/runs" && init?.method === "POST") {
+      runBodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ id: "run-1" }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify(payloads[url] ?? {}), { status: 200, headers: { "content-type": "application/json" } });
+  }));
 });
 
 afterEach(() => {
@@ -79,5 +87,24 @@ describe("повтор промпта на другой модели", () => {
 
     expect((await checkbox("Аквариум")).checked).toBe(true);
     expect((await checkbox("Песок")).checked).toBe(true);
+  });
+});
+
+describe("профиль локальной модели", () => {
+  it("отправляет выбранный профиль локальной модели", async () => {
+    const user = userEvent.setup();
+    payloads["/api/models"] = [{ id: "local-1", name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/models/local.gguf", alias: "local", capabilities: { toolUse: true, vision: false, reasoning: false }, mmprojPath: null }];
+    payloads["/api/profiles"] = [
+      { id: "speed", modelId: "local-1", name: "Скорость", revision: 1, calibrated: true, parameters: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 512, ubatchSize: 256, flashAttention: "auto", cacheReuse: 128 } },
+      { id: "quality", modelId: "local-1", name: "Качество", revision: 2, calibrated: true, parameters: { context: 16384, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 512, ubatchSize: 256, flashAttention: "auto", cacheReuse: 128 } },
+    ];
+    payloads["/api/runners"] = [{ id: "omp", name: "OMP", kind: "omp", exec: ["omp"], default: true }];
+
+    await renderInApp(<Launcher />, "/");
+
+    await user.selectOptions(await screen.findByLabelText("Профиль запуска"), "quality");
+    await user.click(await screen.findByRole("button", { name: /Запустить/u }));
+
+    await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ executionProfileId: "quality" })]));
   });
 });

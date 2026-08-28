@@ -74,4 +74,8 @@ describe("responsive result layout", () => {
     expect(css).toMatch(/\.launch-step\s*>\s*a\s*\{[^}]*align-self:\s*start;[^}]*margin-top:\s*calc\(1lh \+ 8px\)/);
     expect(css).toMatch(/@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*\.launch-step\s*>\s*a\s*\{[^}]*margin-top:\s*0/);
   });
+
+  it("keeps a gap above and below the collapsible profile group", () => {
+    expect(css).toMatch(/\.profile-group\s*\{[^}]*margin:\s*14px 0/);
+  });
 });

@@ -149,6 +149,33 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("deletes a named execution profile but preserves the last one", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-delete-profile-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/models/local.gguf", alias: "local" });
+    const parameters = { context: "auto" as const, nGpuLayers: "auto" as const, cacheTypeK: "q8_0" as const, cacheTypeV: "q8_0" as const, batchSize: 1024, ubatchSize: 512, flashAttention: "auto" as const, cacheReuse: 256, fit: true, fitTargetMiB: 750, fitContextMin: 100_000 };
+    const automatic = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, ggufSha256: null, calibrated: false });
+    store.createExecutionProfile({ modelId: model.id, name: "Speed", parameters, ggufSha256: null, calibrated: false });
+    const speed = store.createExecutionProfile({ modelId: model.id, name: "Speed", parameters: { ...parameters, context: 32_000 }, ggufSha256: null, calibrated: false });
+    const app = buildApp({ store, config });
+
+    const activated = await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId: model.id, profileName: "Speed", port: 8080 } });
+    const deleted = await app.inject({ method: "DELETE", url: `/api/profiles/${speed.id}` });
+    const last = await app.inject({ method: "DELETE", url: `/api/profiles/${automatic.id}` });
+
+    expect(activated.statusCode).toBe(200);
+    expect(deleted.statusCode).toBe(204);
+    expect(store.listExecutionProfiles(model.id).map((profile) => profile.name)).toEqual(["Automatic"]);
+    expect((await app.inject({ method: "GET", url: "/api/settings" })).json().externalModelId).toBeNull();
+    expect(last.statusCode).toBe(400);
+    expect(last.json().error).toMatch(/last execution profile/u);
+    await app.close();
+    store.close();
+  });
+
   it("persists a complete model order and rejects partial orders", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-model-order-"));
     directories.push(directory);

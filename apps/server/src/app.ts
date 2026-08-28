@@ -391,6 +391,11 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     refreshActiveLauncher(profile.modelId, profile.name);
     return reply.code(201).send(profile);
   });
+  app.delete<{ Params: { id: string } }>("/api/profiles/:id", async (request, reply) => {
+    const profile = store.deleteExecutionProfile(request.params.id);
+    if (store.getSetting("externalModelId") === profile.modelId && store.getSetting("externalProfileName") === profile.name) clearExternalLauncher();
+    return reply.code(204).send();
+  });
   app.post<{ Params: { id: string } }>("/api/profiles/:id/calibrate", async (request) => {
     if (!engine) throw new Error("Calibration engine is unavailable");
     const profile = store.getExecutionProfile(request.params.id);

@@ -581,6 +581,21 @@ export function createStore(filename: string) {
         : all<{ id: string }>("SELECT id FROM execution_profiles ORDER BY created_at");
       return rows.map((row) => this.getExecutionProfile(row.id)!);
     },
+    deleteExecutionProfile(id: string) {
+      const profile = this.getExecutionProfile(id);
+      if (!profile) throw new Error("Execution profile not found");
+      const { count } = one<{ count: number }>("SELECT COUNT(DISTINCT name) AS count FROM execution_profiles WHERE model_id = ?", profile.modelId)!;
+      if (count <= 1) throw new Error("Cannot delete the last execution profile");
+      const activeRun = one<{ id: string }>(`
+        SELECT id FROM benchmark_runs
+        WHERE execution_profile_id IN (SELECT id FROM execution_profiles WHERE model_id = ? AND name = ?)
+          AND status IN ('pending', 'running')
+        LIMIT 1
+      `, profile.modelId, profile.name);
+      if (activeRun) throw new Error("Stop the runs using this profile first");
+      sqlite.prepare("DELETE FROM execution_profiles WHERE model_id = ? AND name = ?").run(profile.modelId, profile.name);
+      return profile;
+    },
     createRun(input: CreateRun) {
       const model = this.getModel(input.modelId);
       if (!model) throw new Error("Model not found");

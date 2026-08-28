@@ -205,6 +205,10 @@ dl { margin: 0; }dl div { display: grid; grid-template-columns: 130px 1fr; paddi
 .manual-profile { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #121723; }
 .manual-profile summary { color: var(--signal); cursor: pointer; font-size: 12px; font-weight: 700; }
 .manual-profile > .form-grid { margin-top: 14px; }
+.profile-group { margin: 14px 0; }
+.profile-group > summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; color: var(--signal); font-size: 12px; font-weight: 700; }
+.profile-group-content { display: grid; gap: 15px; margin-top: 14px; }
+.profile-group-content .profile-card { margin-top: 0; }
 .capability-fieldset { display: grid; gap: 10px; margin: 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #121723; }
 .capability-fieldset legend { padding: 0 5px; color: var(--muted); font-size: 12px; }
 .capability-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }

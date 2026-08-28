@@ -48,6 +48,7 @@ export function buildLlamaServerCommand(
     "--jinja",
     "--temp",
     String(profile.temperature ?? DEFAULT_LLAMA_TEMPERATURE),
+    ...(profile.seed === undefined ? [] : ["--seed", String(profile.seed)]),
     "-np",
     "1",
     "--cache-reuse",
