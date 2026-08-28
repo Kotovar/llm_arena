@@ -171,6 +171,11 @@ a { color: var(--signal); text-decoration: none; }
 .leaderboard-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }.leaderboard-table { width: 100%; min-width: 520px; border-collapse: collapse; background: #101828; }.leaderboard-table th, .leaderboard-table td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--line); }.leaderboard-table tbody tr:last-child > * { border-bottom: 0; }.leaderboard-table thead { background: #1b253c; }.leaderboard-table thead th { color: #d9e1ed; font-size: 13px; }.leaderboard-score { color: var(--good); font: 600 13px ui-monospace, monospace; }.leaderboard-unranked { color: var(--muted); }
 .leaderboard-thin { display: block; margin-top: 3px; color: var(--warn); font: 400 10px Inter, ui-sans-serif, system-ui, sans-serif; }
 .leaderboard-note { color: var(--muted); font-size: 11px; }
+.compare-blind { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; color: var(--muted); font-size: 13px; }
+.compare-blind button { padding: 7px 13px; border-radius: 999px; font-size: 12px; }
+.pair-verdict { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.pair-verdict button { padding: 5px 11px; border-radius: 999px; font-size: 12px; }
+.pair-verdict button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }
 .prompt-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .prompt-tags button { padding: 5px 11px; border-radius: 999px; font-size: 12px; }
 .prompt-tags button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }

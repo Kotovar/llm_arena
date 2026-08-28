@@ -219,3 +219,11 @@ export type RunEnvironment = {
   llamaServer: { path: string; version: string | null } | null;
   ggufSha256: string | null;
 };
+
+/** Слепой парный вердикт: победитель хранится идентификатором результата, null — ничья. */
+export type PairReview = {
+  taskRunIds: [string, string];
+  winnerTaskRunId: string | null;
+  comment: string;
+  updatedAt: string;
+};

@@ -65,6 +65,12 @@ const leaderboardSliceSchema = z.object({
   tag: z.string().trim().min(1).optional(),
   untagged: z.literal("1").optional().transform((value) => value === "1"),
 }).strict().refine((value) => !(value.tag && value.untagged), "Choose either a tag or the untagged slice");
+const pairReviewSchema = z.object({
+  leftTaskRunId: z.string().uuid(),
+  rightTaskRunId: z.string().uuid(),
+  winner: z.enum(["left", "right", "tie"]),
+  comment: z.string().trim().max(4000).default(""),
+}).strict().refine((value) => value.leftTaskRunId !== value.rightTaskRunId, "Pair review needs two different results");
 const deleteRunsSchema = z.object({ runIds: z.array(z.string().uuid()).min(1) }).strict();
 /** Обмен промптами между машинами: только то, что человек пишет руками. Картинки и теги остаются на месте. */
 const importTasksSchema = z.array(z.object({
@@ -756,6 +762,29 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!statSync(path).isFile()) throw new Error("Artifact is not a file");
     reply.type("text/plain");
     return createReadStream(path);
+  });
+  app.get("/api/reviews/pair", async () => store.listPairReviews().map((row) => ({
+    taskRunIds: [row.first_task_run_id, row.second_task_run_id],
+    winnerTaskRunId: row.winner_task_run_id,
+    comment: row.comment,
+    updatedAt: row.updated_at,
+  })));
+  app.post("/api/reviews/pair", async (request, reply) => {
+    const input = parse(pairReviewSchema, request.body);
+    const left = store.getTaskRun(input.leftTaskRunId);
+    const right = store.getTaskRun(input.rightTaskRunId);
+    if (!left || !right) throw new Error("Task run not found");
+    if (left.task_revision_id !== right.task_revision_id) throw new Error("Pair review requires the same prompt revision");
+    if (left.status !== "completed" || right.status !== "completed") throw new Error("Pair review needs two completed results");
+    const winnerTaskRunId = input.winner === "tie" ? null : input.winner === "left" ? left.id : right.id;
+    const saved = store.savePairReview([left.id, right.id], winnerTaskRunId, input.comment);
+    return reply.code(201).send({
+      leftTaskRunId: left.id,
+      rightTaskRunId: right.id,
+      winner: saved.winner_task_run_id === null ? "tie" : saved.winner_task_run_id === left.id ? "left" : "right",
+      comment: saved.comment,
+      updatedAt: saved.updated_at,
+    });
   });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => store.saveReview(request.params.id, parse(reviewSchema, request.body)));
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/selected-version", async (request) => {

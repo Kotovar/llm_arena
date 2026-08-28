@@ -1285,6 +1285,46 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("stores a blind pair verdict and rejects a pair from different prompts", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-pair-review-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const other = store.createTask({ name: "Other", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = (revisionId: string, position: number) => {
+      const created = store.createTaskRun(run.id, revisionId, position, join(directory, `t${position}`), { task: { id: revisionId } });
+      store.saveTaskRunResult(created.id, { finalAnswer: "A" });
+      return created;
+    };
+    const left = taskRun(task.currentRevision.id, 0);
+    const right = taskRun(task.currentRevision.id, 1);
+    const foreign = taskRun(other.currentRevision.id, 2);
+
+    const created = await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: left.id, rightTaskRunId: right.id, winner: "left" } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ leftTaskRunId: left.id, rightTaskRunId: right.id, winner: "left" });
+
+    // Повторный вердикт по той же паре заменяет прежний, в том числе когда стороны поменяли местами.
+    await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: right.id, rightTaskRunId: left.id, winner: "tie" } });
+    const list = await app.inject({ method: "GET", url: "/api/reviews/pair" });
+    expect(list.json()).toEqual([expect.objectContaining({ taskRunIds: expect.arrayContaining([left.id, right.id]), winnerTaskRunId: null })]);
+    expect((list.json() as unknown[]).length).toBe(1);
+
+    const mismatched = await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: left.id, rightTaskRunId: foreign.id, winner: "left" } });
+    expect(mismatched.statusCode).toBe(400);
+    expect(mismatched.json()).toMatchObject({ error: "Pair review requires the same prompt revision" });
+
+    const selfPair = await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: left.id, rightTaskRunId: left.id, winner: "tie" } });
+    expect(selfPair.statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
   it("ranks only the chosen workload slice", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-tags-"));
     directories.push(directory);

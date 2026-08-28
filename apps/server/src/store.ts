@@ -106,6 +106,16 @@ type LeaderboardTaskRunRow = {
   generation_tps: number | null;
 };
 
+type PairReviewRow = {
+  id: string;
+  first_task_run_id: string;
+  second_task_run_id: string;
+  /** Победивший результат; null — ничья. Хранится идентификатором, чтобы вердикт пережил смену сторон местами. */
+  winner_task_run_id: string | null;
+  comment: string;
+  updated_at: string;
+};
+
 type TaskAttemptRow = {
   id: string;
   task_run_id: string;
@@ -223,6 +233,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_run_followups (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, task_run_id TEXT NOT NULL, position INTEGER NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, position));
+    CREATE TABLE IF NOT EXISTS pair_reviews (id TEXT PRIMARY KEY, first_task_run_id TEXT NOT NULL, second_task_run_id TEXT NOT NULL, winner_task_run_id TEXT, comment TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL, UNIQUE(first_task_run_id, second_task_run_id));
     CREATE TABLE IF NOT EXISTS gallery_featured (task_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, task_run_id TEXT NOT NULL UNIQUE, updated_at TEXT NOT NULL, PRIMARY KEY(task_revision_id, model_id));
     CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
   `);
@@ -760,6 +771,19 @@ export function createStore(filename: string) {
         minDurationMs: duration.min,
         maxDurationMs: duration.max,
       };
+    },
+    /** Пара симметрична: порядок сторон в интерфейсе случаен, поэтому ключ нормализуем. */
+    savePairReview(taskRunIds: [string, string], winnerTaskRunId: string | null, comment: string) {
+      const [first, second] = [...taskRunIds].sort() as [string, string];
+      const updatedAt = now();
+      sqlite.prepare(`
+        INSERT INTO pair_reviews (id, first_task_run_id, second_task_run_id, winner_task_run_id, comment, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(first_task_run_id, second_task_run_id) DO UPDATE SET winner_task_run_id = excluded.winner_task_run_id, comment = excluded.comment, updated_at = excluded.updated_at
+      `).run(randomUUID(), first, second, winnerTaskRunId, comment, updatedAt);
+      return one<PairReviewRow>("SELECT * FROM pair_reviews WHERE first_task_run_id = ? AND second_task_run_id = ?", first, second)!;
+    },
+    listPairReviews() {
+      return all<PairReviewRow>("SELECT * FROM pair_reviews ORDER BY updated_at");
     },
     getTaskRun(id: string) {
       const row = one<TaskRunRow>("SELECT * FROM task_runs WHERE id = ?", id);
