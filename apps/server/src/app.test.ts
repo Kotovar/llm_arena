@@ -1325,41 +1325,67 @@ describe("REST API", () => {
     store.close();
   });
 
-  it("подбирает слепую пару из разных моделей и не отдаёт её опознавательных признаков", async () => {
+  it("подбирает слепую пару из сопоставимых моделей и не отдаёт её опознавательных признаков", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-blind-queue-"));
     directories.push(directory);
     const store = createStore(join(directory, "arena.sqlite"));
     const config = loadConfig("../../arena.config.yaml");
     const app = buildApp({ store, config });
 
-    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай аквариум", tags: [] });
-    const first = store.createModel({ name: "Кальмар", kind: "cloud", provider: "openai", modelRef: "squid" });
-    const second = store.createModel({ name: "Осьминог", kind: "cloud", provider: "openai", modelRef: "octopus" });
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай аквариум", description: "Заметка о задаче", tags: [] });
+    const cloud = store.createModel({ name: "Кальмар", kind: "cloud", provider: "openai", modelRef: "squid" });
+    const otherCloud = store.createModel({ name: "Осьминог", kind: "cloud", provider: "openai", modelRef: "octopus" });
+    const local = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
     const result = (modelId: string, answer: string) => {
       const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
       const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, answer), { task: task.currentRevision, model: { name: "Кальмар" } });
       store.saveTaskRunResult(taskRun.id, { finalAnswer: answer, metrics: { generationTokensPerSecond: { value: 90, source: "llama.cpp" } } });
       return taskRun;
     };
-    const left = result(first.id, "Ответ первой");
-    const right = result(second.id, "Ответ второй");
-    // Второй результат той же модели: пара «модель против себя» в очередь попасть не должна.
-    result(first.id, "Ещё один ответ первой");
+    const left = result(cloud.id, "Ответ первой");
+    const right = result(otherCloud.id, "Ответ второй");
+    // Ещё один ответ той же модели и ответ локальной модели: ни пара с собой, ни локальная против облачной не годятся.
+    result(cloud.id, "Ещё один ответ первой");
+    result(local.id, "Ответ локальной");
 
     const queued = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
-    const body = queued.json() as { remaining: number; pair: { taskName: string; sides: Array<{ taskRunId: string; answer: string }>; reveal: string[] } };
+    const body = queued.json() as { remaining: number; pair: { taskName: string; description: string | null; modelKind: string; sides: Array<{ taskRunId: string; answer: string; resultSha: string | null }>; reveal: string[] } };
+    // Пары: две облачные модели между собой; локальная модель не с кем сравнить.
     expect(body.remaining).toBe(2);
     expect(body.pair.taskName).toBe("Аквариум");
-    expect(body.pair.sides.map((side) => side.taskRunId).includes(left.id) || body.pair.sides.map((side) => side.taskRunId).includes(right.id)).toBe(true);
-    expect(body.pair.sides.map((side) => side.answer).every((answer) => answer.length > 0)).toBe(true);
-    // В карточке пары нет ни модели, ни раннера, ни метрик — только ответ.
-    expect(JSON.stringify(body.pair.sides)).not.toMatch(/Кальмар|Осьминог|generationTokensPerSecond|codex/u);
+    expect(body.pair.description).toBe("Заметка о задаче");
+    expect(body.pair.modelKind).toBe("cloud");
+    expect(body.pair.sides.map((side) => side.taskRunId).sort()).not.toContain(undefined);
+    expect(JSON.stringify(body.pair.sides)).not.toMatch(/Кальмар|Осьминог|Локальная|generationTokensPerSecond|codex/u);
     expect(body.pair.reveal).toHaveLength(2);
 
     const [a, b] = body.pair.sides;
     await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: a!.taskRunId, rightTaskRunId: b!.taskRunId, winner: "left" } });
     const after = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
     expect((after.json() as { remaining: number }).remaining).toBe(1);
+    expect([left.id, right.id]).toHaveLength(2);
+    await app.close();
+    store.close();
+  });
+
+  it("честно сообщает, что слепой очереди нет, когда сравнивать не с чем", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-blind-empty-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай", tags: [] });
+    const local = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
+    const cloud = store.createModel({ name: "Облачная", kind: "cloud", provider: "openai", modelRef: "cloud" });
+    for (const modelId of [local.id, cloud.id]) {
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, modelId), { task: task.currentRevision });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: "Ответ" });
+    }
+
+    const queued = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
+    expect(queued.json()).toEqual({ pair: null, remaining: 0 });
     await app.close();
     store.close();
   });

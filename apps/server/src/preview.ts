@@ -12,6 +12,10 @@ export function renderPreviewArgv(argv: readonly string[], port: number): string
   return argv.map((argument) => argument.replaceAll("{port}", String(port)));
 }
 
+function previewKey(taskRunId: string, resultSha: string): string {
+  return `${taskRunId}:${resultSha}`;
+}
+
 export function removePreviewDirectory(directory: string): void {
   rmSync(directory, { recursive: true, force: true });
   try {
@@ -78,10 +82,15 @@ export async function waitReady(url: string, process: OwnedProcess, timeoutMs = 
   throw new Error(`Preview readiness timeout after ${timeoutMs} ms`);
 }
 
+type ActivePreview = { process: OwnedProcess; directory: string; taskRunId: string; resultSha: string; url: string; lease?: NodeJS.Timeout };
+
 export class PreviewManager {
-  #active: { process: OwnedProcess; directory: string; taskRunId: string; resultSha: string; url: string } | undefined;
-  #lease: NodeJS.Timeout | undefined;
-  #generation = 0;
+  // Слепое сравнение показывает два результата рядом, поэтому preview больше не один.
+  // ponytail: потолок в две штуки — столько же процессов dev-сервера, сколько экранов на странице.
+  static readonly maxActive = 2;
+  readonly #active = new Map<string, ActivePreview>();
+  readonly #generations = new Map<string, number>();
+  #stopGeneration = 0;
   #startTail: Promise<void> = Promise.resolve();
 
   constructor(
@@ -91,20 +100,23 @@ export class PreviewManager {
   ) {}
 
   async start(taskRunId: string, resultSha: string) {
-    const generation = ++this.#generation;
+    // Поколение считается по результату: перезапуск того же результата отменяет прежний старт,
+    // а запуск соседнего варианта — нет, иначе два экрана рядом не поднять.
+    const generation = (this.#generations.get(taskRunId) ?? 0) + 1;
+    this.#generations.set(taskRunId, generation);
+    const stopGeneration = this.#stopGeneration;
     const previous = this.#startTail;
     let release!: () => void;
     this.#startTail = new Promise((resolve) => { release = resolve; });
     await previous;
     try {
-      return await this.#start(taskRunId, resultSha, generation);
+      return await this.#start(taskRunId, resultSha, generation, stopGeneration);
     } finally {
       release();
     }
   }
 
-  async #start(taskRunId: string, resultSha: string, generation: number) {
-    await this.#stopActive();
+  async #start(taskRunId: string, resultSha: string, generation: number, stopGeneration: number) {
     const taskRun = this.store.getTaskRun(taskRunId);
     if (!taskRun) throw new Error("Task run not found");
     const version = resolveCompletedResultVersion(taskRun, resultSha);
@@ -144,12 +156,16 @@ export class PreviewManager {
       discard();
       throw error;
     }
-    if (generation !== this.#generation) {
+    if (generation !== this.#generations.get(taskRunId) || stopGeneration !== this.#stopGeneration) {
       await process.stop();
       discard();
       throw new Error("Preview start superseded");
     }
-    this.#active = { process, directory, taskRunId, resultSha: version.resultSha, url };
+    const key = previewKey(taskRunId, version.resultSha);
+    await this.#stopEntry(key);
+    // Свободное место освобождаем самым старым preview: он дальше всего от того, что смотрят сейчас.
+    while (this.#active.size >= PreviewManager.maxActive) await this.#stopEntry([...this.#active.keys()][0]!);
+    this.#active.set(key, { process, directory, taskRunId, resultSha: version.resultSha, url });
     this.heartbeat();
     return { taskRunId, resultSha: version.resultSha, url };
   }
@@ -159,34 +175,34 @@ export class PreviewManager {
   static readonly leaseMs = 120_000;
 
   heartbeat(): void {
-    if (!this.#active) return;
-    if (this.#lease) clearTimeout(this.#lease);
-    this.#lease = setTimeout(() => void this.stop(), PreviewManager.leaseMs);
+    for (const [key, entry] of this.#active) {
+      if (entry.lease) clearTimeout(entry.lease);
+      entry.lease = setTimeout(() => void this.#stopEntry(key), PreviewManager.leaseMs);
+    }
   }
 
   async stop(): Promise<void> {
-    this.#generation += 1;
-    await this.#stopActive();
+    this.#stopGeneration += 1;
+    for (const key of [...this.#active.keys()]) await this.#stopEntry(key);
   }
 
-  async #stopActive(): Promise<void> {
-    if (this.#lease) clearTimeout(this.#lease);
-    this.#lease = undefined;
-    const active = this.#active;
-    this.#active = undefined;
-    if (!active) return;
-    await active.process.stop();
-    removePreviewDirectory(active.directory);
+  async #stopEntry(key: string): Promise<void> {
+    const entry = this.#active.get(key);
+    if (!entry) return;
+    if (entry.lease) clearTimeout(entry.lease);
+    this.#active.delete(key);
+    await entry.process.stop();
+    removePreviewDirectory(entry.directory);
   }
 
   async stopIf(taskRunId: string, resultSha: string): Promise<void> {
-    if (this.#active?.taskRunId !== taskRunId || this.#active.resultSha !== resultSha.toLowerCase()) return;
-    await this.stop();
+    this.#generations.set(taskRunId, (this.#generations.get(taskRunId) ?? 0) + 1);
+    await this.#stopEntry(previewKey(taskRunId, resultSha.toLowerCase()));
   }
 
   async removeTaskRunPreviews(taskRunIds: string[]): Promise<void> {
     const ids = new Set(taskRunIds);
-    if (this.#active && ids.has(this.#active.taskRunId)) await this.stop();
+    for (const [key, entry] of [...this.#active]) if (ids.has(entry.taskRunId)) await this.#stopEntry(key);
     for (const taskRunId of ids) {
       rmSync(join(this.config.dataDir, "previews", taskRunId), { recursive: true, force: true });
     }

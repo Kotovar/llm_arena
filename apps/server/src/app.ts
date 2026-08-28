@@ -765,34 +765,63 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   /**
    * Слепая очередь: пару выбирает сервер, поэтому судья не знает, чьи ответы перед ним.
-   * Имена моделей отдаём отдельным полем — интерфейс показывает его только после вердикта.
+   * Сравниваем только сопоставимое — локальную модель с локальной, подписочную с подписочной,
+   * и web-результат с web-результатом. Имена моделей отдаём отдельным полем: интерфейс
+   * показывает его только после вердикта.
    */
   app.get("/api/reviews/pair/next", async () => {
     const judged = new Set(store.listPairReviews().map((review) => [review.first_task_run_id, review.second_task_run_id].join("|")));
-    const byRevision = new Map<string, ReturnType<typeof store.listCompletedResults>>();
+    type Candidate = {
+      taskRunId: string; revisionId: string; modelId: string; modelKind: "local-gguf" | "cloud"; taskName: string;
+      answer: string; previewSha: string | null;
+    };
+    const candidates: Candidate[] = [];
     for (const row of store.listCompletedResults()) {
-      byRevision.set(row.task_revision_id, [...(byRevision.get(row.task_revision_id) ?? []), row]);
+      const taskRun = store.getTaskRun(row.id);
+      if (!taskRun) continue;
+      const snapshot = parseGallerySnapshot(row.snapshot_json);
+      const selected = selectedResultVersionRecord(taskRun);
+      const previewable = Boolean(snapshot?.fixture?.preview) && Boolean(selected) && checksPassed(selected!.resultJson);
+      let answer = "";
+      try { answer = (JSON.parse(row.result_json ?? "{}") as { finalAnswer?: string }).finalAnswer ?? ""; } catch { answer = ""; }
+      candidates.push({
+        taskRunId: row.id,
+        revisionId: row.task_revision_id,
+        modelId: row.model_id,
+        modelKind: store.getModel(row.model_id)?.kind ?? "cloud",
+        taskName: row.task_name,
+        answer,
+        previewSha: previewable ? selected!.resultSha : null,
+      });
     }
-    const candidates = [...byRevision.values()].flatMap((results) => results.flatMap((left, index) => results
+    const byRevision = new Map<string, Candidate[]>();
+    for (const candidate of candidates) byRevision.set(candidate.revisionId, [...(byRevision.get(candidate.revisionId) ?? []), candidate]);
+    const pairs = [...byRevision.values()].flatMap((results) => results.flatMap((left, index) => results
       .slice(index + 1)
-      // Модель против самой себя ничего не решает, а уже осуждённую пару показывать второй раз незачем.
-      .filter((right) => right.model_id !== left.model_id && !judged.has([left.id, right.id].sort().join("|")))
+      .filter((right) => right.modelId !== left.modelId
+        // Локальная модель против облачной — сравнение разных весовых категорий, в слепую очередь не берём.
+        && right.modelKind === left.modelKind
+        // Либо оба запускаемые web-результаты, либо оба текстовые: иначе судить нечего.
+        && Boolean(right.previewSha) === Boolean(left.previewSha)
+        && !judged.has([left.taskRunId, right.taskRunId].sort().join("|")))
       .map((right) => [left, right] as const)));
-    const pair = candidates[Math.floor(Math.random() * candidates.length)];
+    const pair = pairs[Math.floor(Math.random() * pairs.length)];
     if (!pair) return { pair: null, remaining: 0 };
     const sides = Math.random() < 0.5 ? [pair[0], pair[1]] : [pair[1], pair[0]];
-    const answer = (row: (typeof sides)[number]) => {
-      try { return (JSON.parse(row.result_json ?? "{}") as { finalAnswer?: string }).finalAnswer ?? ""; }
-      catch { return ""; }
-    };
     return {
-      remaining: candidates.length,
+      remaining: pairs.length,
       pair: {
-        taskName: sides[0]!.task_name,
-        prompt: sides[0]!.task_prompt,
-        // Ни модели, ни раннера, ни метрик: скорость выдала бы локальный запуск не хуже имени.
-        sides: sides.map((row) => ({ taskRunId: row.id, answer: answer(row) })),
-        reveal: sides.map((row) => store.getModel(row.model_id)?.name ?? row.model_ref ?? "Неизвестная модель"),
+        taskName: sides[0]!.taskName,
+        // Полный промпт судье не нужен и занимает пол-экрана: показываем заметку о задаче.
+        description: store.taskDescriptionByRevision(sides[0]!.revisionId) ?? null,
+        modelKind: sides[0]!.modelKind,
+        sides: sides.map((side) => ({
+          taskRunId: side.taskRunId,
+          // Ни модели, ни раннера, ни метрик: скорость выдала бы локальный запуск не хуже имени.
+          resultSha: side.previewSha,
+          answer: side.previewSha ? "" : side.answer,
+        })),
+        reveal: sides.map((side) => store.getModel(side.modelId)?.name ?? "Неизвестная модель"),
       },
     };
   });
