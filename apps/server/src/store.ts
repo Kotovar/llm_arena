@@ -9,6 +9,8 @@ import {
   type CreateRun,
   type CreateTask,
   type ModelCapabilities,
+  type ModelEconomics,
+  modelEconomicsSchema,
   type Review,
   type RunStatus,
   type TaskImage,
@@ -19,6 +21,8 @@ type TaskRow = {
   id: string;
   current_revision_id: string | null;
   description: string | null;
+  /** Теги живут на задаче, а не на её версии: тегирование не должно плодить версию промпта. */
+  tags_json: string;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
@@ -51,6 +55,9 @@ type RunRow = {
   use_omp_agent: number;
   model_ref: string | null;
   reasoning_effort: string | null;
+  /** Сколько раз прогнать каждый промпт; 1 — обычный однократный прогон. */
+  repeat_count: number;
+  warmup_attempt: number;
   /** Разовая замена температуры профиля при перезапуске промпта; null — берём температуру профиля. */
   temperature: number | null;
   status: RunStatus;
@@ -88,6 +95,74 @@ type TaskRunRow = {
   selected_followup_id: string | null;
   started_at: string | null;
   finished_at: string | null;
+  created_at: string;
+};
+
+type LeaderboardTaskRunRow = {
+  run_id: string;
+  task_run_id: string | null;
+  model_id: string;
+  model_ref: string | null;
+  tags_json: string | null;
+  correctness: number | null;
+  code_quality: number | null;
+  ui_quality: number | null;
+  instruction_following: number | null;
+  generation_tps: number | null;
+};
+
+type CompletedResultRow = {
+  id: string;
+  task_revision_id: string;
+  result_json: string | null;
+  snapshot_json: string;
+  model_id: string;
+  model_ref: string | null;
+  task_name: string;
+  task_prompt: string;
+};
+
+type DecisionRow = {
+  id: string;
+  status: "completed" | "failed";
+  result_json: string | null;
+  run_id: string;
+  run_status: RunStatus;
+  model_id: string;
+  execution_profile_id: string | null;
+  tags_json: string;
+  correctness: number | null;
+  code_quality: number | null;
+  ui_quality: number | null;
+  instruction_following: number | null;
+};
+
+type PairVerdictRow = {
+  winner_task_run_id: string | null;
+  first_task_run_id: string;
+  second_task_run_id: string;
+  first_model_id: string;
+  second_model_id: string;
+  tags_json: string;
+};
+
+type PairReviewRow = {
+  id: string;
+  first_task_run_id: string;
+  second_task_run_id: string;
+  /** Победивший результат; null — ничья. Хранится идентификатором, чтобы вердикт пережил смену сторон местами. */
+  winner_task_run_id: string | null;
+  comment: string;
+  updated_at: string;
+};
+
+type TaskAttemptRow = {
+  id: string;
+  task_run_id: string;
+  attempt: number;
+  status: RunStatus;
+  result_json: string | null;
+  error: string | null;
   created_at: string;
 };
 
@@ -133,6 +208,7 @@ type ModelRow = {
   path: string | null;
   alias: string | null;
   capabilities_json: string;
+  economics_json: string | null;
   mmproj_path: string | null;
   archived_at: string | null;
   created_at: string;
@@ -140,8 +216,9 @@ type ModelRow = {
 };
 
 const defaultModelCapabilities: ModelCapabilities = { toolUse: false, vision: false, reasoning: false };
-type StoredModelInput = Omit<CreateModel, "capabilities"> & {
+type StoredModelInput = Omit<CreateModel, "capabilities" | "economics"> & {
   capabilities?: ModelCapabilities;
+  economics?: ModelEconomics | null;
   mmprojPath?: string | null;
 };
 
@@ -158,6 +235,12 @@ function parseCapabilities(value: string): ModelCapabilities {
   }
 }
 
+function parseEconomics(value: string | null): ModelEconomics | null {
+  if (!value) return null;
+  const parsed = modelEconomicsSchema.safeParse(JSON.parse(value));
+  return parsed.success ? parsed.data : null;
+}
+
 function mapModel(row: ModelRow) {
   const capabilities = row.kind === "cloud" ? cloudModelCapabilities : parseCapabilities(row.capabilities_json);
   return {
@@ -169,6 +252,7 @@ function mapModel(row: ModelRow) {
     path: row.path,
     alias: row.alias,
     capabilities,
+    economics: parseEconomics(row.economics_json),
     mmprojPath: row.mmproj_path,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -194,15 +278,23 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS run_tasks (run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(run_id, position));
     CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS task_attempts (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, attempt INTEGER NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, attempt));
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_run_followups (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, task_run_id TEXT NOT NULL, position INTEGER NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, position));
+    CREATE TABLE IF NOT EXISTS pair_reviews (id TEXT PRIMARY KEY, first_task_run_id TEXT NOT NULL, second_task_run_id TEXT NOT NULL, winner_task_run_id TEXT, comment TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL, UNIQUE(first_task_run_id, second_task_run_id));
     CREATE TABLE IF NOT EXISTS gallery_featured (task_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, task_run_id TEXT NOT NULL UNIQUE, updated_at TEXT NOT NULL, PRIMARY KEY(task_revision_id, model_id));
     CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
   `);
   // Описание — заметка «для себя», в модель не уходит и не должно замораживаться в версии промпта:
   // иначе у старых прогонов его не видно. Поэтому оно живёт на задаче, а старые значения переносим.
   const taskColumns = sqlite.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+  // Тег — это классификация промпта для человека, а не часть текста для модели. На версии он замораживал
+  // бы разметку и при правке плодил новую версию, поэтому переносим его на задачу, как раньше описание.
+  if (!taskColumns.some((column) => column.name === "tags_json")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'");
+    sqlite.exec("UPDATE tasks SET tags_json = COALESCE((SELECT tags_json FROM task_revisions WHERE id = tasks.current_revision_id), '[]')");
+  }
   if (!taskColumns.some((column) => column.name === "description")) {
     sqlite.exec("ALTER TABLE tasks ADD COLUMN description TEXT");
     sqlite.exec("UPDATE tasks SET description = (SELECT description FROM task_revisions WHERE id = tasks.current_revision_id)");
@@ -216,6 +308,14 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!runColumns.some((column) => column.name === "temperature")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN temperature REAL");
+  }
+  // Каждая колонка проверяется отдельно: одна проверка на два ALTER после падения между ними
+  // навсегда оставила бы вторую колонку ненаписанной.
+  if (!runColumns.some((column) => column.name === "repeat_count")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!runColumns.some((column) => column.name === "warmup_attempt")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN warmup_attempt INTEGER NOT NULL DEFAULT 0");
   }
   if (!runColumns.some((column) => column.name === "model_ref")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN model_ref TEXT");
@@ -270,12 +370,20 @@ function migrate(sqlite: DatabaseSync): void {
   if (!modelColumns.some((column) => column.name === "archived_at")) {
     sqlite.exec("ALTER TABLE models ADD COLUMN archived_at TEXT");
   }
+  if (!modelColumns.some((column) => column.name === "economics_json")) {
+    sqlite.exec("ALTER TABLE models ADD COLUMN economics_json TEXT");
+  }
   if (!modelColumns.some((column) => column.name === "capabilities_json")) {
     sqlite.exec("ALTER TABLE models ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{\"toolUse\":false,\"vision\":false,\"reasoning\":false}'");
   }
   if (!modelColumns.some((column) => column.name === "mmproj_path")) {
     sqlite.exec("ALTER TABLE models ADD COLUMN mmproj_path TEXT");
   }
+}
+
+/** Теги вводятся строкой через запятую: пустые куски и повторы отбрасываем, порядок сохраняем. */
+function normalizeTags(tags: readonly string[]): string[] {
+  return [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
 }
 
 function mapTaskRevision(row: TaskRevisionRow): TaskRevision {
@@ -334,6 +442,7 @@ export function createStore(filename: string) {
     return {
       id: task.id,
       ...(task.description ? { description: task.description } : {}),
+      tags: JSON.parse(task.tags_json) as string[],
       archivedAt: task.archived_at,
       createdAt: task.created_at,
       updatedAt: task.updated_at,
@@ -425,8 +534,8 @@ export function createStore(filename: string) {
         const id = randomUUID();
         const createdAt = now();
         sqlite
-          .prepare("INSERT INTO tasks (id, current_revision_id, description, archived_at, created_at, updated_at) VALUES (?, NULL, ?, NULL, ?, ?)")
-          .run(id, input.description ?? null, createdAt, createdAt);
+          .prepare("INSERT INTO tasks (id, current_revision_id, description, tags_json, archived_at, created_at, updated_at) VALUES (?, NULL, ?, ?, NULL, ?, ?)")
+          .run(id, input.description ?? null, JSON.stringify(normalizeTags(input.tags ?? [])), createdAt, createdAt);
         writeTaskRevision(id, 1, input);
         return materializeTask(id)!;
       });
@@ -443,13 +552,26 @@ export function createStore(filename: string) {
         return materializeTask(id)!;
       });
     },
+    setTaskTags(id: string, tags: readonly string[]) {
+      const current = materializeTask(id);
+      if (!current) throw new Error(`Task ${id} not found`);
+      sqlite.prepare("UPDATE tasks SET tags_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(normalizeTags(tags)), now(), id);
+      return materializeTask(id)!;
+    },
     getTaskRevision,
-    /** Описание задачи по её версии: у прогонов на руках только task_revision_id. */
+    /** Описание и теги задачи по её версии: у прогонов на руках только task_revision_id. */
     taskDescriptionByRevision(taskRevisionId: string): string | null {
       return one<{ description: string | null }>(
         "SELECT tasks.description AS description FROM tasks JOIN task_revisions ON task_revisions.task_id = tasks.id WHERE task_revisions.id = ?",
         taskRevisionId,
       )?.description ?? null;
+    },
+    taskTagsByRevision(taskRevisionId: string): string[] {
+      const row = one<{ tags_json: string }>(
+        "SELECT tasks.tags_json AS tags_json FROM tasks JOIN task_revisions ON task_revisions.task_id = tasks.id WHERE task_revisions.id = ?",
+        taskRevisionId,
+      );
+      return row ? JSON.parse(row.tags_json) as string[] : [];
     },
     listTasks() {
       return all<TaskRow>("SELECT * FROM tasks WHERE archived_at IS NULL ORDER BY created_at").map((row) => materializeTask(row.id)!);
@@ -469,8 +591,8 @@ export function createStore(filename: string) {
       const capabilities = input.kind === "cloud" ? cloudModelCapabilities : input.capabilities ?? defaultModelCapabilities;
       const position = one<{ position: number }>("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM models")?.position ?? 0;
       sqlite
-        .prepare("INSERT INTO models (id, position, name, kind, provider, model_ref, path, alias, capabilities_json, mmproj_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, position, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(capabilities), input.mmprojPath ?? null, createdAt, createdAt);
+        .prepare("INSERT INTO models (id, position, name, kind, provider, model_ref, path, alias, capabilities_json, economics_json, mmproj_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, position, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(capabilities), input.economics ? JSON.stringify(input.economics) : null, input.mmprojPath ?? null, createdAt, createdAt);
       return mapModel(one<ModelRow>("SELECT * FROM models WHERE id = ?", id)!);
     },
     getModel(id: string) {
@@ -510,6 +632,14 @@ export function createStore(filename: string) {
       sqlite.prepare("UPDATE models SET capabilities_json = ?, mmproj_path = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(nextCapabilities), mmprojPath, updatedAt, id);
       return mapModel({ ...row, capabilities_json: JSON.stringify(nextCapabilities), mmproj_path: mmprojPath, updated_at: updatedAt });
+    },
+    updateModelEconomics(id: string, economics: ModelEconomics | null) {
+      const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NULL", id);
+      if (!row) throw new Error("Model not found");
+      const updatedAt = now();
+      const economicsJson = economics ? JSON.stringify(economics) : null;
+      sqlite.prepare("UPDATE models SET economics_json = ?, updated_at = ? WHERE id = ?").run(economicsJson, updatedAt, id);
+      return mapModel({ ...row, economics_json: economicsJson, updated_at: updatedAt });
     },
     archiveModel(id: string) {
       const timestamp = now();
@@ -607,8 +737,8 @@ export function createStore(filename: string) {
         const id = randomUUID();
         const createdAt = now();
         sqlite
-          .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
-          .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, createdAt);
+          .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, repeat_count, warmup_attempt, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+          .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, input.repeatCount ?? 1, input.warmupAttempt ? 1 : 0, createdAt);
         const insertTask = sqlite.prepare("INSERT INTO run_tasks (run_id, task_revision_id, position) VALUES (?, ?, ?)");
         input.taskRevisionIds.forEach((taskRevisionId, position) => insertTask.run(id, taskRevisionId, position));
         return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
@@ -657,6 +787,24 @@ export function createStore(filename: string) {
         ORDER BY benchmark_runs.sequence
       `);
     },
+    /**
+     * Строки лидерборда по промптам: срез по тегам берётся из версии промпта, какой её видела модель,
+     * а не из текущих тегов задачи. Запуск без промптов остаётся строкой с пустыми полями.
+     */
+    listLeaderboardTaskRuns() {
+      return all<LeaderboardTaskRunRow>(`
+        SELECT benchmark_runs.id AS run_id, task_runs.id AS task_run_id, benchmark_runs.model_id, benchmark_runs.model_ref,
+               tasks.tags_json,
+               reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following,
+               json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value') AS generation_tps
+        FROM benchmark_runs
+        LEFT JOIN task_runs ON task_runs.benchmark_run_id = benchmark_runs.id
+        LEFT JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
+        LEFT JOIN tasks ON tasks.id = task_revisions.task_id
+        LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
+        ORDER BY benchmark_runs.sequence
+      `);
+    },
     deleteRuns,
     deleteTaskRun,
     createTaskRun(benchmarkRunId: string, taskRevisionId: string, position: number, artifactPath: string, snapshot: unknown) {
@@ -680,6 +828,99 @@ export function createStore(filename: string) {
     },
     updateTaskRunResult(id: string, result: unknown) {
       sqlite.prepare("UPDATE task_runs SET result_json = ? WHERE id = ?").run(JSON.stringify(result), id);
+    },
+    /** Повторная попытка того же промпта: нулевая — прогревочная, её цифры в медианы не идут. */
+    recordTaskAttempt(taskRunId: string, attempt: number, result: unknown, status: Exclude<RunStatus, "pending" | "running">, error?: string) {
+      sqlite
+        .prepare("INSERT INTO task_attempts (id, task_run_id, attempt, status, result_json, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(randomUUID(), taskRunId, attempt, status, JSON.stringify(result), error ?? null, now());
+    },
+    listTaskAttempts(taskRunId: string) {
+      return all<TaskAttemptRow>("SELECT * FROM task_attempts WHERE task_run_id = ? ORDER BY attempt", taskRunId);
+    },
+    taskRunAggregate(taskRunId: string) {
+      const measured = this.listTaskAttempts(taskRunId).filter((row) => row.attempt > 0);
+      if (measured.length < 2) return undefined;
+      const completed = measured.filter((row) => row.status === "completed");
+      const metric = (name: "generationTokensPerSecond" | "totalDurationMs") => completed
+        .map((row) => (JSON.parse(row.result_json ?? "{}") as { metrics?: Record<string, { value?: number | null }> }).metrics?.[name]?.value)
+        .filter((value): value is number => typeof value === "number");
+      const summarize = (values: number[]) => values.length
+        ? { median: values.toSorted((left, right) => left - right)[Math.floor(values.length / 2)]!, min: Math.min(...values), max: Math.max(...values) }
+        : { median: null, min: null, max: null };
+      const speed = summarize(metric("generationTokensPerSecond"));
+      const duration = summarize(metric("totalDurationMs"));
+      return {
+        attempts: measured.length,
+        completedAttempts: completed.length,
+        failedAttempts: measured.length - completed.length,
+        medianTokensPerSecond: speed.median,
+        minTokensPerSecond: speed.min,
+        maxTokensPerSecond: speed.max,
+        medianDurationMs: duration.median,
+        minDurationMs: duration.min,
+        maxDurationMs: duration.max,
+      };
+    },
+    /** Пара симметрична: порядок сторон в интерфейсе случаен, поэтому ключ нормализуем. */
+    savePairReview(taskRunIds: [string, string], winnerTaskRunId: string | null, comment: string) {
+      const [first, second] = [...taskRunIds].sort() as [string, string];
+      const updatedAt = now();
+      sqlite.prepare(`
+        INSERT INTO pair_reviews (id, first_task_run_id, second_task_run_id, winner_task_run_id, comment, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(first_task_run_id, second_task_run_id) DO UPDATE SET winner_task_run_id = excluded.winner_task_run_id, comment = excluded.comment, updated_at = excluded.updated_at
+      `).run(randomUUID(), first, second, winnerTaskRunId, comment, updatedAt);
+      return one<PairReviewRow>("SELECT * FROM pair_reviews WHERE first_task_run_id = ? AND second_task_run_id = ?", first, second)!;
+    },
+    /** Завершённые результаты, из которых собирается слепая очередь: модель нужна, чтобы не сравнивать её с собой. */
+    listCompletedResults() {
+      return all<CompletedResultRow>(`
+        SELECT task_runs.id, task_runs.task_revision_id, task_runs.result_json, task_runs.snapshot_json,
+               benchmark_runs.model_id, benchmark_runs.model_ref,
+               task_revisions.name AS task_name, task_revisions.prompt AS task_prompt
+        FROM task_runs
+        JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
+        JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
+        WHERE task_runs.status = 'completed'
+        ORDER BY task_runs.created_at
+      `);
+    },
+    /** Терминальные результаты с профилем, тегами версии промпта и оценкой: сырьё для точек решения. */
+    listDecisionRows() {
+      return all<DecisionRow>(`
+        SELECT task_runs.id, task_runs.status, task_runs.result_json,
+               benchmark_runs.id AS run_id, benchmark_runs.status AS run_status, benchmark_runs.model_id, benchmark_runs.execution_profile_id,
+               tasks.tags_json,
+               reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following
+        FROM task_runs
+        JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
+        JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
+        JOIN tasks ON tasks.id = task_revisions.task_id
+        LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
+        WHERE task_runs.status IN ('completed', 'failed')
+        ORDER BY task_runs.created_at
+      `);
+    },
+    /** Вердикты с моделями обеих сторон и тегами версии промпта: сырьё для сводки побед. */
+    listPairVerdicts() {
+      return all<PairVerdictRow>(`
+        SELECT pair_reviews.winner_task_run_id,
+               pair_reviews.first_task_run_id, pair_reviews.second_task_run_id,
+               first_run.model_id AS first_model_id,
+               second_run.model_id AS second_model_id,
+               tasks.tags_json
+        FROM pair_reviews
+        JOIN task_runs AS first_task ON first_task.id = pair_reviews.first_task_run_id
+        JOIN task_runs AS second_task ON second_task.id = pair_reviews.second_task_run_id
+        JOIN benchmark_runs AS first_run ON first_run.id = first_task.benchmark_run_id
+        JOIN benchmark_runs AS second_run ON second_run.id = second_task.benchmark_run_id
+        JOIN task_revisions ON task_revisions.id = first_task.task_revision_id
+        JOIN tasks ON tasks.id = task_revisions.task_id
+        ORDER BY pair_reviews.updated_at
+      `).map((row) => ({ ...row, winnerModelId: row.winner_task_run_id === null ? null : row.winner_task_run_id === row.first_task_run_id ? row.first_model_id : row.second_model_id }));
+    },
+    listPairReviews() {
+      return all<PairReviewRow>("SELECT * FROM pair_reviews ORDER BY updated_at");
     },
     getTaskRun(id: string) {
       const row = one<TaskRunRow>("SELECT * FROM task_runs WHERE id = ?", id);

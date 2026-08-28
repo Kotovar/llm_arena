@@ -2,6 +2,8 @@ export type Task = {
   id: string;
   // Заметка «для себя»: не уходит в модель и не привязана к версии промпта.
   description?: string;
+  /** Теги живут на задаче: их правка не создаёт новую версию промпта. */
+  tags: string[];
   currentRevision: {
     id: string;
     taskId: string;
@@ -33,6 +35,8 @@ export type Model = {
   path: string | null;
   alias: string | null;
   capabilities: { toolUse: boolean; vision: boolean; reasoning: boolean };
+  /** Оценка пользователя: месячная подписка и ожидаемое число прогонов. Нет — цену не показываем. */
+  economics: { monthlyCost: number; includedRunEstimate: number } | null;
   mmprojPath: string | null;
   sizeBytes?: number;
   expertCount?: number;
@@ -93,6 +97,7 @@ export type LeaderboardEntry = {
   reviewedTaskRunCount: number;
   scorePercent: number | null;
   generationTokensPerSecond: number | null;
+  estimatedCostPerRun: number | null;
   criteria: { correctness: number | null; codeQuality: number | null; uiQuality: number | null; instructionFollowing: number | null };
 };
 export type Fixture = { id: string; name: string; checks: Array<{ id: string; label: string }>; preview?: unknown };
@@ -136,7 +141,7 @@ export type GalleryMetrics = {
 export type GalleryResult = {
   taskRunId: string;
   runId: string;
-  prompt: { id: string; taskId?: string | null; name: string; description?: string | null; prompt: string };
+  prompt: { id: string; taskId?: string | null; name: string; description?: string | null; prompt: string; tags?: string[] };
   model: { id: string; name: string; kind?: Model["kind"]; modelRef?: string };
   reasoningEffort?: string | null;
   profile?: { name: string; context: number | "auto" } | null;
@@ -151,11 +156,27 @@ export type GalleryResult = {
   metrics?: GalleryMetrics;
 };
 
+/** Сводка повторов промпта: приходит только когда повторов было больше одного. */
+export type TaskRunAggregate = {
+  attempts: number;
+  completedAttempts: number;
+  failedAttempts: number;
+  medianTokensPerSecond: number | null;
+  minTokensPerSecond: number | null;
+  maxTokensPerSecond: number | null;
+  medianDurationMs: number | null;
+  minDurationMs: number | null;
+  maxDurationMs: number | null;
+};
+
 export type TaskRun = {
   id: string;
   task_revision_id: string;
   taskName?: string;
   taskDescription?: string | null;
+  /** Теги задачи на момент просмотра: они не версионируются вместе с промптом. */
+  taskTags?: string[];
+  attempts?: TaskRunAggregate | null;
   position: number;
   status: string;
   snapshot_json: string;
@@ -195,4 +216,54 @@ export type Run = {
   reviewed_count?: number;
   task_count?: number;
   taskRuns?: TaskRun[];
+};
+
+/** Паспорт условий прогона из снапшота: неизвестное поле — `null`, а не догадка. */
+export type RunEnvironment = {
+  runnerKind: string;
+  gpu: { name: string; totalMiB: number; usedMiB: number; freeMiB: number } | null;
+  runner: { path: string; version: string | null };
+  llamaServer: { path: string; version: string | null } | null;
+  ggufSha256: string | null;
+};
+
+/** Слепой парный вердикт: победитель хранится идентификатором результата, null — ничья. */
+export type PairReview = {
+  taskRunIds: [string, string];
+  winnerTaskRunId: string | null;
+  comment: string;
+  updatedAt: string;
+};
+
+/** Точка решения: одна модель с одним профилем в одном срезе нагрузки. null — метрику не мерили. */
+export type DecisionPoint = {
+  modelId: string;
+  modelName: string;
+  modelKind: "local-gguf" | "cloud";
+  profileId: string | null;
+  profileName: string | null;
+  tag: string | null;
+  untagged: boolean;
+  sampleCount: number;
+  runCount: number;
+  /** Прогоны, оборванные целиком: упавшие на старте или остановленные вручную. */
+  interruptedRunCount: number;
+  qualityPercent: number | null;
+  medianTokensPerSecond: number | null;
+  medianDurationMs: number | null;
+  peakVramMiB: number | null;
+  failureRate: number;
+  estimatedCostPerRun: number | null;
+};
+
+/** Сводка слепых вердиктов по модели. winPercent = null — решённых пар слишком мало для процента. */
+export type PairSummary = {
+  modelId: string;
+  modelName: string;
+  wins: number;
+  losses: number;
+  ties: number;
+  decided: number;
+  winPercent: number | null;
+  opponents: Array<{ modelId: string; modelName: string; wins: number; losses: number; ties: number; decided: number }>;
 };

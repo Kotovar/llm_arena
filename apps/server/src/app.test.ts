@@ -345,7 +345,7 @@ describe("REST API", () => {
     const exported = await app.inject({ method: "GET", url: "/api/tasks/export" });
 
     expect(exported.headers["content-disposition"]).toContain("llm-arena-prompts.json");
-    expect(exported.json()).toEqual([{ name: "Часы", description: "Проверяем таймеры", prompt: "Сделай часы" }]);
+    expect(exported.json()).toEqual([{ name: "Часы", description: "Проверяем таймеры", prompt: "Сделай часы", tags: ["ui"] }]);
 
     const imported = await app.inject({ method: "POST", url: "/api/tasks/import", payload: [
       { name: "Часы", description: "Проверяем таймеры и будильник", prompt: "Сделай часы с будильником" },
@@ -1281,6 +1281,374 @@ describe("REST API", () => {
     expect(response.statusCode).toBe(202);
     expect(cancelled).toEqual([followup.id]);
     expect(store.getRun(run.id)?.status).toBe("completed");
+    await app.close();
+    store.close();
+  });
+
+  it("stores a blind pair verdict and rejects a pair from different prompts", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-pair-review-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const other = store.createTask({ name: "Other", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = (revisionId: string, position: number) => {
+      const created = store.createTaskRun(run.id, revisionId, position, join(directory, `t${position}`), { task: { id: revisionId } });
+      store.saveTaskRunResult(created.id, { finalAnswer: "A" });
+      return created;
+    };
+    const left = taskRun(task.currentRevision.id, 0);
+    const right = taskRun(task.currentRevision.id, 1);
+    const foreign = taskRun(other.currentRevision.id, 2);
+
+    const created = await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: left.id, rightTaskRunId: right.id, winner: "left" } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ leftTaskRunId: left.id, rightTaskRunId: right.id, winner: "left" });
+
+    // Повторный вердикт по той же паре заменяет прежний, в том числе когда стороны поменяли местами.
+    await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: right.id, rightTaskRunId: left.id, winner: "tie" } });
+    const list = await app.inject({ method: "GET", url: "/api/reviews/pair" });
+    expect(list.json()).toEqual([expect.objectContaining({ taskRunIds: expect.arrayContaining([left.id, right.id]), winnerTaskRunId: null })]);
+    expect((list.json() as unknown[]).length).toBe(1);
+
+    const mismatched = await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: left.id, rightTaskRunId: foreign.id, winner: "left" } });
+    expect(mismatched.statusCode).toBe(400);
+    expect(mismatched.json()).toMatchObject({ error: "Pair review requires the same prompt revision" });
+
+    const selfPair = await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: left.id, rightTaskRunId: left.id, winner: "tie" } });
+    expect(selfPair.statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
+  it("подбирает слепую пару из сопоставимых моделей и не отдаёт её опознавательных признаков", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-blind-queue-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай аквариум", description: "Заметка о задаче", tags: [] });
+    const cloud = store.createModel({ name: "Кальмар", kind: "cloud", provider: "openai", modelRef: "squid" });
+    const otherCloud = store.createModel({ name: "Осьминог", kind: "cloud", provider: "openai", modelRef: "octopus" });
+    const local = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
+    const result = (modelId: string, answer: string) => {
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, answer), { task: task.currentRevision, model: { name: "Кальмар" } });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: answer, metrics: { generationTokensPerSecond: { value: 90, source: "llama.cpp" } } });
+      return taskRun;
+    };
+    const left = result(cloud.id, "Ответ первой");
+    const right = result(otherCloud.id, "Ответ второй");
+    // Ещё один ответ той же модели и ответ локальной модели: ни пара с собой, ни локальная против облачной не годятся.
+    result(cloud.id, "Ещё один ответ первой");
+    result(local.id, "Ответ локальной");
+
+    // Срез слепой оценки: тег есть только у промпта «Аквариум», поэтому в срезе те же две пары.
+    expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?tag=%D0%BA%D0%BE%D0%B4" })).json() as { remaining: number }).remaining).toBe(0);
+    store.setTaskTags(task.id, ["код"]);
+    expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?tag=%D0%BA%D0%BE%D0%B4" })).json() as { remaining: number }).remaining).toBe(2);
+    expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?untagged=1" })).json() as { remaining: number }).remaining).toBe(0);
+
+    const queued = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
+    const body = queued.json() as { remaining: number; pair: { taskName: string; description: string | null; modelKind: string; sides: Array<{ taskRunId: string; answer: string; resultSha: string | null }> } };
+    // Пары: две облачные модели между собой; локальная модель не с кем сравнить.
+    expect(body.remaining).toBe(2);
+    expect(body.pair.taskName).toBe("Аквариум");
+    expect(body.pair.description).toBe("Заметка о задаче");
+    expect(body.pair.modelKind).toBe("cloud");
+    expect(body.pair.sides.map((side) => side.taskRunId).sort()).not.toContain(undefined);
+    // Имён моделей нет во всём ответе очереди, а не только в карточках сторон.
+    expect(JSON.stringify(body.pair)).not.toMatch(/Кальмар|Осьминог|Локальная|generationTokensPerSecond|codex/u);
+
+    const [a, b] = body.pair.sides;
+    // Имена моделей приходят только вместе с сохранённым вердиктом.
+    const verdict = await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: a!.taskRunId, rightTaskRunId: b!.taskRunId, winner: "left" } });
+    expect((verdict.json() as { reveal: string[] }).reveal).toHaveLength(2);
+    const after = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
+    expect((after.json() as { remaining: number }).remaining).toBe(1);
+    expect([left.id, right.id]).toHaveLength(2);
+    await app.close();
+    store.close();
+  });
+
+  it("честно сообщает, что слепой очереди нет, когда сравнивать не с чем", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-blind-empty-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай", tags: [] });
+    const local = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
+    const cloud = store.createModel({ name: "Облачная", kind: "cloud", provider: "openai", modelRef: "cloud" });
+    for (const modelId of [local.id, cloud.id]) {
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, modelId), { task: task.currentRevision });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: "Ответ" });
+    }
+
+    const queued = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
+    expect(queued.json()).toEqual({ pair: null, remaining: 0 });
+    await app.close();
+    store.close();
+  });
+
+  it("считает цену прогона только из введённой пользователем оценки", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-economics-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const priced = store.createModel({ name: "Оценённая", kind: "cloud", provider: "openai", modelRef: "priced" });
+    const free = store.createModel({ name: "Без оценки", kind: "cloud", provider: "openai", modelRef: "free" });
+    for (const modelId of [priced.id, free.id]) {
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+      store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, modelId), { task: task.currentRevision });
+    }
+    expect((await app.inject({ method: "PUT", url: `/api/models/${priced.id}/economics`, payload: { economics: { monthlyCost: 20, includedRunEstimate: 100 } } })).statusCode).toBe(200);
+    // Половина оценки — не оценка: такую заявку отклоняем, а не додумываем второе число.
+    expect((await app.inject({ method: "PUT", url: `/api/models/${free.id}/economics`, payload: { economics: { monthlyCost: 20 } } })).statusCode).toBe(400);
+
+    const entries = (await app.inject({ method: "GET", url: "/api/leaderboard" })).json() as Array<{ modelId: string; estimatedCostPerRun: number | null }>;
+    expect(entries.find((entry) => entry.modelId === priced.id)?.estimatedCostPerRun).toBeCloseTo(0.2);
+    expect(entries.find((entry) => entry.modelId === free.id)?.estimatedCostPerRun).toBeNull();
+    await app.close();
+    store.close();
+  });
+
+  it("сводит слепые вердикты по моделям и парам соперников", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-pair-summary-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+
+    const agentTask = store.createTask({ name: "Agent", kind: "prompt", prompt: "Answer", tags: ["coding-agent"] });
+    const plainTask = store.createTask({ name: "Plain", kind: "prompt", prompt: "Answer", tags: [] });
+    const agent = store.createModel({ name: "Agent Model", kind: "cloud", provider: "openai", modelRef: "agent" });
+    const rival = store.createModel({ name: "Rival Model", kind: "cloud", provider: "openai", modelRef: "rival" });
+    const result = (modelId: string, revisionId: string, position: number) => {
+      const run = store.createRun({ taskRevisionIds: [revisionId], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+      const taskRun = store.createTaskRun(run.id, revisionId, position, join(directory, `${modelId}-${position}`), { task: { id: revisionId } });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: "A" });
+      return taskRun;
+    };
+    const verdict = async (left: string, right: string, winner: "left" | "right" | "tie") =>
+      app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: left, rightTaskRunId: right, winner } });
+
+    for (const position of [0, 1]) {
+      await verdict(result(agent.id, agentTask.currentRevision.id, position).id, result(rival.id, agentTask.currentRevision.id, position).id, "left");
+    }
+    await verdict(result(agent.id, agentTask.currentRevision.id, 2).id, result(rival.id, agentTask.currentRevision.id, 2).id, "tie");
+    // Вердикт по промпту из другого среза в срез coding-agent попасть не должен.
+    await verdict(result(agent.id, plainTask.currentRevision.id, 3).id, result(rival.id, plainTask.currentRevision.id, 3).id, "right");
+
+    const sliced = await app.inject({ method: "GET", url: "/api/reviews/pair/summary?tag=coding-agent" });
+    expect(sliced.json()).toEqual([
+      // Три пары — ниже порога уверенности, поэтому процент не показываем, только счёт.
+      expect.objectContaining({ modelName: "Agent Model", wins: 2, losses: 0, ties: 1, decided: 3, winPercent: null }),
+      expect.objectContaining({ modelName: "Rival Model", wins: 0, losses: 2, ties: 1, decided: 3, winPercent: null }),
+    ]);
+    expect((sliced.json() as Array<{ opponents: Array<{ modelName: string; wins: number; losses: number }> }>)[0]!.opponents)
+      .toEqual([expect.objectContaining({ modelName: "Rival Model", wins: 2, losses: 0, ties: 1 })]);
+
+    const all = await app.inject({ method: "GET", url: "/api/reviews/pair/summary" });
+    expect((all.json() as Array<{ modelName: string; wins: number; losses: number; decided: number }>)).toEqual([
+      expect.objectContaining({ modelName: "Agent Model", wins: 2, losses: 1, decided: 4 }),
+      expect.objectContaining({ modelName: "Rival Model", wins: 1, losses: 2, decided: 4 }),
+    ]);
+    await app.close();
+    store.close();
+  });
+
+  it("переносит теги через экспорт и импорт промптов", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-tags-transfer-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай", tags: [] });
+    store.setTaskTags(task.id, ["код"]);
+
+    const exported = (await app.inject({ method: "GET", url: "/api/tasks/export" })).json() as Array<{ name: string; tags?: string[] }>;
+    expect(exported).toEqual([expect.objectContaining({ name: "Аквариум", tags: ["код"] })]);
+
+    // Импорт того же файла в чистую базу восстанавливает теги.
+    const fresh = createStore(join(directory, "fresh.sqlite"));
+    const freshApp = buildApp({ store: fresh, config: loadConfig("../../arena.config.yaml") });
+    expect((await freshApp.inject({ method: "POST", url: "/api/tasks/import", payload: exported })).json()).toEqual({ created: 1, updated: 0 });
+    expect(fresh.listTasks()[0]?.tags).toEqual(["код"]);
+
+    // Файл без тегов не снимает уже проставленные: молчание — не команда «убрать».
+    await freshApp.inject({ method: "POST", url: "/api/tasks/import", payload: [{ name: "Аквариум", prompt: "Сделай иначе" }] });
+    expect(fresh.listTasks()[0]?.tags).toEqual(["код"]);
+    await freshApp.close();
+    fresh.close();
+    await app.close();
+    store.close();
+  });
+
+  it("тегирует промпт, не трогая его версию и галерею", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-tags-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Аквариум", kind: "coding", prompt: "Сделай", fixtureId: "web-app", tags: [] });
+    const model = store.createModel({ name: "Модель", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const source = join(directory, "fixture");
+    mkdirSync(source);
+    writeFileSync(join(source, "index.html"), "<h1>ok</h1>");
+    const artifactPath = join(directory, "result");
+    const artifacts = finalizeWorkspace(prepareWorkspace(source, artifactPath));
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, artifactPath, {
+      task: task.currentRevision,
+      fixture: { id: "web-app", name: "Web", source, checks: [], preview: { command: { argv: ["preview", "{port}"] }, readyPath: "/" } },
+    });
+    store.saveTaskRunResult(taskRun.id, { artifacts, checks: [] });
+
+    const before = (await app.inject({ method: "GET", url: "/api/gallery" })).json() as Array<{ prompt: { id: string; tags: string[] } }>;
+    expect(before).toHaveLength(1);
+    expect(before[0]!.prompt.tags).toEqual([]);
+
+    const tagged = await app.inject({ method: "PUT", url: `/api/tasks/${task.id}/tags`, payload: { tags: ["код", " код ", ""] } });
+    expect(tagged.statusCode).toBe(200);
+    expect(tagged.json()).toMatchObject({ tags: ["код"], currentRevision: { id: task.currentRevision.id, revision: 1 } });
+
+    // Тегирование не версия промпта: строка галереи и её версия остались теми же.
+    const after = (await app.inject({ method: "GET", url: "/api/gallery" })).json() as Array<{ prompt: { id: string; tags: string[] } }>;
+    expect(after).toHaveLength(1);
+    expect(after[0]!.prompt.id).toBe(before[0]!.prompt.id);
+    expect(after[0]!.prompt.tags).toEqual(["код"]);
+
+    // Срез нагрузки теперь видит тег, хотя версия промпта его не знает.
+    const sliced = (await app.inject({ method: "GET", url: "/api/leaderboard?tag=%D0%BA%D0%BE%D0%B4" })).json() as unknown[];
+    expect(sliced).toHaveLength(1);
+    await app.close();
+    store.close();
+  });
+
+  it("регистрирует лидерборд и аналитику из отдельных модулей", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-routes-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+
+    expect((await app.inject({ method: "GET", url: "/api/leaderboard" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points" })).statusCode).toBe(200);
+    // Схема среза общая: невозможная комбинация отклоняется одинаково в обоих модулях.
+    expect((await app.inject({ method: "GET", url: "/api/leaderboard?tag=a&untagged=1" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points?tag=a&untagged=1" })).statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
+  it("собирает точки решения по модели и профилю в выбранном срезе", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-decision-points-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const app = buildApp({ store, config });
+
+    const agentTask = store.createTask({ name: "Agent", kind: "prompt", prompt: "Answer", tags: ["coding-agent"] });
+    const plainTask = store.createTask({ name: "Plain", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
+    const profile = store.createExecutionProfile({ modelId: model.id, name: "Скорость", parameters: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 512, ubatchSize: 256, flashAttention: "auto", cacheReuse: 128 }, calibrated: true, ggufSha256: null });
+    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
+
+    const run = store.createRun({ taskRevisionIds: [agentTask.currentRevision.id], modelId: model.id, executionProfileId: profile.id, runnerId: "llama-chat", resultMode: "text" });
+    mkdirSync(join(config.dataDir, "runs", run.id), { recursive: true });
+    writeFileSync(join(config.dataDir, "runs", run.id, "system-summary.json"), JSON.stringify({ peakVramMiB: 15100, peakTemperatureC: 70 }));
+    const measured = async (revisionId: string, position: number, tps: number | null, status: "completed" | "failed", score?: number) => {
+      const taskRun = store.createTaskRun(run.id, revisionId, position, join(directory, `t${position}`), { task: { id: revisionId } });
+      store.saveTaskRunResult(taskRun.id, tps === null ? { finalAnswer: "A" } : { finalAnswer: "A", metrics: { generationTokensPerSecond: { value: tps }, totalDurationMs: { value: 1000 } } }, status);
+      if (score !== undefined) await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/review`, payload: review(score) });
+      return taskRun;
+    };
+    await measured(agentTask.currentRevision.id, 0, 40, "completed", 8);
+    await measured(agentTask.currentRevision.id, 1, 42, "completed", 8);
+    await measured(agentTask.currentRevision.id, 2, 50, "failed");
+    // Промпт из другого среза: в срез coding-agent он попасть не должен.
+    await measured(plainTask.currentRevision.id, 3, 5, "completed", 2);
+    // Прогон, оборванный целиком: промптовых неудач он не даёт, но в цифрах должен быть виден.
+    const interrupted = store.createRun({ taskRevisionIds: [agentTask.currentRevision.id], modelId: model.id, executionProfileId: profile.id, runnerId: "llama-chat", resultMode: "text" });
+    const interruptedTaskRun = store.createTaskRun(interrupted.id, agentTask.currentRevision.id, 0, join(directory, "cancelled"), { task: { id: agentTask.currentRevision.id } });
+    store.saveTaskRunResult(interruptedTaskRun.id, { finalAnswer: "A", metrics: { generationTokensPerSecond: { value: 42 }, totalDurationMs: { value: 1000 } } }, "completed");
+    store.updateRunStatus(interrupted.id, "cancelled");
+
+    const sliced = await app.inject({ method: "GET", url: "/api/analytics/decision-points?tag=coding-agent" });
+    expect(sliced.json()).toEqual([expect.objectContaining({
+      modelId: model.id,
+      profileId: profile.id,
+      profileName: "Скорость",
+      tag: "coding-agent",
+      untagged: false,
+      sampleCount: 4,
+      qualityPercent: 80,
+      medianTokensPerSecond: 42,
+      medianDurationMs: 1000,
+      peakVramMiB: 15100,
+      failureRate: expect.closeTo(0.25, 2),
+      runCount: 2,
+      interruptedRunCount: 1,
+      estimatedCostPerRun: null,
+    })]);
+
+    const all = await app.inject({ method: "GET", url: "/api/analytics/decision-points" });
+    expect((all.json() as Array<{ sampleCount: number; tag: string | null; untagged: boolean }>)[0]).toMatchObject({ sampleCount: 5, tag: null, untagged: false });
+
+    const untagged = await app.inject({ method: "GET", url: "/api/analytics/decision-points?untagged=1" });
+    expect((untagged.json() as Array<{ sampleCount: number; untagged: boolean; qualityPercent: number | null }>)[0]).toMatchObject({ sampleCount: 1, untagged: true, qualityPercent: 20 });
+    await app.close();
+    store.close();
+  });
+
+  it("ranks only the chosen workload slice", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-tags-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const agentTask = store.createTask({ name: "Agent", kind: "prompt", prompt: "Answer", tags: ["coding-agent"] });
+    const plainTask = store.createTask({ name: "Plain", kind: "prompt", prompt: "Answer", tags: [] });
+    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
+    const model = store.createModel({ name: "Agent Model", kind: "cloud", provider: "openai", modelRef: "agent" });
+    const other = store.createModel({ name: "Plain Model", kind: "cloud", provider: "openai", modelRef: "plain" });
+
+    const run = store.createRun({ taskRevisionIds: [agentTask.currentRevision.id, plainTask.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    for (const [position, revisionId] of [agentTask.currentRevision.id, agentTask.currentRevision.id, plainTask.currentRevision.id].entries()) {
+      const taskRun = store.createTaskRun(run.id, revisionId, position, join(directory, `a${position}`), { task: { id: revisionId } });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: "A" });
+      await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/review`, payload: review(position === 2 ? 4 : 8) });
+    }
+    const plainRun = store.createRun({ taskRevisionIds: [plainTask.currentRevision.id], modelId: other.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const plainTaskRun = store.createTaskRun(plainRun.id, plainTask.currentRevision.id, 0, join(directory, "p0"), { task: { id: plainTask.currentRevision.id } });
+    store.saveTaskRunResult(plainTaskRun.id, { finalAnswer: "P" });
+    await app.inject({ method: "PUT", url: `/api/task-runs/${plainTaskRun.id}/review`, payload: review(9) });
+
+    const tagged = await app.inject({ method: "GET", url: "/api/leaderboard?tag=coding-agent" });
+    expect(tagged.json()).toEqual([expect.objectContaining({ modelName: "Agent Model", reviewedTaskRunCount: 2, scorePercent: 80 })]);
+
+    // Промпты без тегов — такой же явный срез, а не «всё остальное вперемешку».
+    const untagged = await app.inject({ method: "GET", url: "/api/leaderboard?untagged=1" });
+    expect((untagged.json() as Array<{ modelName: string; reviewedTaskRunCount: number }>).map((entry) => [entry.modelName, entry.reviewedTaskRunCount]))
+      .toEqual([["Plain Model", 1], ["Agent Model", 1]]);
+
+    const all = await app.inject({ method: "GET", url: "/api/leaderboard" });
+    expect((all.json() as Array<{ modelName: string; reviewedTaskRunCount: number }>).find((entry) => entry.modelName === "Agent Model")?.reviewedTaskRunCount).toBe(3);
+
+    expect((await app.inject({ method: "GET", url: "/api/leaderboard?tag=%20" })).statusCode).toBe(400);
     await app.close();
     store.close();
   });

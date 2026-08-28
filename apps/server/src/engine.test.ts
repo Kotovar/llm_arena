@@ -29,6 +29,7 @@ describe("benchmark engine", () => {
       createLlamaManager: () => ({ async start() { return { baseUrl: "http://127.0.0.1:1234", async stop() {} }; } }),
       fetch: async () => ({ ok: true, status: 200 }),
       readGpuInfo: () => ({ name: "NVIDIA", totalMiB: 16303, usedMiB: 15840, freeMiB: 463 }),
+      readExecutableVersion: () => null,
     });
 
     await expect(engine.calibrate(manual.id)).resolves.toMatchObject({ gpu: { freeMiB: 463 } });
@@ -76,6 +77,7 @@ describe("benchmark engine", () => {
       }),
       fetch: async () => { warmups += 1; return { ok: true, status: 200 }; },
       readGpuInfo: () => ({ name: "NVIDIA GeForce RTX 5080", totalMiB: 16303, usedMiB: 1450, freeMiB: 14853 }),
+      readExecutableVersion: () => null,
     });
 
     const result = await engine.calibrate(profile.id);
@@ -369,6 +371,80 @@ console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content
     await engine.processNext();
 
     expect(JSON.parse(store.listFollowups(taskRun.id)[0]?.result_json ?? "{}").finalAnswer).toBe("wrapped");
+    await engine.stop();
+    store.close();
+  });
+
+  it("saves the run environment beside the resolved profile", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-provenance-engine-"));
+    directories.push(root);
+    const script = join(root, "fake-omp.mjs");
+    writeFileSync(script, `console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:"ok"}]}]}));`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "answer", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", useOmpAgent: true });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("provenance-engine-test", 100), {
+      createLlamaManager: () => ({ async start() { return { baseUrl: "http://127.0.0.1:1234", async stop() {} }; } }),
+      fetch: async () => ({ ok: true, status: 200 }),
+      readGpuInfo: () => ({ name: "Test GPU", totalMiB: 16303, usedMiB: 1450, freeMiB: 14853 }),
+      readExecutableVersion: (executable) => (executable === process.execPath ? "omp 1.2.3" : null),
+    });
+
+    await engine.processNext();
+
+    expect(JSON.parse(store.getRun(run.id)?.snapshot_json ?? "{}")).toMatchObject({
+      environment: {
+        runnerKind: "omp",
+        gpu: { name: "Test GPU" },
+        runner: { path: process.execPath, version: "omp 1.2.3" },
+        llamaServer: null,
+        ggufSha256: null,
+      },
+    });
+
+    await engine.stop();
+    store.close();
+  });
+
+  it("repeats one prompt with a warm-up without touching its saved result", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-repeat-engine-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    const counter = join(root, "attempts");
+    writeFileSync(counter, "");
+    writeFileSync(
+      script,
+      `import { appendFileSync, readFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(counter)}, "x");
+const attempt = readFileSync(${JSON.stringify(counter)}, "utf8").length;
+console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"answer "+attempt}}));
+console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_tokens:attempt}}));`,
+    );
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "answer", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", repeatCount: 3, warmupAttempt: true });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("repeat-engine-test", 100));
+
+    await engine.processNext();
+
+    const taskRuns = store.listTaskRuns(run.id);
+    expect(taskRuns).toHaveLength(1);
+    const taskRun = taskRuns[0]!;
+    expect(taskRun.status).toBe("completed");
+    // Прогрев прошёл первым, поэтому сохранённый ответ промпта — вторая попытка процесса.
+    expect(JSON.parse(taskRun.result_json ?? "{}").finalAnswer).toBe("answer 2");
+    expect(store.listTaskAttempts(taskRun.id).map((item) => item.attempt)).toEqual([0, 1, 2, 3]);
+    expect(store.listTaskAttempts(taskRun.id).every((item) => item.status === "completed")).toBe(true);
+    expect(store.taskRunAggregate(taskRun.id)).toMatchObject({ attempts: 3, completedAttempts: 3, failedAttempts: 0 });
+
     await engine.stop();
     store.close();
   });

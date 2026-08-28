@@ -27,9 +27,11 @@ export async function renderInApp(ui: ReactNode, path = "/"): Promise<RenderResu
     }),
   });
   // Заглушки маршрутов, на которые ссылаются экраны: без них <Link> падает.
-  const stub = (path: string) => createRoute({ getParentRoute: () => rootRoute, path, component: () => null, validateSearch: (search: Record<string, unknown>) => search });
+  // Экран, который живёт не на «/» (например /compare), монтируется прямо в свой маршрут:
+  // иначе useSearch({ from }) не найдёт совпавшего маршрута.
+  const stub = (routePath: string) => createRoute({ getParentRoute: () => rootRoute, path: routePath, component: () => (path.split("?")[0] === routePath ? ui : null), validateSearch: (search: Record<string, unknown>) => search });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, stub("/runs"), stub("/compare"), stub("/tasks"), stub("/models")]),
+    routeTree: rootRoute.addChildren([indexRoute, stub("/runs"), stub("/compare"), stub("/analytics"), stub("/tasks"), stub("/models")]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -10,6 +10,7 @@ import {
   resultShaSchema,
   setModelOrderSchema,
   createRunSchema,
+  modelEconomicsSchema,
   createTaskSchema,
   reviewSchema,
   retryTaskRunSchema,
@@ -31,6 +32,9 @@ import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-
 import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
+import { registerAnalyticsRoutes } from "./routes/analytics.js";
+import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
+import { leaderboardSliceSchema, type SliceQuery } from "./routes/slice.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 import { readGpuInfo } from "./system-metrics.js";
 import { loadOwnerId, stopOwnedLlamaServers } from "./lifecycle.js";
@@ -48,9 +52,12 @@ type PreviewLike = {
   start(taskRunId: string, resultSha: string): Promise<unknown>;
   stop(): Promise<void>;
   stopIf?(taskRunId: string, resultSha: string): Promise<void>;
-  heartbeat(): void;
+  heartbeat(target?: { taskRunId: string; resultSha: string }): void;
   removeTaskRunPreviews?(taskRunIds: string[]): Promise<void>;
 };
+
+// Ниже этого числа решённых пар доля побед — это шум: один вердикт даёт целые проценты.
+const CONFIDENT_PAIRS = 5;
 
 function parse<T>(schema: ZodType<T>, value: unknown): T {
   return schema.parse(value);
@@ -60,12 +67,21 @@ const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict(
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
 const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
+const updateModelEconomicsSchema = z.object({ economics: modelEconomicsSchema.nullable() }).strict();
+const pairReviewSchema = z.object({
+  leftTaskRunId: z.string().uuid(),
+  rightTaskRunId: z.string().uuid(),
+  winner: z.enum(["left", "right", "tie"]),
+  comment: z.string().trim().max(4000).default(""),
+}).strict().refine((value) => value.leftTaskRunId !== value.rightTaskRunId, "Pair review needs two different results");
 const deleteRunsSchema = z.object({ runIds: z.array(z.string().uuid()).min(1) }).strict();
 /** Обмен промптами между машинами: только то, что человек пишет руками. Картинки и теги остаются на месте. */
+const updateTaskTagsSchema = z.object({ tags: z.array(z.string().trim().max(60)).max(20) }).strict();
 const importTasksSchema = z.array(z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(4_000).optional(),
   prompt: z.string().trim().min(1),
+  tags: z.array(z.string().trim().max(60)).max(20).optional(),
 }).strict()).min(1).max(1_000);
 const externalLauncherQuerySchema = z.object({
   profileName: z.string().trim().min(1),
@@ -297,21 +313,27 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       name: task.currentRevision.name,
       ...(task.description ? { description: task.description } : {}),
       prompt: task.currentRevision.prompt,
+      ...(task.tags.length ? { tags: task.tags } : {}),
     }));
+  });
+  app.put<{ Params: { id: string } }>("/api/tasks/:id/tags", async (request) => {
+    const { tags } = parse(updateTaskTagsSchema, request.body);
+    return store.setTaskTags(request.params.id, tags);
   });
   app.post("/api/tasks/import", async (request) => {
     const incoming = parse(importTasksSchema, request.body);
     const existing = new Map(store.listTasks().map((task) => [task.currentRevision.name, task]));
     let created = 0;
     let updated = 0;
-    for (const item of incoming) {
+    for (const { tags, ...item } of incoming) {
       const current = existing.get(item.name);
       if (!current) {
-        store.createTask({ ...item, kind: "prompt", tags: [], images: [] });
+        const task = store.createTask({ ...item, kind: "prompt", tags: tags ?? [], images: [] });
+        if (tags?.length) store.setTaskTags(task.id, tags);
         created += 1;
         continue;
       }
-      // Совпадение по названию — правка, а не дубль: тип, фикстура, теги и картинки остаются от текущей версии.
+      // Совпадение по названию — правка, а не дубль: тип, фикстура и картинки остаются от текущей версии.
       const revision = current.currentRevision;
       store.updateTask(current.id, {
         ...item,
@@ -319,6 +341,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         images: revision.images,
         ...(revision.kind === "coding" ? { kind: "coding" as const, fixtureId: revision.fixtureId } : { kind: "prompt" as const }),
       });
+      // Теги живут на задаче, поэтому обновляются отдельно и только когда их прислали:
+      // файл без тегов не должен молча снимать уже проставленные.
+      if (tags) store.setTaskTags(current.id, tags);
       updated += 1;
     }
     return { created, updated };
@@ -342,6 +367,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.patch<{ Params: { id: string } }>("/api/models/:id", async (request) => {
     const { name } = parse(renameModelSchema, request.body);
     return store.renameModel(request.params.id, name);
+  });
+  app.put<{ Params: { id: string } }>("/api/models/:id/economics", async (request) => {
+    const { economics } = parse(updateModelEconomicsSchema, request.body);
+    return store.updateModelEconomics(request.params.id, economics);
   });
   app.put("/api/models/order", async (request) => store.setModelOrder(parse(setModelOrderSchema, request.body).modelIds));
   app.put<{ Params: { id: string } }>("/api/models/:id/capabilities", async (request) => {
@@ -404,64 +433,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
 
   app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run), activeTaskName: activeTaskName(run.id) })));
-  app.get("/api/leaderboard", async () => {
-    type Totals = {
-      modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; runCount: number; reviewedTaskRunCount: number;
-      scoreSum: number; possibleSum: number; speedSum: number; speedSamples: number;
-      correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; visualReviewed: number;
-    };
-    const totals = new Map<string, Totals>();
-    for (const run of store.listRuns()) {
-      const model = store.getModel(run.model_id);
-      const entry = totals.get(run.model_id) ?? {
-        modelId: run.model_id,
-        modelName: model?.name ?? run.model_ref ?? run.model_id.slice(0, 8),
-        modelKind: model?.kind ?? "cloud",
-        runCount: 0,
-        reviewedTaskRunCount: 0,
-        scoreSum: 0,
-        possibleSum: 0,
-        speedSum: 0,
-        speedSamples: 0,
-        correctness: 0,
-        codeQuality: 0,
-        uiQuality: 0,
-        instructionFollowing: 0,
-        visualReviewed: 0,
-      };
-      entry.runCount += 1;
-      entry.reviewedTaskRunCount += run.reviewed_count;
-      entry.scoreSum += run.review_score ?? 0;
-      entry.possibleSum += run.review_possible ?? 0;
-      entry.speedSum += (run.generation_tps ?? 0) * run.generation_samples;
-      entry.speedSamples += run.generation_samples;
-      entry.correctness += run.correctness_sum ?? 0;
-      entry.codeQuality += run.code_quality_sum ?? 0;
-      entry.uiQuality += run.ui_quality_sum ?? 0;
-      entry.instructionFollowing += run.instruction_following_sum ?? 0;
-      entry.visualReviewed += run.visual_reviewed_count;
-      totals.set(run.model_id, entry);
-    }
-    // Максимум за промпт зависит от типа задачи, поэтому сравниваем долю набранного, а не сырую сумму.
-    return [...totals.values()]
-      .map(({ scoreSum, possibleSum, speedSum, speedSamples, correctness, codeQuality, uiQuality, instructionFollowing, visualReviewed, ...entry }) => {
-        // Визуал делим на число задач, где он применялся: у текстовых ответов его нет.
-        const average = (sum: number, count: number) => count ? Math.round((sum / count) * 10) / 10 : null;
-        return {
-          ...entry,
-          scorePercent: possibleSum ? Math.round((scoreSum / possibleSum) * 1000) / 10 : null,
-          // Средняя по замерам всех промптов модели: контекст и профиль у них разные, поэтому цифра ориентировочная.
-          generationTokensPerSecond: speedSamples ? Math.round((speedSum / speedSamples) * 10) / 10 : null,
-          criteria: {
-            correctness: average(correctness, entry.reviewedTaskRunCount),
-            codeQuality: average(codeQuality, entry.reviewedTaskRunCount),
-            uiQuality: average(uiQuality, visualReviewed),
-            instructionFollowing: average(instructionFollowing, entry.reviewedTaskRunCount),
-          },
-        };
-      })
-      .sort((a, b) => (b.scorePercent ?? -1) - (a.scorePercent ?? -1));
-  });
+  registerLeaderboardRoutes(app, store);
+  registerAnalyticsRoutes(app, store, config);
   app.get("/api/gallery", async () => {
     const featured = new Set(store.listGalleryFeatured().map((item) => item.task_run_id));
     return store.listRuns().flatMap((run) => {
@@ -486,7 +459,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           taskRunId: taskRun.id,
           runId: run.id,
           // taskId нужен, чтобы отметки о готовых результатах переживали правку промпта: у неё новая версия.
-          prompt: { id: taskRun.task_revision_id, taskId: task.taskId ?? store.getTaskRevision(taskRun.task_revision_id)?.taskId ?? null, name: task.name, description: store.taskDescriptionByRevision(taskRun.task_revision_id), prompt: task.prompt },
+          prompt: { id: taskRun.task_revision_id, taskId: task.taskId ?? store.getTaskRevision(taskRun.task_revision_id)?.taskId ?? null, name: task.name, description: store.taskDescriptionByRevision(taskRun.task_revision_id), prompt: task.prompt, tags: store.taskTagsByRevision(taskRun.task_revision_id) },
           model: {
             id: run.model_id,
             name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),
@@ -564,6 +537,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         // она не версионируется, поэтому берётся текущая.
         taskName: taskRunName(taskRun) ?? `Промпт ${taskRun.position + 1}`,
         taskDescription: store.taskDescriptionByRevision(taskRun.task_revision_id),
+        taskTags: store.taskTagsByRevision(taskRun.task_revision_id),
+        attempts: store.taskRunAggregate(taskRun.id) ?? null,
       })),
     };
   });
@@ -741,6 +716,144 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     reply.type("text/plain");
     return createReadStream(path);
   });
+  /**
+   * Слепая очередь: пару выбирает сервер, поэтому судья не знает, чьи ответы перед ним.
+   * Сравниваем только сопоставимое — локальную модель с локальной, подписочную с подписочной,
+   * и web-результат с web-результатом. Имена моделей отдаём отдельным полем: интерфейс
+   * показывает его только после вердикта.
+   */
+  /**
+   * Сводка слепых вердиктов: сколько раз модель побеждала, проигрывала и сводила вничью.
+   * Долю побед показываем только от порога уверенности — две пары процентом называть нечестно.
+   */
+  app.get<{ Querystring: SliceQuery }>("/api/reviews/pair/summary", async (request) => {
+    const slice = leaderboardSliceSchema.parse(request.query);
+    type Record_ = { wins: number; losses: number; ties: number; decided: number };
+    const empty = (): Record_ => ({ wins: 0, losses: 0, ties: 0, decided: 0 });
+    const totals = new Map<string, Record_ & { opponents: Map<string, Record_> }>();
+    const count = (record: Record_, outcome: "win" | "loss" | "tie") => {
+      record.decided += 1;
+      if (outcome === "win") record.wins += 1;
+      else if (outcome === "loss") record.losses += 1;
+      else record.ties += 1;
+    };
+    for (const verdict of store.listPairVerdicts()) {
+      const tags = JSON.parse(verdict.tags_json) as string[];
+      if (slice.tag !== undefined && !tags.includes(slice.tag)) continue;
+      if (slice.untagged && tags.length !== 0) continue;
+      for (const [modelId, opponentId] of [[verdict.first_model_id, verdict.second_model_id], [verdict.second_model_id, verdict.first_model_id]] as const) {
+        const entry = totals.get(modelId) ?? { ...empty(), opponents: new Map<string, Record_>() };
+        // Ничья не достаётся никому, но парой быть не перестаёт.
+        const outcome = verdict.winnerModelId === null ? "tie" as const : verdict.winnerModelId === modelId ? "win" as const : "loss" as const;
+        count(entry, outcome);
+        const versus = entry.opponents.get(opponentId) ?? empty();
+        count(versus, outcome);
+        entry.opponents.set(opponentId, versus);
+        totals.set(modelId, entry);
+      }
+    }
+    const modelName = (modelId: string) => store.getModel(modelId)?.name ?? modelId.slice(0, 8);
+    return [...totals].map(([modelId, entry]) => ({
+      modelId,
+      modelName: modelName(modelId),
+      wins: entry.wins,
+      losses: entry.losses,
+      ties: entry.ties,
+      decided: entry.decided,
+      winPercent: entry.decided >= CONFIDENT_PAIRS ? Math.round((entry.wins / entry.decided) * 1000) / 10 : null,
+      opponents: [...entry.opponents].map(([opponentId, versus]) => ({ modelId: opponentId, modelName: modelName(opponentId), ...versus }))
+        .sort((left, right) => right.decided - left.decided),
+    })).sort((left, right) => right.wins - left.wins || right.decided - left.decided);
+  });
+  app.get<{ Querystring: SliceQuery }>("/api/reviews/pair/next", async (request) => {
+    const slice = leaderboardSliceSchema.parse(request.query);
+    const judged = new Set(store.listPairReviews().map((review) => [review.first_task_run_id, review.second_task_run_id].join("|")));
+    type Candidate = {
+      taskRunId: string; revisionId: string; modelId: string; modelKind: "local-gguf" | "cloud"; taskName: string;
+      answer: string; previewSha: string | null;
+    };
+    const candidates: Candidate[] = [];
+    for (const row of store.listCompletedResults()) {
+      const taskRun = store.getTaskRun(row.id);
+      if (!taskRun) continue;
+      const tags = store.taskTagsByRevision(row.task_revision_id);
+      if (slice.tag !== undefined && !tags.includes(slice.tag)) continue;
+      if (slice.untagged && tags.length !== 0) continue;
+      const snapshot = parseGallerySnapshot(row.snapshot_json);
+      const selected = selectedResultVersionRecord(taskRun);
+      const previewable = Boolean(snapshot?.fixture?.preview) && Boolean(selected) && checksPassed(selected!.resultJson);
+      let answer = "";
+      try { answer = (JSON.parse(row.result_json ?? "{}") as { finalAnswer?: string }).finalAnswer ?? ""; } catch { answer = ""; }
+      candidates.push({
+        taskRunId: row.id,
+        revisionId: row.task_revision_id,
+        modelId: row.model_id,
+        modelKind: store.getModel(row.model_id)?.kind ?? "cloud",
+        taskName: row.task_name,
+        answer,
+        previewSha: previewable ? selected!.resultSha : null,
+      });
+    }
+    const byRevision = new Map<string, Candidate[]>();
+    for (const candidate of candidates) byRevision.set(candidate.revisionId, [...(byRevision.get(candidate.revisionId) ?? []), candidate]);
+    const pairs = [...byRevision.values()].flatMap((results) => results.flatMap((left, index) => results
+      .slice(index + 1)
+      .filter((right) => right.modelId !== left.modelId
+        // Локальная модель против облачной — сравнение разных весовых категорий, в слепую очередь не берём.
+        && right.modelKind === left.modelKind
+        // Либо оба запускаемые web-результаты, либо оба текстовые: иначе судить нечего.
+        && Boolean(right.previewSha) === Boolean(left.previewSha)
+        && !judged.has([left.taskRunId, right.taskRunId].sort().join("|")))
+      .map((right) => [left, right] as const)));
+    const pair = pairs[Math.floor(Math.random() * pairs.length)];
+    if (!pair) return { pair: null, remaining: 0 };
+    const sides = Math.random() < 0.5 ? [pair[0], pair[1]] : [pair[1], pair[0]];
+    return {
+      remaining: pairs.length,
+      pair: {
+        taskName: sides[0]!.taskName,
+        // Имён моделей здесь нет вовсе: пока вердикт не сохранён, их неоткуда взять даже из ответа сети.
+        // Полный промпт судье не нужен и занимает пол-экрана: показываем заметку о задаче.
+        description: store.taskDescriptionByRevision(sides[0]!.revisionId) ?? null,
+        modelKind: sides[0]!.modelKind,
+        sides: sides.map((side) => ({
+          taskRunId: side.taskRunId,
+          // Ни модели, ни раннера, ни метрик: скорость выдала бы локальный запуск не хуже имени.
+          resultSha: side.previewSha,
+          answer: side.previewSha ? "" : side.answer,
+        })),
+      },
+    };
+  });
+  app.get("/api/reviews/pair", async () => store.listPairReviews().map((row) => ({
+    taskRunIds: [row.first_task_run_id, row.second_task_run_id],
+    winnerTaskRunId: row.winner_task_run_id,
+    comment: row.comment,
+    updatedAt: row.updated_at,
+  })));
+  app.post("/api/reviews/pair", async (request, reply) => {
+    const input = parse(pairReviewSchema, request.body);
+    const left = store.getTaskRun(input.leftTaskRunId);
+    const right = store.getTaskRun(input.rightTaskRunId);
+    if (!left || !right) throw new Error("Task run not found");
+    if (left.task_revision_id !== right.task_revision_id) throw new Error("Pair review requires the same prompt revision");
+    if (left.status !== "completed" || right.status !== "completed") throw new Error("Pair review needs two completed results");
+    const winnerTaskRunId = input.winner === "tie" ? null : input.winner === "left" ? left.id : right.id;
+    const saved = store.savePairReview([left.id, right.id], winnerTaskRunId, input.comment);
+    const modelName = (taskRunId: string) => {
+      const owner = store.getRun(store.getTaskRun(taskRunId)!.benchmark_run_id);
+      return (owner ? store.getModel(owner.model_id)?.name : undefined) ?? "Неизвестная модель";
+    };
+    return reply.code(201).send({
+      leftTaskRunId: left.id,
+      rightTaskRunId: right.id,
+      winner: saved.winner_task_run_id === null ? "tie" : saved.winner_task_run_id === left.id ? "left" : "right",
+      comment: saved.comment,
+      updatedAt: saved.updated_at,
+      // Модели называем только вместе с сохранённым вердиктом: до него их знать судье незачем.
+      reveal: [modelName(left.id), modelName(right.id)],
+    });
+  });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => store.saveReview(request.params.id, parse(reviewSchema, request.body)));
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/selected-version", async (request) => {
     const { resultSha } = parse(selectResultVersionSchema, request.body);
@@ -801,8 +914,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), version.resultSha);
     return preview.start(taskRun.id, version.resultSha);
   });
-  app.post("/api/preview/heartbeat", async () => {
-    preview?.heartbeat();
+  app.post<{ Body: unknown }>("/api/preview/heartbeat", async (request) => {
+    const target = request.body === undefined ? undefined : parse(previewStopSchema, request.body);
+    preview?.heartbeat(target);
     return { status: "ok" };
   });
   app.delete<{ Body: unknown }>("/api/preview", async (request, reply) => {

@@ -63,6 +63,15 @@ export const modelCapabilitiesSchema = z.object({
 }).strict();
 const defaultModelCapabilities = { toolUse: false, vision: false, reasoning: false };
 export const cloudModelCapabilities = { toolUse: true, vision: true, reasoning: true };
+/**
+ * Экономика подписки — оценка пользователя, а не цена от провайдера: сколько он платит в месяц
+ * и сколько прогонов ожидает получить. Половины значения не бывает — либо обе цифры, либо ничего.
+ */
+export const modelEconomicsSchema = z.object({
+  monthlyCost: z.number().positive(),
+  includedRunEstimate: z.number().int().positive(),
+});
+
 export const createModelSchema = z
   .object({
     name: z.string().trim().min(1).max(160),
@@ -72,6 +81,7 @@ export const createModelSchema = z
     path: z.string().trim().min(1).optional(),
     alias: z.string().trim().min(1).optional(),
     capabilities: modelCapabilitiesSchema.default(defaultModelCapabilities),
+    economics: modelEconomicsSchema.nullable().default(null),
   })
   .superRefine((value, context) => {
     if (value.kind === "local-gguf" && (!value.path || !value.alias)) {
@@ -154,6 +164,9 @@ export const createRunSchema = z.object({
   useOmpAgent: z.boolean().default(false),
   modelRef: z.string().trim().min(1).optional(),
   reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).nullable().default(null),
+  // Повторы нужны, чтобы одиночный выброс не выдавали за скорость модели; больше пяти — это уже отдельный прогон.
+  repeatCount: z.number().int().min(1).max(5).default(1),
+  warmupAttempt: z.boolean().default(false),
 });
 
 const measuredSources = z.enum([
@@ -249,6 +262,7 @@ export type CreateModel = z.infer<typeof createModelSchema>;
 export type ModelCapabilities = z.infer<typeof modelCapabilitiesSchema>;
 export type TaskImage = z.infer<typeof taskImageSchema>;
 export type CreateExecutionProfile = z.infer<typeof createExecutionProfileSchema>;
+export type ModelEconomics = z.infer<typeof modelEconomicsSchema>;
 export type LlamaProfile = z.infer<typeof llamaProfileSchema>;
 export type CreateRun = z.input<typeof createRunSchema>;
 export type RunStatus = z.infer<typeof runStatusSchema>;

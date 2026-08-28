@@ -1,3 +1,4 @@
+import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api } from "../api.js";
@@ -76,8 +77,9 @@ function NewProfileForm({ modelId, source, pending, create }: { modelId: string;
       cacheReuse: Number(data.get("cacheReuse")),
       fit: data.get("fit") === "on",
       ...(data.get("fit") === "on" ? { fitTargetMiB: Number(data.get("fitTargetMiB")), fitContextMin: Number(data.get("fitContextMin")) } : {}),
-      ...(source.parameters.temperature === undefined ? {} : { temperature: source.parameters.temperature }),
-      ...(source.parameters.seed === undefined ? {} : { seed: source.parameters.seed }),
+      temperature: Number(data.get("temperature")),
+      // Пустой seed — это «пусть llama.cpp выберет сам», а не ноль.
+      ...(String(data.get("seed") ?? "").trim() ? { seed: Number(data.get("seed")) } : {}),
     } }).then(() => { form.reset(); setOpen(false); }).catch(() => undefined);
   }}>
     <label className="span-2">Название профиля<input name="profileName" placeholder="Например, Скорость 32k" required /><small>Отдельное имя создаёт вариант для выбора при запуске; изменение существующего имени создаёт новую ревизию.</small></label>
@@ -93,6 +95,8 @@ function NewProfileForm({ modelId, source, pending, create }: { modelId: string;
     <label><input name="fit" type="checkbox" defaultChecked={source.parameters.fit} />Автоподбор загрузки</label>
     <label>Резерв VRAM, MiB<input name="fitTargetMiB" type="number" min="1" defaultValue={source.parameters.fitTargetMiB ?? 750} required /></label>
     <label>Минимальный контекст<input name="fitContextMin" type="number" min="4096" defaultValue={source.parameters.fitContextMin ?? 100000} required /></label>
+    <label>Температура<input name="temperature" type="number" min="0" max="2" step="0.05" defaultValue={source.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE} required /></label>
+    <label>Seed<input name="seed" type="number" defaultValue={source.parameters.seed ?? ""} placeholder="случайный" /></label>
     <button className="primary" disabled={pending}>{pending ? "Создаём профиль…" : "Создать профиль"}</button>
   </form></details>;
 }
@@ -119,6 +123,9 @@ export function ModelsPage() {
   const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; title: string; detail: string }>>({});
   const [hardware, setHardware] = useState<Record<string, CalibrationResult>>( {});
   const [draggedModelId, setDraggedModelId] = useState<string | null>(null);
+  // Карточка перетаскивается только за ручку: иначе выделение текста и клик по полям внутри
+  // превращаются в перетаскивание.
+  const [handleModelId, setHandleModelId] = useState<string | null>(null);
 
   const invalidateModels = async () => {
     await Promise.all([
@@ -162,6 +169,10 @@ export function ModelsPage() {
     mutationFn: ({ modelId, name }: { modelId: string; name: string }) => api(`/models/${modelId}`, { method: "PATCH", body: JSON.stringify({ name }) }),
     onSuccess: invalidateModels,
   });
+  const saveEconomics = useMutation({
+    mutationFn: ({ modelId, economics }: { modelId: string; economics: Model["economics"] }) => api(`/models/${modelId}/economics`, { method: "PUT", body: JSON.stringify({ economics }) }),
+    onSuccess: invalidateModels,
+  });
   const reorder = useMutation({
     mutationFn: (modelIds: string[]) => api<Model[]>("/models/order", { method: "PUT", body: JSON.stringify({ modelIds }) }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["models"] }),
@@ -195,13 +206,28 @@ export function ModelsPage() {
       cacheReuse: Number(data.get("cacheReuse")),
       fit: false,
     };
-    createLocal.mutate({ filename, name: localName, profileName: profileMode === "auto" ? "Automatic" : "Manual", profile: profileMode === "auto" ? automatic : manual, capabilities: localCapabilities, mmprojFilename: localCapabilities.vision ? localMmprojFilename || null : null });
+    // Сэмплинг — свойство профиля независимо от того, автоматический он или ручной.
+    const sampling = {
+      temperature: Number(data.get("temperature") ?? DEFAULT_LLAMA_TEMPERATURE),
+      ...(String(data.get("seed") ?? "").trim() ? { seed: Number(data.get("seed")) } : {}),
+    };
+    createLocal.mutate({ filename, name: localName, profileName: profileMode === "auto" ? "Automatic" : "Manual", profile: { ...(profileMode === "auto" ? automatic : manual), ...sampling }, capabilities: localCapabilities, mmprojFilename: localCapabilities.vision ? localMmprojFilename || null : null });
   }
 
   function submitCloud(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     createCloud.mutate({ name: data.get("name"), kind: "cloud", provider: cloudProvider, modelRef: cloudModelRef });
+  }
+
+  function submitEconomics(event: FormEvent<HTMLFormElement>, modelId: string) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const monthlyCost = Number(data.get("monthlyCost"));
+    const includedRunEstimate = Number(data.get("includedRunEstimate"));
+    // Половины оценки не бывает: пустые поля — это «цену не считаем», а не ноль.
+    const economics = monthlyCost > 0 && includedRunEstimate > 0 ? { monthlyCost, includedRunEstimate } : null;
+    saveEconomics.mutate({ modelId, economics });
   }
 
   function submitRename(event: FormEvent<HTMLFormElement>, modelId: string) {
@@ -241,6 +267,10 @@ export function ModelsPage() {
             <label className={profileMode === "auto" ? "selected" : ""}><input type="radio" checked={profileMode === "auto"} onChange={() => setProfileMode("auto")} /><strong>Автоматически</strong><small>Максимум GPU с резервом 750 MiB, контекст не ниже 100 000, Flash Attention и GPU-слои подбирает llama.cpp.</small></label>
             <label className={profileMode === "manual" ? "selected" : ""}><input type="radio" checked={profileMode === "manual"} onChange={() => setProfileMode("manual")} /><strong>Вручную</strong><small>Точные параметры для сравнения или переноса в другую связку.</small></label>
           </fieldset>
+          <fieldset className="sampling-fields span-2"><legend>Сэмплинг</legend>
+            <label>Температура<input name="temperature" type="number" min="0" max="2" step="0.05" defaultValue={DEFAULT_LLAMA_TEMPERATURE} required /><small>Насколько модель отходит от самого вероятного продолжения. Ниже — стабильнее и повторяемее, выше — разнообразнее.</small></label>
+            <label>Seed<input name="seed" type="number" placeholder="случайный" /><small>Фиксирует случайность генерации: с одинаковым seed и температурой прогон повторяем. Пусто — llama.cpp выбирает сам.</small></label>
+          </fieldset>
           {profileMode === "manual" ? <details className="manual-profile span-2" open><summary>Ручные параметры llama.cpp</summary>
             <p className="type-hint">Не хватает VRAM? Понижайте по порядку: точность KV-кеша до <code>q4_0</code>, затем micro-batch, затем контекст. Слои на CPU трогайте последними — они сильнее всего бьют по скорости.</p>
             <div className="form-grid">
@@ -270,8 +300,9 @@ export function ModelsPage() {
         const runner = chooseRunner(model, ["prompt"], runners.data ?? []);
         const checking = testModel.isPending && testModel.variables?.modelId === model.id;
         const modelProfiles = visibleProfiles.filter((profile) => profile.modelId === model.id);
-        return <details className={draggedModelId === model.id ? "model-card dragging" : "model-card"} key={model.id} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", model.id); setDraggedModelId(model.id); }} onDragEnd={() => setDraggedModelId(null)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); const draggedId = draggedModelId ?? event.dataTransfer.getData("text/plain"); if (draggedId && draggedId !== model.id) reorder.mutate(moveModel(models.data ?? [], draggedId, model.id).map((item) => item.id)); setDraggedModelId(null); }}><summary className="model-card-summary"><span className="model-drag-handle" role="img" aria-label="Перетащите модель, чтобы изменить порядок" title="Перетащите, чтобы изменить порядок">⠿</span><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span>{model.kind === "local-gguf" && model.sizeBytes ? <span className="model-card-facts">{ggufSummary(model.sizeBytes, model.expertCount)}</span> : null}</span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
+        return <details className={draggedModelId === model.id ? "model-card dragging" : "model-card"} key={model.id} draggable={handleModelId === model.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", model.id); setDraggedModelId(model.id); }} onDragEnd={() => { setDraggedModelId(null); setHandleModelId(null); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); const draggedId = draggedModelId ?? event.dataTransfer.getData("text/plain"); if (draggedId && draggedId !== model.id) reorder.mutate(moveModel(models.data ?? [], draggedId, model.id).map((item) => item.id)); setDraggedModelId(null); setHandleModelId(null); }}><summary className="model-card-summary"><span className="model-drag-handle" role="img" aria-label="Перетащите модель, чтобы изменить порядок" title="Перетащите, чтобы изменить порядок" onPointerDown={() => setHandleModelId(model.id)} onPointerUp={() => setHandleModelId(null)} onClick={(event) => event.preventDefault()}>⠿</span><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span>{model.kind === "local-gguf" && model.sizeBytes ? <span className="model-card-facts">{ggufSummary(model.sizeBytes, model.expertCount)}</span> : null}</span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
           <form className="model-rename" onSubmit={(event) => submitRename(event, model.id)}><label>Название в результатах<input name="name" defaultValue={model.name} required /></label><button className="primary" disabled={rename.isPending && rename.variables?.modelId === model.id}>{rename.isPending && rename.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить название"}</button></form>
+          {model.kind === "cloud" ? <form className="model-economics" onSubmit={(event) => submitEconomics(event, model.id)}><label>Подписка в месяц<input name="monthlyCost" type="number" min="0" step="0.01" defaultValue={model.economics?.monthlyCost ?? ""} placeholder="не считаем" /></label><label>Прогонов за эти деньги<input name="includedRunEstimate" type="number" min="0" step="1" defaultValue={model.economics?.includedRunEstimate ?? ""} placeholder="не считаем" /></label><button disabled={saveEconomics.isPending && saveEconomics.variables?.modelId === model.id}>{saveEconomics.isPending && saveEconomics.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить оценку"}</button><small>Ваша оценка, а не цена провайдера: она делится на число прогонов и показывается в лидерборде как ориентир. Пустые поля — цену не показываем.</small></form> : null}
           {rename.error && rename.variables?.modelId === model.id ? <p className="error">{rename.error.message}</p> : null}
           {model.kind === "local-gguf" ? <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} /> : null}
           {saveCapabilities.error && saveCapabilities.variables?.modelId === model.id ? <p className="error">{saveCapabilities.error.message}</p> : null}
@@ -280,7 +311,7 @@ export function ModelsPage() {
           {createProfile.error ? <p className="error">{createProfile.error.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для omp-local</span> : null}</div>
-            <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div></dl>
+            <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div><div><dt>Температура</dt><dd>{profile.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE}</dd></div><div><dt>Seed</dt><dd>{profile.parameters.seed ?? "случайный"}</dd></div></dl>
             {report ? <div className="gpu-report"><strong>{report.gpu.name}</strong><span>VRAM: {report.gpu.usedMiB} MiB занято · {report.gpu.freeMiB} MiB свободно из {report.gpu.totalMiB} MiB</span></div> : null}
             {calibrate.error && calibrate.variables === profile.id ? <p className="error">{calibrate.error.message}</p> : null}
             {activate.error && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? <p className="error">{activate.error.message}</p> : null}

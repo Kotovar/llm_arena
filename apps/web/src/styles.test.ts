@@ -78,4 +78,18 @@ describe("responsive result layout", () => {
   it("keeps a gap above and below the collapsible profile group", () => {
     expect(css).toMatch(/\.profile-group\s*\{[^}]*margin:\s*14px 0/);
   });
+
+  it("не даёт подписи наезжать на поля оценки подписки", () => {
+    expect(css).toMatch(/\.model-economics\s*\{[^}]*align-items:\s*end/);
+    expect(css).toMatch(/\.model-economics input\s*\{[^}]*display:\s*block;[^}]*margin-top:\s*6px/);
+    expect(css).toMatch(/\.model-economics small\s*\{[^}]*flex:\s*1 1 100%/);
+  });
+
+  it("держит кнопку тегов на одной линии с полем", () => {
+    expect(css).toMatch(/\.prompt-tags-form\s*\{[^}]*align-items:\s*end/);
+    // Пояснение уходит на свою строку: внутри label оно опускало бы кнопку ниже поля.
+    expect(css).toMatch(/\.prompt-tags-form small\s*\{[^}]*flex:\s*1 1 100%/);
+    // Одинаковые метрики поля и кнопки: разный размер шрифта давал разную высоту.
+    expect(css).toMatch(/\.prompt-tags-form input, \.prompt-tags-form button\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*1\.4/);
+  });
 });
