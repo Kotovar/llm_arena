@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import type { LeaderboardEntry, PairSummary } from "../types.js";
-import { formatMetricValue, plural } from "../ui.js";
+import { formatCost, formatMetricValue, plural } from "../ui.js";
 
 // Ниже этого порога средняя ещё слишком шумная, чтобы читать её как результат модели.
 const CONFIDENT_SAMPLE = 3;
@@ -25,8 +25,7 @@ const criteriaColumns = [
 /** Цена прогона — оценка пользователя, поэтому и подаётся как оценка, а не как факт. */
 function costLabel(entry: LeaderboardEntry) {
   if (entry.estimatedCostPerRun === null) return "—";
-  const value = entry.estimatedCostPerRun;
-  return `≈ $${value < 1 ? value.toFixed(2) : value.toFixed(1)} за прогон`;
+  return `${formatCost(entry.estimatedCostPerRun)} за прогон`;
 }
 
 // Единица скорости общая с аналитикой и галереей: «т/с» и «токенов/с» на соседних экранах читались как разные метрики.

@@ -6,7 +6,7 @@ import { useConfirm } from "../confirm.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { AppSettings, CalibrationResult, ExternalLauncher, LlamaParameters, LocalModelFile, Model, ModelCatalog, Profile, Runner } from "../types.js";
-import { chooseRunner, defaultLocalProfile, formatDuration, latestProfiles, visionProjectorFiles } from "../ui.js";
+import { chooseRunner, defaultLocalProfile, formatCost, formatDuration, latestProfiles, visionProjectorFiles } from "../ui.js";
 
 type Capabilities = Model["capabilities"];
 
@@ -172,7 +172,7 @@ export function ModelsPage() {
   const saveEconomics = useMutation({
     mutationFn: ({ modelId, economics }: { modelId: string; economics: Model["economics"] }) => api(`/models/${modelId}/economics`, { method: "PUT", body: JSON.stringify({ economics }) }),
     onSuccess: async (_result, variables) => {
-      toast(variables.economics ? `Цена прогона: ≈ $${(variables.economics.monthlyCost / variables.economics.includedRunEstimate).toFixed(2)}` : "Цену прогона больше не показываем");
+      toast(variables.economics ? `Цена прогона: ${formatCost(variables.economics.monthlyCost / variables.economics.includedRunEstimate)}` : "Цену прогона больше не показываем");
       await invalidateModels();
     },
     onError: (error) => toast(error.message, "error"),

@@ -281,6 +281,11 @@ export function attemptSummary(aggregate: { attempts: number; completedAttempts:
   ].filter(Boolean).join(" · ");
 }
 
+/** Цена прогона — оценка, поэтому и знаков после запятой ровно столько, сколько эта оценка выдерживает. */
+export function formatCost(value: number) {
+  return `≈ $${value < 1 ? value.toFixed(2) : value.toFixed(1)}`;
+}
+
 /** Пик VRAM человеческими числами: мегабайты гигабайтами, без хвоста из десятка цифр. */
 export function formatVram(mebibytes: number) {
   return mebibytes >= 1024 ? `${String(oneDecimal(mebibytes / 1024)).replace(".", ",")} ГиБ` : `${Math.round(mebibytes)} МиБ`;
