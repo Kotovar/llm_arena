@@ -6,7 +6,7 @@ import { renderInApp } from "../test-harness.js";
 import { Launcher } from "./launcher.js";
 
 function task(id: string, name: string, tags: string[] = []) {
-  return { id, currentRevision: { id: `${id}-rev`, taskId: id, name, kind: "coding", prompt: `Промпт ${name}`, revision: 1, contentHash: "h", tags, images: [] } };
+  return { id, tags, currentRevision: { id: `${id}-rev`, taskId: id, name, kind: "coding", prompt: `Промпт ${name}`, revision: 1, contentHash: "h", tags, images: [] } };
 }
 
 let payloads: Record<string, unknown>;
@@ -132,5 +132,18 @@ describe("профиль локальной модели", () => {
     // Скрытый промпт остаётся выбранным: тег прячет строки, а не снимает выбор.
     await user.click(await screen.findByRole("button", { name: /Запустить/u }));
     await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ taskRevisionIds: ["task-1-rev", "task-2-rev"] })]));
+  });
+
+  it("выбирает все промпты одного тега", async () => {
+    const user = userEvent.setup();
+    payloads["/api/tasks"] = [task("task-1", "Аквариум", ["web"]), task("task-2", "Песок"), task("task-3", "Часы", ["web"])];
+    await renderInApp(<Launcher />, "/");
+    await screen.findByText("Аквариум");
+
+    await user.click(screen.getByRole("button", { name: "web" }));
+    await user.click(screen.getByRole("button", { name: "Выбрать показанные" }));
+    await user.click(await screen.findByRole("button", { name: /Запустить/u }));
+
+    await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ taskRevisionIds: ["task-1-rev", "task-3-rev"] })]));
   });
 });

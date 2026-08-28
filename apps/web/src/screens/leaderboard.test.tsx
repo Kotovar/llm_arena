@@ -24,7 +24,7 @@ beforeEach(() => {
     { modelId: "cloud-1", modelName: "Облачная", wins: 6, losses: 2, ties: 0, decided: 8, winPercent: 75, opponents: [{ modelId: "local-1", modelName: "Локальная", wins: 6, losses: 2, ties: 0, decided: 8 }] },
     { modelId: "local-1", modelName: "Локальная", wins: 2, losses: 6, ties: 0, decided: 8, winPercent: 25, opponents: [{ modelId: "cloud-1", modelName: "Облачная", wins: 2, losses: 6, ties: 0, decided: 8 }] },
   ];
-  const tasks = [{ id: "task-1", currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["coding-agent"], images: [] } }];
+  const tasks = [{ id: "task-1", tags: ["coding-agent"], currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["coding-agent"], images: [] } }];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     requested.push(url);
     const body = url.startsWith("/api/tasks") ? tasks

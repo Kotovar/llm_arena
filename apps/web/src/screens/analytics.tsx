@@ -164,7 +164,7 @@ export function AnalyticsPage() {
   const [slice, setSlice] = useState<Slice>({ kind: "all" });
   const [view, setView] = useState<View>("scatter");
   const tasks = useData<Task[]>("tasks", "/tasks");
-  const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.currentRevision.tags))].sort((left, right) => left.localeCompare(right, "ru"));
+  const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const query = sliceQuery(slice);
   const points = useData<DecisionPoint[]>(`decision-points${query}`, `/analytics/decision-points${query}`);
   // Общий столбец есть всегда, «Без тегов» — только когда теги вообще заведены: иначе он его повторяет.

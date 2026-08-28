@@ -174,6 +174,8 @@ export type TaskRun = {
   task_revision_id: string;
   taskName?: string;
   taskDescription?: string | null;
+  /** Теги задачи на момент просмотра: они не версионируются вместе с промптом. */
+  taskTags?: string[];
   attempts?: TaskRunAggregate | null;
   position: number;
   status: string;

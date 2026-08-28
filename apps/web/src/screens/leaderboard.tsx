@@ -69,7 +69,7 @@ export function LeaderboardPage() {
   const pairs = useData<PairSummary[]>(`pair-summary${query}`, `/reviews/pair/summary${query}`);
   const pairFor = (modelId: string) => pairs.data?.find((summary) => summary.modelId === modelId);
   const tasks = useData<Task[]>("tasks", "/tasks");
-  const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.currentRevision.tags))].sort((left, right) => left.localeCompare(right, "ru"));
+  const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const [kind, setKind] = useState<KindFilter>("all");
   const [headToHead, setHeadToHead] = useState(false);
   // Места считаются внутри выбранной группы: локальная модель не должна выглядеть седьмой среди облачных.

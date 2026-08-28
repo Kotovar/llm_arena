@@ -3,7 +3,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Status, useData } from "../shell.js";
-import type { Model, PairReview, Run, Runner, TaskRun } from "../types.js";
+import type { Model, PairReview, Run, Runner, Task, TaskRun } from "../types.js";
 import { betterResult, formatRelativeTime, formatReviewSummary, matchTaskRuns, reviewPossible, reviewSummary, reviewTotal, runModelName } from "../ui.js";
 import { metric, ResultPreview, usePreviewHeartbeat, useStopPreviewOnUnmount } from "./results.js";
 
@@ -64,9 +64,13 @@ function BlindSidePane({ side, letter, revealed, running, url, onRun }: { side: 
  */
 function BlindQueue() {
   const client = useQueryClient();
+  const [tag, setTag] = useState("");
+  const tasks = useData<Task[]>("tasks", "/tasks");
+  const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
+  const query = tag ? `?tag=${encodeURIComponent(tag)}` : "";
   // Пара выбирается случайно, поэтому любой автоматический перезапрос подменил бы её под руками судьи:
-  // новая пара берётся только по явной команде («Следующая пара», «Пропустить»).
-  const next = useQuery({ queryKey: ["pair-next"], queryFn: () => api<BlindPair>("/reviews/pair/next"), staleTime: Infinity, refetchOnWindowFocus: false, refetchOnMount: false, refetchOnReconnect: false });
+  // новая пара берётся только по явной команде («Следующая пара», «Пропустить») или при смене среза.
+  const next = useQuery({ queryKey: ["pair-next", query], queryFn: () => api<BlindPair>(`/reviews/pair/next${query}`), staleTime: Infinity, refetchOnWindowFocus: false, refetchOnMount: false, refetchOnReconnect: false });
   const [given, setGiven] = useState<Verdict>();
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const pair = next.data?.pair;
@@ -86,10 +90,15 @@ function BlindQueue() {
     await api("/preview", { method: "DELETE" });
     await next.refetch();
   };
-  if (next.isPending) return <div className="blind-queue"><span>Ищем пару для слепой оценки…</span></div>;
+  const chips = tags.length ? <div className="leaderboard-filters" role="group" aria-label="Срез слепой оценки">
+    <button type="button" className={tag ? "" : "active"} aria-pressed={!tag} onClick={() => { setTag(""); setGiven(undefined); setPreviews({}); }}>Все промпты</button>
+    {tags.map((item) => <button type="button" key={item} className={tag === item ? "active" : ""} aria-pressed={tag === item} onClick={() => { setTag(item); setGiven(undefined); setPreviews({}); }}>{item}</button>)}
+  </div> : null;
+  if (next.isPending) return <div className="blind-queue">{chips}<span>Ищем пару для слепой оценки…</span></div>;
   if (next.error) return <p className="error">{next.error.message}</p>;
-  if (!pair) return <div className="blind-queue"><strong>Слепую пару подобрать не из чего</strong><small>Нужны два завершённых результата одного промпта от разных моделей одного типа: локальная сравнивается только с локальной, подписочная — с подписочной. Ещё не оценённых пар нет.</small></div>;
+  if (!pair) return <div className="blind-queue">{chips}<strong>Слепую пару подобрать не из чего</strong><small>Нужны два завершённых результата одного промпта от разных моделей одного типа: локальная сравнивается только с локальной, подписочная — с подписочной. Ещё не оценённых пар нет.</small></div>;
   return <section className="blind-queue">
+    {chips}
     <header><strong>{pair.taskName}</strong><small>{pair.modelKind === "local-gguf" ? "Локальные модели" : "Модели по подписке"} · осталось пар: {next.data?.remaining}</small></header>
     {pair.description ? <p className="blind-prompt">{pair.description}</p> : null}
     <div className="blind-sides">{pair.sides.map((side, index) => <BlindSidePane

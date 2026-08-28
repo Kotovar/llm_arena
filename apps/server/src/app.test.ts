@@ -1348,6 +1348,12 @@ describe("REST API", () => {
     result(cloud.id, "Ещё один ответ первой");
     result(local.id, "Ответ локальной");
 
+    // Срез слепой оценки: тег есть только у промпта «Аквариум», поэтому в срезе те же две пары.
+    expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?tag=%D0%BA%D0%BE%D0%B4" })).json() as { remaining: number }).remaining).toBe(0);
+    store.setTaskTags(task.id, ["код"]);
+    expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?tag=%D0%BA%D0%BE%D0%B4" })).json() as { remaining: number }).remaining).toBe(2);
+    expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?untagged=1" })).json() as { remaining: number }).remaining).toBe(0);
+
     const queued = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
     const body = queued.json() as { remaining: number; pair: { taskName: string; description: string | null; modelKind: string; sides: Array<{ taskRunId: string; answer: string; resultSha: string | null }>; reveal: string[] } };
     // Пары: две облачные модели между собой; локальная модель не с кем сравнить.

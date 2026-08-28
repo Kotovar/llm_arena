@@ -28,6 +28,7 @@ function taskRun(overrides: Partial<TaskRun> = {}): TaskRun {
       metrics: { generationTokensPerSecond: { value: 64.2 } },
     }),
     error: null,
+    taskTags: ["код"],
     followups: [],
     ...overrides,
   };
@@ -318,5 +319,14 @@ describe("список промптов запуска", () => {
 
     expect(await screen.findByRole("heading", { level: 3, name: "Часы" })).toBeDefined();
     expect(screen.getByText("Оценено 1 из 3")).toBeDefined();
+  });
+});
+
+describe("теги промпта в результате", () => {
+  it("показывает теги задачи рядом с названием промпта", async () => {
+    await renderResult();
+
+    const heading = await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+    expect(heading.parentElement?.querySelector(".prompt-tag-list")?.textContent).toBe("код");
   });
 });

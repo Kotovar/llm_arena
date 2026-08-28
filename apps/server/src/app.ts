@@ -531,6 +531,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         // она не версионируется, поэтому берётся текущая.
         taskName: taskRunName(taskRun) ?? `Промпт ${taskRun.position + 1}`,
         taskDescription: store.taskDescriptionByRevision(taskRun.task_revision_id),
+        taskTags: store.taskTagsByRevision(taskRun.task_revision_id),
         attempts: store.taskRunAggregate(taskRun.id) ?? null,
       })),
     };
@@ -758,7 +759,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         .sort((left, right) => right.decided - left.decided),
     })).sort((left, right) => right.wins - left.wins || right.decided - left.decided);
   });
-  app.get("/api/reviews/pair/next", async () => {
+  app.get<{ Querystring: SliceQuery }>("/api/reviews/pair/next", async (request) => {
+    const slice = leaderboardSliceSchema.parse(request.query);
     const judged = new Set(store.listPairReviews().map((review) => [review.first_task_run_id, review.second_task_run_id].join("|")));
     type Candidate = {
       taskRunId: string; revisionId: string; modelId: string; modelKind: "local-gguf" | "cloud"; taskName: string;
@@ -768,6 +770,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     for (const row of store.listCompletedResults()) {
       const taskRun = store.getTaskRun(row.id);
       if (!taskRun) continue;
+      const tags = store.taskTagsByRevision(row.task_revision_id);
+      if (slice.tag !== undefined && !tags.includes(slice.tag)) continue;
+      if (slice.untagged && tags.length !== 0) continue;
       const snapshot = parseGallerySnapshot(row.snapshot_json);
       const selected = selectedResultVersionRecord(taskRun);
       const previewable = Boolean(snapshot?.fixture?.preview) && Boolean(selected) && checksPassed(selected!.resultJson);

@@ -58,7 +58,8 @@ beforeEach(() => {
       : url === "/api/models" ? [{ id: "model-1", name: "Кальмар", kind: "cloud", provider: "openai", modelRef: "squid" }, { id: "model-2", name: "Осьминог", kind: "cloud", provider: "openai", modelRef: "octopus" }]
       : url === "/api/runners" ? [{ id: "codex", name: "Codex", kind: "codex", exec: ["codex"], default: true }]
       : url === "/api/reviews/pair" ? []
-      : url === "/api/reviews/pair/next" ? blindPair
+      : url.startsWith("/api/reviews/pair/next") ? blindPair
+      : url === "/api/tasks" ? [{ id: "task-1", tags: ["код"], currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["код"], images: [] } }]
       : url === "/api/runs/run-1" ? { ...runs[0], taskRuns: [taskRun("task-run-1")] }
       : url === "/api/runs/run-2" ? { ...runs[1], taskRuns: [taskRun("task-run-2")] }
       : [];
@@ -150,5 +151,15 @@ describe("ручное сравнение запусков", () => {
 
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]!.body).toMatchObject({ leftTaskRunId: "task-run-1", rightTaskRunId: "task-run-2", winner: "tie" });
+  });
+
+  it("берёт пару из выбранного среза", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<ComparePage />, "/compare");
+    await screen.findByText("Аквариум");
+
+    await user.click(screen.getByRole("button", { name: "код" }));
+
+    await waitFor(() => expect(requests).toContain("/api/reviews/pair/next?tag=%D0%BA%D0%BE%D0%B4"));
   });
 });
