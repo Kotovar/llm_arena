@@ -324,11 +324,12 @@ export type ReviewScores = {
 };
 
 /** Скорость генерации сравнима только вместе с контекстом и профилем, при которых её измерили. */
-export function measurementConditions(profile?: { name: string; parameters: { context: number | "auto"; temperature?: number } }) {
+export function measurementConditions(profile?: { name: string; parameters: { context: number | "auto"; temperature?: number; seed?: number } }) {
   if (!profile) return undefined;
   const context = profile.parameters.context === "auto" ? "контекст авто" : `контекст ${Math.round(profile.parameters.context / 1024)}k`;
-  // Температуру фиксируем в результате: её меняют при перезапуске, и без неё цифры не сравнить.
-  return `${context} · темп. ${profile.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE} · профиль ${profile.name}`;
+  // Температуру и seed фиксируем в результате: без них цифры не сравнить и прогон не повторить.
+  const seed = profile.parameters.seed === undefined ? "seed случайный" : `seed ${profile.parameters.seed}`;
+  return `${context} · темп. ${profile.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE} · ${seed} · профиль ${profile.name}`;
 }
 
 export function reviewTotal(review: ReviewScores) {

@@ -325,8 +325,8 @@ describe("подписи списка запусков", () => {
 
   it("подписывает, при каких условиях измерена скорость", () => {
     expect(measurementConditions(undefined)).toBeUndefined();
-    expect(measurementConditions({ name: "Automatic", parameters: { context: "auto" } })).toBe("контекст авто · темп. 0.2 · профиль Automatic");
-    expect(measurementConditions({ name: "Quality", parameters: { context: 102_400, temperature: 0.9 } })).toBe("контекст 100k · темп. 0.9 · профиль Quality");
+    expect(measurementConditions({ name: "Automatic", parameters: { context: "auto" } })).toBe("контекст авто · темп. 0.2 · seed случайный · профиль Automatic");
+    expect(measurementConditions({ name: "Quality", parameters: { context: 102_400, temperature: 0.9, seed: 42 } })).toBe("контекст 100k · темп. 0.9 · seed 42 · профиль Quality");
   });
 });
 

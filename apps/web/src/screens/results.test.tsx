@@ -202,7 +202,7 @@ describe("условия замера", () => {
   it("подписывает скорость контекстом и профилем", async () => {
     await renderResult();
 
-    expect(screen.getByText("контекст 100k · темп. 0.2 · профиль Automatic")).toBeDefined();
+    expect(screen.getByText("контекст 100k · темп. 0.2 · seed случайный · профиль Automatic")).toBeDefined();
   });
 });
 

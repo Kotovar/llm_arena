@@ -1,3 +1,4 @@
+import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api } from "../api.js";
@@ -76,8 +77,9 @@ function NewProfileForm({ modelId, source, pending, create }: { modelId: string;
       cacheReuse: Number(data.get("cacheReuse")),
       fit: data.get("fit") === "on",
       ...(data.get("fit") === "on" ? { fitTargetMiB: Number(data.get("fitTargetMiB")), fitContextMin: Number(data.get("fitContextMin")) } : {}),
-      ...(source.parameters.temperature === undefined ? {} : { temperature: source.parameters.temperature }),
-      ...(source.parameters.seed === undefined ? {} : { seed: source.parameters.seed }),
+      temperature: Number(data.get("temperature")),
+      // Пустой seed — это «пусть llama.cpp выберет сам», а не ноль.
+      ...(String(data.get("seed") ?? "").trim() ? { seed: Number(data.get("seed")) } : {}),
     } }).then(() => { form.reset(); setOpen(false); }).catch(() => undefined);
   }}>
     <label className="span-2">Название профиля<input name="profileName" placeholder="Например, Скорость 32k" required /><small>Отдельное имя создаёт вариант для выбора при запуске; изменение существующего имени создаёт новую ревизию.</small></label>
@@ -93,6 +95,8 @@ function NewProfileForm({ modelId, source, pending, create }: { modelId: string;
     <label><input name="fit" type="checkbox" defaultChecked={source.parameters.fit} />Автоподбор загрузки</label>
     <label>Резерв VRAM, MiB<input name="fitTargetMiB" type="number" min="1" defaultValue={source.parameters.fitTargetMiB ?? 750} required /></label>
     <label>Минимальный контекст<input name="fitContextMin" type="number" min="4096" defaultValue={source.parameters.fitContextMin ?? 100000} required /></label>
+    <label>Температура<input name="temperature" type="number" min="0" max="2" step="0.05" defaultValue={source.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE} required /></label>
+    <label>Seed<input name="seed" type="number" defaultValue={source.parameters.seed ?? ""} placeholder="случайный" /></label>
     <button className="primary" disabled={pending}>{pending ? "Создаём профиль…" : "Создать профиль"}</button>
   </form></details>;
 }
@@ -202,7 +206,12 @@ export function ModelsPage() {
       cacheReuse: Number(data.get("cacheReuse")),
       fit: false,
     };
-    createLocal.mutate({ filename, name: localName, profileName: profileMode === "auto" ? "Automatic" : "Manual", profile: profileMode === "auto" ? automatic : manual, capabilities: localCapabilities, mmprojFilename: localCapabilities.vision ? localMmprojFilename || null : null });
+    // Сэмплинг — свойство профиля независимо от того, автоматический он или ручной.
+    const sampling = {
+      temperature: Number(data.get("temperature") ?? DEFAULT_LLAMA_TEMPERATURE),
+      ...(String(data.get("seed") ?? "").trim() ? { seed: Number(data.get("seed")) } : {}),
+    };
+    createLocal.mutate({ filename, name: localName, profileName: profileMode === "auto" ? "Automatic" : "Manual", profile: { ...(profileMode === "auto" ? automatic : manual), ...sampling }, capabilities: localCapabilities, mmprojFilename: localCapabilities.vision ? localMmprojFilename || null : null });
   }
 
   function submitCloud(event: FormEvent<HTMLFormElement>) {
@@ -258,6 +267,10 @@ export function ModelsPage() {
             <label className={profileMode === "auto" ? "selected" : ""}><input type="radio" checked={profileMode === "auto"} onChange={() => setProfileMode("auto")} /><strong>Автоматически</strong><small>Максимум GPU с резервом 750 MiB, контекст не ниже 100 000, Flash Attention и GPU-слои подбирает llama.cpp.</small></label>
             <label className={profileMode === "manual" ? "selected" : ""}><input type="radio" checked={profileMode === "manual"} onChange={() => setProfileMode("manual")} /><strong>Вручную</strong><small>Точные параметры для сравнения или переноса в другую связку.</small></label>
           </fieldset>
+          <fieldset className="sampling-fields span-2"><legend>Сэмплинг</legend>
+            <label>Температура<input name="temperature" type="number" min="0" max="2" step="0.05" defaultValue={DEFAULT_LLAMA_TEMPERATURE} required /><small>Насколько модель отходит от самого вероятного продолжения. Ниже — стабильнее и повторяемее, выше — разнообразнее.</small></label>
+            <label>Seed<input name="seed" type="number" placeholder="случайный" /><small>Фиксирует случайность генерации: с одинаковым seed и температурой прогон повторяем. Пусто — llama.cpp выбирает сам.</small></label>
+          </fieldset>
           {profileMode === "manual" ? <details className="manual-profile span-2" open><summary>Ручные параметры llama.cpp</summary>
             <p className="type-hint">Не хватает VRAM? Понижайте по порядку: точность KV-кеша до <code>q4_0</code>, затем micro-batch, затем контекст. Слои на CPU трогайте последними — они сильнее всего бьют по скорости.</p>
             <div className="form-grid">
@@ -298,7 +311,7 @@ export function ModelsPage() {
           {createProfile.error ? <p className="error">{createProfile.error.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для omp-local</span> : null}</div>
-            <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div></dl>
+            <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div><div><dt>Температура</dt><dd>{profile.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE}</dd></div><div><dt>Seed</dt><dd>{profile.parameters.seed ?? "случайный"}</dd></div></dl>
             {report ? <div className="gpu-report"><strong>{report.gpu.name}</strong><span>VRAM: {report.gpu.usedMiB} MiB занято · {report.gpu.freeMiB} MiB свободно из {report.gpu.totalMiB} MiB</span></div> : null}
             {calibrate.error && calibrate.variables === profile.id ? <p className="error">{calibrate.error.message}</p> : null}
             {activate.error && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? <p className="error">{activate.error.message}</p> : null}
