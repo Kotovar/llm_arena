@@ -62,8 +62,13 @@ function TasksPage() {
   const remove = useMutation({ mutationFn: (id: string) => api(`/tasks/${id}`, { method: "DELETE" }), onSuccess: () => client.invalidateQueries({ queryKey: ["tasks"] }) });
   // Теги правятся отдельным запросом: они живут на задаче, и их правка не создаёт версию промпта.
   const saveTags = useMutation({
-    mutationFn: ({ id, tags }: { id: string; tags: string[] }) => api(`/tasks/${id}/tags`, { method: "PUT", body: JSON.stringify({ tags }) }),
-    onSuccess: async () => { await client.invalidateQueries({ queryKey: ["tasks"] }); await client.invalidateQueries({ queryKey: ["gallery"] }); },
+    mutationFn: ({ id, tags }: { id: string; name: string; tags: string[] }) => api(`/tasks/${id}/tags`, { method: "PUT", body: JSON.stringify({ tags }) }),
+    onSuccess: async (_result, variables) => {
+      toast(variables.tags.length ? `Теги промпта «${variables.name}»: ${variables.tags.join(", ")}` : `Теги промпта «${variables.name}» убраны`);
+      await client.invalidateQueries({ queryKey: ["tasks"] });
+      await client.invalidateQueries({ queryKey: ["gallery"] });
+    },
+    onError: (error) => toast(error.message, "error"),
   });
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -94,7 +99,7 @@ function TasksPage() {
       <label className="prompt-import">{importTasks.isPending ? "Импортируем…" : "Импорт JSON"}<input type="file" accept="application/json,.json" disabled={importTasks.isPending} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) importTasks.mutate(file); }} /></label>
     </div>}><label className="prompt-search"><input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск по названию и тексту" aria-label="Поиск промптов" /></label><div className="stack">{found.map((task) => <article className="item prompt-item" key={task.id}>
       <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span>{editing?.taskId === task.id ? null : <h3>{task.currentRevision.name}</h3>}{editing?.taskId === task.id || !task.description ? null : <small className="task-description">{task.description}</small>}{task.currentRevision.images.length ? <small className="task-image-summary">Изображения: {task.currentRevision.images.map((image) => image.filename).join(", ")}</small> : null}</div><div className="item-actions">{editing?.taskId === task.id ? null : <button type="button" onClick={() => setEditing({ taskId: task.id, name: task.currentRevision.name, description: task.description ?? "", prompt: task.currentRevision.prompt, images: task.currentRevision.images, files: [] })}>Редактировать</button>}<button type="button" className="danger" disabled={remove.isPending} onClick={() => confirm({ title: "Убрать промпт в архив?", body: `«${task.currentRevision.name}» исчезнет из списка и из выбора при запуске. Результаты прошлых прогонов останутся, но вернуть промпт из интерфейса нельзя.`, action: "В архив", onConfirm: () => remove.mutate(task.id) })}>В архив</button></div></div>
-      <form className="prompt-tags-form" onSubmit={(event) => { event.preventDefault(); const value = String(new FormData(event.currentTarget).get("tags") ?? ""); saveTags.mutate({ id: task.id, tags: value.split(",").map((tag) => tag.trim()).filter(Boolean) }); }}>
+      <form className="prompt-tags-form" onSubmit={(event) => { event.preventDefault(); const value = String(new FormData(event.currentTarget).get("tags") ?? ""); saveTags.mutate({ id: task.id, name: task.currentRevision.name, tags: value.split(",").map((tag) => tag.trim()).filter(Boolean) }); }}>
         <label>Теги<input name="tags" defaultValue={task.tags.join(", ")} placeholder="код, текст" /></label>
         <button disabled={saveTags.isPending && saveTags.variables?.id === task.id}>{saveTags.isPending && saveTags.variables?.id === task.id ? "Сохраняем…" : "Сохранить теги"}</button>
         <small>Через запятую. По ним фильтруется галерея; версию промпта теги не меняют.</small>
