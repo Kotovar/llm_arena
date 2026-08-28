@@ -150,7 +150,9 @@ button:has(.icon), a:has(.icon) { display: inline-flex; align-items: center; gap
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 .run-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }.run-filters select { min-width: 200px; padding: 8px 12px; }
 .run-list { min-width: 0; display: grid; }.run-row-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 34px; align-items: center; gap: 4px; border-bottom: 1px solid var(--line); }
-.run-list > .run-row-wrap:last-of-type { border-bottom: 0; }.run-row-wrap:hover { background: rgba(127, 166, 242, .05); border-radius: var(--r-md); }.run-row { min-width: 0; display: grid; grid-template-columns: 156px minmax(0, 1fr) 92px 130px; align-items: center; gap: 16px; color: inherit; padding: 16px 8px; border-radius: var(--r-md); }
+.run-list > .run-row-wrap:last-of-type { border-bottom: 0; }.run-row-wrap:hover { background: rgba(127, 166, 242, .05); border-radius: var(--r-md); }
+/* Разделители вокруг подсвеченной строки гаснут: линия сверху срезала скругление, и угол выглядел рубленым. */
+.run-row-wrap:hover, .run-row-wrap:has(+ .run-row-wrap:hover) { border-bottom-color: transparent; }.run-row { min-width: 0; display: grid; grid-template-columns: 156px minmax(0, 1fr) 92px 130px; align-items: center; gap: 16px; color: inherit; padding: 16px 8px; border-radius: var(--r-md); }
 .run-row-copy { display: grid; min-width: 0; gap: 3px; }
 .run-row-copy strong, .run-row-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-row-copy strong { color: #e4e8f1; font: 600 14px var(--font-ui); }
