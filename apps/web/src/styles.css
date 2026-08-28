@@ -1,7 +1,6 @@
-/* Шрифты лежат в пакетах рядом: приложение работает без сети, ссылаться на CDN нельзя. */
-@import "@fontsource-variable/noto-sans/wght.css";
-@import "@fontsource-variable/jetbrains-mono/wght.css";
-@import "@fontsource-variable/noto-serif/wght.css";
+/* Шрифты лежат в пакетах рядом: приложение работает без сети, ссылаться на CDN нельзя.
+   Подмножества отобраны в fonts.css — целиком пакеты тянут в сборку и деванагари, и вьетнамский. */
+@import "./fonts.css";
 
 :root {
   /* Noto Sans — то, чем страница рисовалась до подключения шрифта; пакет фиксирует её, а не полагается на систему. */

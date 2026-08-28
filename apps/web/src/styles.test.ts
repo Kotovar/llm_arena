@@ -44,6 +44,15 @@ describe("цветовая доступность", () => {
     expect(guarded.join(" ")).toMatch(/\.panel/);
   });
 
+  // Полные пакеты fontsource тянут в сборку два десятка подмножеств, включая деванагари.
+  it("подключает только латиницу и кириллицу", () => {
+    const fonts = readFileSync(new URL("./fonts.css", import.meta.url), "utf8");
+    expect(css).not.toMatch(/@import "@fontsource/u);
+    const files = [...fonts.matchAll(/files\/([a-z0-9-]+)\.woff2/gu)].map((match) => match[1]!);
+    expect(files).toHaveLength(6);
+    expect(files.every((file) => /-(latin|cyrillic)-wght-normal$/u.test(file))).toBe(true);
+  });
+
   it("держит иконки одного размера", () => {
     expect(css).toMatch(/\.icon \{[^}]*width: 16px;[^}]*height: 16px/);
   });
