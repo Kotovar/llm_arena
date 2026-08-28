@@ -69,20 +69,29 @@ export function paretoShortlist(points: DecisionPoint[]) {
 function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: DecisionPoint) => string | null }) {
   // Точку без качества или скорости рисовать нечем, но из таблицы она не исчезает.
   const plotted = points.filter((point) => point.qualityPercent !== null && point.medianTokensPerSecond !== null);
-  // Запас справа: иначе самая быстрая связка прилипает к оси, а подпись уезжает за край.
-  const maxSpeed = Math.max(...plotted.map((point) => point.medianTokensPerSecond!), 1) * 1.15;
+  const fastest = Math.max(...plotted.map((point) => point.medianTokensPerSecond!), 1);
+  // Шаг сетки круглый, а верх шкалы — следующее деление за самым быстрым: иначе точка липнет к краю.
+  const step = fastest <= 60 ? 10 : fastest <= 150 ? 20 : 50;
+  const maxSpeed = (Math.floor(fastest / step) + 1) * step;
+  const speedTicks = Array.from({ length: maxSpeed / step + 1 }, (_, index) => index * step);
+  const qualityTicks = [0, 25, 50, 75, 100];
   const x = (speed: number) => 60 + (speed / maxSpeed) * 540;
   const y = (quality: number) => 280 - (quality / 100) * 250;
   return <>
     {plotted.length ? null : <Empty>Ни у одной связки нет одновременно оценки и замера скорости.</Empty>}
     <svg className="scatter" role="img" aria-label="Качество и скорость" viewBox="0 0 640 320">
+      {qualityTicks.map((tick) => <g key={`q${tick}`}>
+        <line className="scatter-grid" x1="60" y1={y(tick)} x2="620" y2={y(tick)} />
+        <text x="52" y={y(tick) + 4} textAnchor="end" className="scatter-tick">{tick}</text>
+      </g>)}
+      {speedTicks.map((tick) => <g key={`s${tick}`}>
+        <line className="scatter-grid" x1={x(tick)} y1="30" x2={x(tick)} y2="280" />
+        <text x={x(tick)} y="296" textAnchor="middle" className="scatter-tick">{tick}</text>
+      </g>)}
       <line x1="60" y1="30" x2="60" y2="280" />
       <line x1="60" y1="280" x2="620" y2="280" />
       <text x="60" y="20" className="scatter-axis">Доля баллов, %</text>
-      <text x="620" y="305" textAnchor="end" className="scatter-axis">Скорость, токенов/с</text>
-      <text x="52" y="34" textAnchor="end" className="scatter-tick">100</text>
-      <text x="52" y="284" textAnchor="end" className="scatter-tick">0</text>
-      <text x="620" y="296" textAnchor="end" className="scatter-tick">{Math.round(maxSpeed)}</text>
+      <text x="620" y="313" textAnchor="end" className="scatter-axis">Скорость, токенов/с</text>
       {plotted.map((point) => <g key={pointKey(point)}>
         {/* Подпись у каждой точки: опознавать связку по одному цвету нельзя. */}
         <circle cx={x(point.medianTokensPerSecond!)} cy={y(point.qualityPercent!)} r="7" fill={color(point) ?? "none"} stroke={color(point) ?? "var(--line-strong)"} strokeWidth="2">
@@ -125,11 +134,11 @@ function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: De
 function Heatmap({ slices, tagged }: { slices: Array<{ label: string; points: DecisionPoint[] }>; tagged: boolean }) {
   const keys = new Map<string, string>();
   for (const slice of slices) for (const point of slice.points) keys.set(pointKey(point), pointLabel(point));
-  // Без тегов сравнивать нечего: единственный столбец «Без тегов» — это просто общий результат.
-  if (!tagged) return <Empty>Срез нагрузки — это тег промпта, а тегов пока нет. Проставьте промптам теги (например «код» или «текст») на странице «Промпты», и здесь появится сравнение по видам работы.</Empty>;
   if (!keys.size) return <Empty>Пока нет ни одного замера по срезам нагрузки.</Empty>;
   const quality = (points: DecisionPoint[], key: string) => points.find((point) => pointKey(point) === key)?.qualityPercent ?? null;
-  return <table className="heatmap">
+  return <>
+    {tagged ? null : <p className="slice-hint">Тегов у промптов пока нет, поэтому сравнивать виды работы не с чем — здесь только общий столбец. Проставьте промптам теги на странице «Промпты», и колонок станет столько же, сколько видов нагрузки.</p>}
+    <table className="heatmap">
     <caption>Доля баллов по срезам нагрузки. Столбец «Без тегов» — промпты, которым тег не проставлен.</caption>
     <thead><tr><th scope="col">Связка</th>{slices.map((slice) => <th scope="col" key={slice.label}>{slice.label}</th>)}</tr></thead>
     <tbody>{[...keys].map(([key, label]) => <tr key={key}>
@@ -140,7 +149,8 @@ function Heatmap({ slices, tagged }: { slices: Array<{ label: string; points: De
         return <td key={slice.label} className="mono" style={value === null ? undefined : { background: `color-mix(in srgb, var(--series-1) ${Math.round(value)}%, transparent)` }}>{value === null ? "—" : `${value}%`}</td>;
       })}
     </tr>)}</tbody>
-  </table>;
+    </table>
+  </>;
 }
 
 const views = [
@@ -158,13 +168,15 @@ export function AnalyticsPage() {
   const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.currentRevision.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const query = sliceQuery(slice);
   const points = useData<DecisionPoint[]>(`decision-points${query}`, `/analytics/decision-points${query}`);
+  // Общий столбец есть всегда, «Без тегов» — только когда теги вообще заведены: иначе он его повторяет.
+  const heatmapColumns = [{ label: "Вся нагрузка", query: "" }, ...tags.map((tag) => ({ label: tag, query: `?tag=${encodeURIComponent(tag)}` })), ...(tags.length ? [{ label: "Без тегов", query: "?untagged=1" }] : [])];
   const sliceQueries = useQueries({
-    queries: [...tags.map((tag) => `?tag=${encodeURIComponent(tag)}`), "?untagged=1"].map((item) => ({
-      queryKey: ["decision-points", item],
-      queryFn: () => api<DecisionPoint[]>(`/analytics/decision-points${item}`),
+    queries: heatmapColumns.map((column) => ({
+      queryKey: ["decision-points", column.query],
+      queryFn: () => api<DecisionPoint[]>(`/analytics/decision-points${column.query}`),
     })),
   });
-  const heatmapSlices = [...tags, "Без тегов"].map((label, index) => ({ label, points: sliceQueries[index]?.data ?? [] }));
+  const heatmapSlices = heatmapColumns.map((column, index) => ({ label: column.label, points: sliceQueries[index]?.data ?? [] }));
   const shortlist = paretoShortlist(points.data ?? []);
   const color = colorByKey(points.data ?? []);
   return <Page title="Аналитика решений" eyebrow="Аналитика" intro="Одна точка — модель с конкретным профилем на выбранном срезе нагрузки. Неизмеренное не рисуется нулём: такие связки видно только в таблице.">

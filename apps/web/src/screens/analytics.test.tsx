@@ -128,4 +128,29 @@ describe("аналитика решений", () => {
     expect(within(row).getByText("0%")).toBeTruthy();
     expect(within(row).getByText("1 из 2")).toBeTruthy();
   });
+
+  it("подписывает сетку по обеим осям", async () => {
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    const chart = await screen.findByRole("img", { name: "Качество и скорость" });
+
+    const ticks = [...chart.querySelectorAll(".scatter-tick")].map((tick) => tick.textContent);
+    expect(ticks.slice(0, 5)).toEqual(["0", "25", "50", "75", "100"]);
+    // Скорость до 42 т/с: шкала доходит до следующего круглого деления.
+    expect(ticks.slice(5)).toEqual(["0", "10", "20", "30", "40", "50"]);
+    expect(chart.querySelectorAll("line.scatter-grid").length).toBe(11);
+  });
+
+  it("оставляет общий столбец карты, когда тегов ещё нет", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : [point()]), { status: 200, headers: { "content-type": "application/json" } })));
+    const user = userEvent.setup();
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("img", { name: "Качество и скорость" });
+
+    await user.click(screen.getByRole("tab", { name: "Срезы нагрузки" }));
+
+    const table = await screen.findByRole("table", { name: /Доля баллов по срезам нагрузки/u });
+    expect(within(table).getByText("Вся нагрузка")).toBeTruthy();
+    expect(within(table).getByText("80%")).toBeTruthy();
+    expect(screen.getByText(/Тегов у промптов пока нет/u)).toBeTruthy();
+  });
 });

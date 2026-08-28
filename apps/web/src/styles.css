@@ -181,7 +181,8 @@ a { color: var(--signal); text-decoration: none; }
 .scatter-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0 0 20px; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
 .scatter-legend li { display: flex; align-items: center; gap: 7px; }
 .legend-mark { width: 11px; height: 11px; border: 2px solid var(--line-strong); border-radius: 50%; }
-.scatter line { stroke: var(--line); stroke-width: 1; }
+.scatter line { stroke: var(--line-strong); stroke-width: 1; }
+.scatter line.scatter-grid { stroke: var(--line); stroke-dasharray: 3 4; }
 .scatter circle { fill: var(--signal); fill-opacity: 0.75; }
 .scatter text { fill: var(--muted); font-size: 11px; }
 .analytics-table, .heatmap { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 13px; }
