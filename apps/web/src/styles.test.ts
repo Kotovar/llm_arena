@@ -37,6 +37,17 @@ describe("цветовая доступность", () => {
     expect(css).toMatch(/::placeholder[^}]*color:\s*var\(--muted\)/);
   });
 
+  // Движение — украшение: у пользователя с prefers-reduced-motion его быть не должно.
+  it("выключает новые анимации при запрете движения", () => {
+    const guarded = css.match(/@media \(prefers-reduced-motion: reduce\)[^}]*\{[^@]*?animation: none[^}]*\}/gu) ?? [];
+    expect(guarded.join(" ")).toMatch(/\.skeleton span/);
+    expect(guarded.join(" ")).toMatch(/\.panel/);
+  });
+
+  it("держит иконки одного размера", () => {
+    expect(css).toMatch(/\.icon \{[^}]*width: 16px;[^}]*height: 16px/);
+  });
+
   // Правило с fill перебивало бы атрибут fill у точки и красило все связки одним цветом.
   it("не задаёт цвет точек диаграммы правилом css", () => {
     expect(css).not.toMatch(/\.scatter \.scatter-dot \{[^}]*[^-]fill:/);

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Empty, Page, Panel, useData } from "../shell.js";
+import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { LeaderboardEntry, PairSummary } from "../types.js";
 import { formatCost, formatMetricValue, plural } from "../ui.js";
 
@@ -67,9 +67,9 @@ export function LeaderboardPage() {
   const unranked = shown.filter((entry) => entry.scorePercent === null);
   const thin = ranked.filter((entry) => entry.reviewedTaskRunCount < CONFIDENT_SAMPLE).length;
   return <Page title="Лидерборд моделей" eyebrow="Лидерборд" intro="Доля набранных баллов по оценённым промптам во всех запусках модели. Максимум за промпт зависит от типа задачи, поэтому счёт нормализован. Средние по критериям — из десяти.">
-    {leaderboard.isPending ? <Empty>Считаем результаты…</Empty> : null}
+    {leaderboard.isPending ? <Skeleton rows={5} /> : null}
     {leaderboard.error ? <p className="error">{leaderboard.error.message}</p> : null}
-    {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length ? <Empty>Пока нет ни одного запуска.</Empty> : null}
+    {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length ? <Empty action={<Link to="/">Запустить проверку</Link>}>Пока нет ни одного запуска.</Empty> : null}
     {leaderboard.data?.length ? <Panel title={`Моделей: ${shown.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель оценена", "модели оценены", "моделей оценены")} меньше чем на {CONFIDENT_SAMPLE} промптах</span> : undefined}>
       <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{kindFilters.map(([value, label]) => <button type="button" key={value} className={kind === value ? "active" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>)}</div>
       {shown.length ? <div className="leaderboard-scroll"><table className="leaderboard-table"><thead><tr>

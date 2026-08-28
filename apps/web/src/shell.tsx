@@ -14,8 +14,13 @@ export function Panel({ title, action, children }: { title: string; action?: Rea
   return <section className="panel"><header className="panel-head"><h2>{title}</h2>{action}</header>{children}</section>;
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <p className="empty">{children}</p>;
+export function Empty({ children, action }: { children: ReactNode; action?: ReactNode }) {
+  return <div className="empty"><p>{children}</p>{action}</div>;
+}
+
+/** Пока данные едут, показываем их будущую форму: текст «загружаем» тут же сменяется таблицей и всё прыгает. */
+export function Skeleton({ rows = 4 }: { rows?: number }) {
+  return <div className="skeleton" role="status" aria-label="Загружаем данные">{Array.from({ length: rows }, (_, index) => <span key={index} />)}</div>;
 }
 
 export function Status({ value }: { value: string }) {

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
+import { ExternalIcon } from "../icons.js";
 import { Empty, Page, Status, useData } from "../shell.js";
 import type { Model, PairReview, Run, Runner, Task, TaskRun } from "../types.js";
 import { betterResult, formatRelativeTime, formatReviewSummary, matchTaskRuns, reviewPossible, reviewSummary, reviewTotal, runModelName } from "../ui.js";
@@ -52,7 +53,7 @@ function BlindSidePane({ side, letter, revealed, running, url, onRun }: { side: 
   return <article><header><span className="mono">Вариант {letter}</span>{revealed ? <em>{revealed}</em> : null}</header>
     {side.resultSha
       ? url
-        ? <><iframe title={`Вариант ${letter}`} src={url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" /><a href={url} target="_blank" rel="noreferrer">Открыть в новой вкладке ↗</a></>
+        ? <><iframe title={`Вариант ${letter}`} src={url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" /><a href={url} target="_blank" rel="noreferrer">Открыть в новой вкладке <ExternalIcon /></a></>
         : <div className="blind-launch"><button type="button" className="primary" onClick={onRun} disabled={running}>{running ? "Запускаем…" : `Запустить вариант ${letter}`}</button></div>
       : <pre>{side.answer || "Пустой ответ"}</pre>}
   </article>;

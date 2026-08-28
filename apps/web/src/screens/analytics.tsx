@@ -1,7 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api.js";
-import { Empty, Page, Panel, useData } from "../shell.js";
+import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { DecisionPoint, Task } from "../types.js";
 import { formatDuration, formatMetricValue, formatVram, plural } from "../ui.js";
 
@@ -225,7 +225,7 @@ export function AnalyticsPage() {
   const views = viewsFor(tags.length > 0);
   return <Page title="Аналитика решений" eyebrow="Аналитика" intro="Одна точка — модель с конкретным профилем на выбранном срезе нагрузки. Неизмеренное не рисуется нулём: такие связки видно только в таблице.">
     {points.error ? <p className="error">{points.error.message}</p> : null}
-    {points.isPending ? <Empty>Считаем точки решения…</Empty> : null}
+    {points.isPending ? <Skeleton rows={5} /> : null}
     {points.data ? <>
       <div className="compare-tabs" role="tablist" aria-label="Вид аналитики">
         {views.map(([value, label]) => <button type="button" role="tab" key={value} aria-selected={view === value} className={view === value ? "active" : ""} onClick={() => setView(value)}>{label}</button>)}
