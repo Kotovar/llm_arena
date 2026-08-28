@@ -345,7 +345,7 @@ describe("REST API", () => {
     const exported = await app.inject({ method: "GET", url: "/api/tasks/export" });
 
     expect(exported.headers["content-disposition"]).toContain("llm-arena-prompts.json");
-    expect(exported.json()).toEqual([{ name: "Часы", description: "Проверяем таймеры", prompt: "Сделай часы" }]);
+    expect(exported.json()).toEqual([{ name: "Часы", description: "Проверяем таймеры", prompt: "Сделай часы", tags: ["ui"] }]);
 
     const imported = await app.inject({ method: "POST", url: "/api/tasks/import", payload: [
       { name: "Часы", description: "Проверяем таймеры и будильник", prompt: "Сделай часы с будильником" },
@@ -1461,6 +1461,33 @@ describe("REST API", () => {
       expect.objectContaining({ modelName: "Agent Model", wins: 2, losses: 1, decided: 4 }),
       expect.objectContaining({ modelName: "Rival Model", wins: 1, losses: 2, decided: 4 }),
     ]);
+    await app.close();
+    store.close();
+  });
+
+  it("переносит теги через экспорт и импорт промптов", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-tags-transfer-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай", tags: [] });
+    store.setTaskTags(task.id, ["код"]);
+
+    const exported = (await app.inject({ method: "GET", url: "/api/tasks/export" })).json() as Array<{ name: string; tags?: string[] }>;
+    expect(exported).toEqual([expect.objectContaining({ name: "Аквариум", tags: ["код"] })]);
+
+    // Импорт того же файла в чистую базу восстанавливает теги.
+    const fresh = createStore(join(directory, "fresh.sqlite"));
+    const freshApp = buildApp({ store: fresh, config: loadConfig("../../arena.config.yaml") });
+    expect((await freshApp.inject({ method: "POST", url: "/api/tasks/import", payload: exported })).json()).toEqual({ created: 1, updated: 0 });
+    expect(fresh.listTasks()[0]?.tags).toEqual(["код"]);
+
+    // Файл без тегов не снимает уже проставленные: молчание — не команда «убрать».
+    await freshApp.inject({ method: "POST", url: "/api/tasks/import", payload: [{ name: "Аквариум", prompt: "Сделай иначе" }] });
+    expect(fresh.listTasks()[0]?.tags).toEqual(["код"]);
+    await freshApp.close();
+    fresh.close();
     await app.close();
     store.close();
   });

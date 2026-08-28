@@ -81,6 +81,7 @@ const importTasksSchema = z.array(z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(4_000).optional(),
   prompt: z.string().trim().min(1),
+  tags: z.array(z.string().trim().max(60)).max(20).optional(),
 }).strict()).min(1).max(1_000);
 const externalLauncherQuerySchema = z.object({
   profileName: z.string().trim().min(1),
@@ -312,6 +313,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       name: task.currentRevision.name,
       ...(task.description ? { description: task.description } : {}),
       prompt: task.currentRevision.prompt,
+      ...(task.tags.length ? { tags: task.tags } : {}),
     }));
   });
   app.put<{ Params: { id: string } }>("/api/tasks/:id/tags", async (request) => {
@@ -323,14 +325,15 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const existing = new Map(store.listTasks().map((task) => [task.currentRevision.name, task]));
     let created = 0;
     let updated = 0;
-    for (const item of incoming) {
+    for (const { tags, ...item } of incoming) {
       const current = existing.get(item.name);
       if (!current) {
-        store.createTask({ ...item, kind: "prompt", tags: [], images: [] });
+        const task = store.createTask({ ...item, kind: "prompt", tags: tags ?? [], images: [] });
+        if (tags?.length) store.setTaskTags(task.id, tags);
         created += 1;
         continue;
       }
-      // Совпадение по названию — правка, а не дубль: тип, фикстура, теги и картинки остаются от текущей версии.
+      // Совпадение по названию — правка, а не дубль: тип, фикстура и картинки остаются от текущей версии.
       const revision = current.currentRevision;
       store.updateTask(current.id, {
         ...item,
@@ -338,6 +341,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         images: revision.images,
         ...(revision.kind === "coding" ? { kind: "coding" as const, fixtureId: revision.fixtureId } : { kind: "prompt" as const }),
       });
+      // Теги живут на задаче, поэтому обновляются отдельно и только когда их прислали:
+      // файл без тегов не должен молча снимать уже проставленные.
+      if (tags) store.setTaskTags(current.id, tags);
       updated += 1;
     }
     return { created, updated };
