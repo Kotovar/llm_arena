@@ -131,14 +131,12 @@ function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: De
   </>;
 }
 
-function Heatmap({ slices, tagged }: { slices: Array<{ label: string; points: DecisionPoint[] }>; tagged: boolean }) {
+function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPoint[] }> }) {
   const keys = new Map<string, string>();
   for (const slice of slices) for (const point of slice.points) keys.set(pointKey(point), pointLabel(point));
   if (!keys.size) return <Empty>Пока нет ни одного замера по срезам нагрузки.</Empty>;
   const quality = (points: DecisionPoint[], key: string) => points.find((point) => pointKey(point) === key)?.qualityPercent ?? null;
-  return <>
-    {tagged ? null : <p className="slice-hint">Тегов у промптов пока нет, поэтому сравнивать виды работы не с чем — здесь только общий столбец. Проставьте промптам теги на странице «Промпты», и колонок станет столько же, сколько видов нагрузки.</p>}
-    <table className="heatmap">
+  return <table className="heatmap">
     <caption>Доля баллов по срезам нагрузки. Столбец «Без тегов» — промпты, которым тег не проставлен.</caption>
     <thead><tr><th scope="col">Связка</th>{slices.map((slice) => <th scope="col" key={slice.label}>{slice.label}</th>)}</tr></thead>
     <tbody>{[...keys].map(([key, label]) => <tr key={key}>
@@ -149,17 +147,18 @@ function Heatmap({ slices, tagged }: { slices: Array<{ label: string; points: De
         return <td key={slice.label} className="mono" style={value === null ? undefined : { background: `color-mix(in srgb, var(--series-1) ${Math.round(value)}%, transparent)` }}>{value === null ? "—" : `${value}%`}</td>;
       })}
     </tr>)}</tbody>
-    </table>
-  </>;
+  </table>;
 }
 
-const views = [
-  ["scatter", "Качество и скорость"],
-  ["slices", "Срезы нагрузки"],
-  ["pareto", "Короткий список"],
-] as const;
+type View = "scatter" | "slices" | "pareto";
 
-type View = (typeof views)[number][0];
+// Пока промптам не проставлены теги, срез ровно один: чипсы и вкладка по срезам показывали бы
+// один и тот же общий результат под разными именами.
+function viewsFor(tagged: boolean): Array<[View, string]> {
+  return tagged
+    ? [["scatter", "Качество и скорость"], ["slices", "Срезы нагрузки"], ["pareto", "Короткий список"]]
+    : [["scatter", "Качество и скорость"], ["pareto", "Короткий список"]];
+}
 
 export function AnalyticsPage() {
   const [slice, setSlice] = useState<Slice>({ kind: "all" });
@@ -179,6 +178,7 @@ export function AnalyticsPage() {
   const heatmapSlices = heatmapColumns.map((column, index) => ({ label: column.label, points: sliceQueries[index]?.data ?? [] }));
   const shortlist = paretoShortlist(points.data ?? []);
   const color = colorByKey(points.data ?? []);
+  const views = viewsFor(tags.length > 0);
   return <Page title="Аналитика решений" eyebrow="Аналитика" intro="Одна точка — модель с конкретным профилем на выбранном срезе нагрузки. Неизмеренное не рисуется нулём: такие связки видно только в таблице.">
     {points.error ? <p className="error">{points.error.message}</p> : null}
     {points.isPending ? <Empty>Считаем точки решения…</Empty> : null}
@@ -187,13 +187,15 @@ export function AnalyticsPage() {
         {views.map(([value, label]) => <button type="button" role="tab" key={value} aria-selected={view === value} className={view === value ? "active" : ""} onClick={() => setView(value)}>{label}</button>)}
       </div>
       <Panel title={views.find(([value]) => value === view)![1]} action={view === "scatter" ? <span className="mono">{`Pareto: ${shortlist.length} ${plural(shortlist.length, "связка", "связки", "связок")}`}</span> : undefined}>
-        {view === "slices" ? <Heatmap slices={heatmapSlices} tagged={tags.length > 0} /> : <>
-          <div className="leaderboard-filters" role="group" aria-label="Срез нагрузки">
-            <button type="button" className={slice.kind === "all" ? "active" : ""} aria-pressed={slice.kind === "all"} onClick={() => setSlice({ kind: "all" })}>Вся нагрузка</button>
-            {tags.map((tag) => <button type="button" key={tag} className={slice.kind === "tag" && slice.tag === tag ? "active" : ""} aria-pressed={slice.kind === "tag" && slice.tag === tag} onClick={() => setSlice({ kind: "tag", tag })}>{tag}</button>)}
-            <button type="button" className={slice.kind === "untagged" ? "active" : ""} aria-pressed={slice.kind === "untagged"} onClick={() => setSlice({ kind: "untagged" })}>Без тегов</button>
-          </div>
-          <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, «Без тегов» — только по тем, которым тег не проставлен.</p>
+        {view === "slices" ? <Heatmap slices={heatmapSlices} /> : <>
+          {tags.length ? <>
+            <div className="leaderboard-filters" role="group" aria-label="Срез нагрузки">
+              <button type="button" className={slice.kind === "all" ? "active" : ""} aria-pressed={slice.kind === "all"} onClick={() => setSlice({ kind: "all" })}>Вся нагрузка</button>
+              {tags.map((tag) => <button type="button" key={tag} className={slice.kind === "tag" && slice.tag === tag ? "active" : ""} aria-pressed={slice.kind === "tag" && slice.tag === tag} onClick={() => setSlice({ kind: "tag", tag })}>{tag}</button>)}
+              <button type="button" className={slice.kind === "untagged" ? "active" : ""} aria-pressed={slice.kind === "untagged"} onClick={() => setSlice({ kind: "untagged" })}>Без тегов</button>
+            </div>
+            <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, «Без тегов» — только по тем, которым тег не проставлен.</p>
+          </> : null}
           {view === "scatter"
             ? points.data.length ? <Scatter points={points.data} color={color} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
             : shortlist.length

@@ -140,17 +140,14 @@ describe("аналитика решений", () => {
     expect(chart.querySelectorAll("line.scatter-grid").length).toBe(11);
   });
 
-  it("оставляет общий столбец карты, когда тегов ещё нет", async () => {
+  it("прячет срезы целиком, пока тегов нет", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : [point()]), { status: 200, headers: { "content-type": "application/json" } })));
-    const user = userEvent.setup();
     await renderInApp(<AnalyticsPage />, "/analytics");
     await screen.findByRole("img", { name: "Качество и скорость" });
 
-    await user.click(screen.getByRole("tab", { name: "Срезы нагрузки" }));
-
-    const table = await screen.findByRole("table", { name: /Доля баллов по срезам нагрузки/u });
-    expect(within(table).getByText("Вся нагрузка")).toBeTruthy();
-    expect(within(table).getByText("80%")).toBeTruthy();
-    expect(screen.getByText(/Тегов у промптов пока нет/u)).toBeTruthy();
+    // Без тегов срез ровно один, поэтому ни вкладки, ни чипсов «Вся нагрузка / Без тегов» быть не должно.
+    expect(screen.queryByRole("tab", { name: "Срезы нагрузки" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Срез нагрузки" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Короткий список" })).toBeTruthy();
   });
 });
