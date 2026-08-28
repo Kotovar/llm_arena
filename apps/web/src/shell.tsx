@@ -94,7 +94,7 @@ function ActivityCard() {
 export function Shell() {
   const groups = [
     { label: "Запуск", links: [["/", "Новый запуск"]] },
-    { label: "Анализ", links: [["/runs", "Результаты"], ["/leaderboard", "Лидерборд"], ["/compare", "Сравнение"], ["/gallery", "Галерея"]] },
+    { label: "Анализ", links: [["/runs", "Результаты"], ["/leaderboard", "Лидерборд"], ["/compare", "Сравнение"], ["/analytics", "Аналитика"], ["/gallery", "Галерея"]] },
     { label: "Подготовка", links: [["/tasks", "Промпты"], ["/models", "Модели"], ["/settings", "Настройки"]] },
   ] as const;
   return <div className="shell"><aside className="sidebar"><div className="brand"><span className="brand-mark">A/B</span><div><strong>LLM Arena</strong><small>сравнение моделей</small></div></div><nav aria-label="Навигация LLM Arena">{groups.map((group) => <div className="nav-group" key={group.label}><span className="nav-group-label">{group.label}</span>{group.links.map(([to, label]) => <Link key={to} to={to} activeOptions={{ exact: to === "/" }}>{label}</Link>)}</div>)}</nav><ActivityCard /><HostCard /></aside><main className="content"><Outlet /></main></div>;

@@ -5,6 +5,7 @@ import { RouterProvider, createRootRoute, createRoute, createRouter } from "@tan
 import { api } from "./api.js";
 import { useConfirm } from "./confirm.js";
 import { Launcher } from "./screens/launcher.js";
+import { AnalyticsPage } from "./screens/analytics.js";
 import { ComparePage } from "./screens/compare.js";
 import { GalleryPage } from "./screens/gallery.js";
 import { LeaderboardPage } from "./screens/leaderboard.js";
@@ -135,9 +136,10 @@ const compareRoute = createRoute({
     ...(typeof search.right === "string" ? { right: search.right } : {}),
   } as { left?: string; right?: string }),
 });
+const analyticsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/analytics", component: AnalyticsPage });
 const galleryRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gallery", component: GalleryPage });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, galleryRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, analyticsRoute, galleryRoute, settingsRoute]);
 const router = createRouter({ routeTree, defaultPreload: "intent" });
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }
 
