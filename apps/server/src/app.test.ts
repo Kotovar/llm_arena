@@ -1459,6 +1459,49 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("тегирует промпт, не трогая его версию и галерею", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-tags-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Аквариум", kind: "coding", prompt: "Сделай", fixtureId: "web-app", tags: [] });
+    const model = store.createModel({ name: "Модель", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const source = join(directory, "fixture");
+    mkdirSync(source);
+    writeFileSync(join(source, "index.html"), "<h1>ok</h1>");
+    const artifactPath = join(directory, "result");
+    const artifacts = finalizeWorkspace(prepareWorkspace(source, artifactPath));
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, artifactPath, {
+      task: task.currentRevision,
+      fixture: { id: "web-app", name: "Web", source, checks: [], preview: { command: { argv: ["preview", "{port}"] }, readyPath: "/" } },
+    });
+    store.saveTaskRunResult(taskRun.id, { artifacts, checks: [] });
+
+    const before = (await app.inject({ method: "GET", url: "/api/gallery" })).json() as Array<{ prompt: { id: string; tags: string[] } }>;
+    expect(before).toHaveLength(1);
+    expect(before[0]!.prompt.tags).toEqual([]);
+
+    const tagged = await app.inject({ method: "PUT", url: `/api/tasks/${task.id}/tags`, payload: { tags: ["код", " код ", ""] } });
+    expect(tagged.statusCode).toBe(200);
+    expect(tagged.json()).toMatchObject({ tags: ["код"], currentRevision: { id: task.currentRevision.id, revision: 1 } });
+
+    // Тегирование не версия промпта: строка галереи и её версия остались теми же.
+    const after = (await app.inject({ method: "GET", url: "/api/gallery" })).json() as Array<{ prompt: { id: string; tags: string[] } }>;
+    expect(after).toHaveLength(1);
+    expect(after[0]!.prompt.id).toBe(before[0]!.prompt.id);
+    expect(after[0]!.prompt.tags).toEqual(["код"]);
+
+    // Срез нагрузки теперь видит тег, хотя версия промпта его не знает.
+    const sliced = (await app.inject({ method: "GET", url: "/api/leaderboard?tag=%D0%BA%D0%BE%D0%B4" })).json() as unknown[];
+    expect(sliced).toHaveLength(1);
+    await app.close();
+    store.close();
+  });
+
   it("регистрирует лидерборд и аналитику из отдельных модулей", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-routes-"));
     directories.push(directory);

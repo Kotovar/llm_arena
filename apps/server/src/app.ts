@@ -76,6 +76,7 @@ const pairReviewSchema = z.object({
 }).strict().refine((value) => value.leftTaskRunId !== value.rightTaskRunId, "Pair review needs two different results");
 const deleteRunsSchema = z.object({ runIds: z.array(z.string().uuid()).min(1) }).strict();
 /** Обмен промптами между машинами: только то, что человек пишет руками. Картинки и теги остаются на месте. */
+const updateTaskTagsSchema = z.object({ tags: z.array(z.string().trim().max(60)).max(20) }).strict();
 const importTasksSchema = z.array(z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(4_000).optional(),
@@ -313,6 +314,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       prompt: task.currentRevision.prompt,
     }));
   });
+  app.put<{ Params: { id: string } }>("/api/tasks/:id/tags", async (request) => {
+    const { tags } = parse(updateTaskTagsSchema, request.body);
+    return store.setTaskTags(request.params.id, tags);
+  });
   app.post("/api/tasks/import", async (request) => {
     const incoming = parse(importTasksSchema, request.body);
     const existing = new Map(store.listTasks().map((task) => [task.currentRevision.name, task]));
@@ -448,7 +453,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           taskRunId: taskRun.id,
           runId: run.id,
           // taskId нужен, чтобы отметки о готовых результатах переживали правку промпта: у неё новая версия.
-          prompt: { id: taskRun.task_revision_id, taskId: task.taskId ?? store.getTaskRevision(taskRun.task_revision_id)?.taskId ?? null, name: task.name, description: store.taskDescriptionByRevision(taskRun.task_revision_id), prompt: task.prompt },
+          prompt: { id: taskRun.task_revision_id, taskId: task.taskId ?? store.getTaskRevision(taskRun.task_revision_id)?.taskId ?? null, name: task.name, description: store.taskDescriptionByRevision(taskRun.task_revision_id), prompt: task.prompt, tags: store.taskTagsByRevision(taskRun.task_revision_id) },
           model: {
             id: run.model_id,
             name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),

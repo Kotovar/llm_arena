@@ -105,11 +105,22 @@ function GalleryDetail({ result, onClose }: { result: GalleryResult; onClose: ()
 export function GalleryPage() {
   const gallery = useData<GalleryResult[]>("gallery", "/gallery");
   const [opened, setOpened] = useState<GalleryResult>();
-  const matrix = galleryMatrix(gallery.data ?? []);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const tags = [...new Set((gallery.data ?? []).flatMap((result) => result.prompt.tags ?? []))].sort((left, right) => left.localeCompare(right, "ru"));
+  // Промпт без тегов не принадлежит ни одному срезу, поэтому под выбранным фильтром его не показываем.
+  const visible = selectedTags.length
+    ? (gallery.data ?? []).filter((result) => (result.prompt.tags ?? []).some((tag) => selectedTags.includes(tag)))
+    : gallery.data ?? [];
+  const toggleTag = (tag: string) => setSelectedTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]);
+  const matrix = galleryMatrix(visible);
   return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея" intro="Итоговые web-результаты.">
     {gallery.isPending ? <Empty>Загружаем выбранные результаты…</Empty> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
     {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty>Пока нет успешных web-результатов с выбранной версией. Запустите web-задачу и выберите итоговую версию на странице результата.</Empty> : null}
+    {tags.length ? <div className="gallery-tags" role="group" aria-label="Теги промптов">
+      <button type="button" className={selectedTags.length ? "" : "active"} aria-pressed={selectedTags.length === 0} onClick={() => setSelectedTags([])}>Все промпты</button>
+      {tags.map((tag) => <button type="button" key={tag} className={selectedTags.includes(tag) ? "active" : ""} aria-pressed={selectedTags.includes(tag)} onClick={() => toggleTag(tag)}>{tag}</button>)}
+    </div> : null}
     {matrix.rows.length ? <Panel title="Матрица результатов" action={<span className="mono">{matrix.rows.length} × {matrix.prompts.length}</span>}><div className="gallery-scroll"><table className="gallery-table"><thead><tr><th scope="col" className="gallery-model">Модель</th>{matrix.prompts.map((prompt) => <th scope="col" className="gallery-prompt" key={prompt.id} title={prompt.description || prompt.prompt}><strong>{prompt.name}</strong>{prompt.description ? <small className="task-description">{prompt.description}</small> : <small>{prompt.prompt}</small>}</th>)}</tr></thead><tbody>{matrix.rows.map((row) => <tr key={row.model.id}><th scope="row" className="gallery-model">{row.model.name}</th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} onOpen={setOpened} /></td>)}</tr>)}</tbody></table></div></Panel> : null}
     {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} onClose={() => setOpened(undefined)} /> : null}
   </Page></div>;

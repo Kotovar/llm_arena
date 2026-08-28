@@ -360,6 +360,20 @@ describe("run queue", () => {
     expect(store.createModel({ name: "Вторая", kind: "cloud", provider: "openai", modelRef: "second" }).economics).toBeNull();
   });
 
+  it("меняет теги задачи, не создавая новую версию промпта", () => {
+    const store = testStore();
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай", tags: ["старый"] });
+
+    const tagged = store.setTaskTags(task.id, [" код ", "код", "", "текст"]);
+
+    // Теги — свойство задачи: пробелы и повторы отбрасываем, версия промпта остаётся прежней.
+    expect(tagged.tags).toEqual(["код", "текст"]);
+    expect(tagged.currentRevision.id).toBe(task.currentRevision.id);
+    expect(tagged.currentRevision.revision).toBe(1);
+    expect(store.listTasks()[0]?.tags).toEqual(["код", "текст"]);
+    expect(store.setTaskTags(task.id, []).tags).toEqual([]);
+  });
+
   it("drops the visual criterion from the maximum when it was not applied", () => {
     const store = testStore();
     const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });

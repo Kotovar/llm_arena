@@ -21,6 +21,8 @@ type TaskRow = {
   id: string;
   current_revision_id: string | null;
   description: string | null;
+  /** Теги живут на задаче, а не на её версии: тегирование не должно плодить версию промпта. */
+  tags_json: string;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
@@ -286,6 +288,12 @@ function migrate(sqlite: DatabaseSync): void {
   // Описание — заметка «для себя», в модель не уходит и не должно замораживаться в версии промпта:
   // иначе у старых прогонов его не видно. Поэтому оно живёт на задаче, а старые значения переносим.
   const taskColumns = sqlite.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+  // Тег — это классификация промпта для человека, а не часть текста для модели. На версии он замораживал
+  // бы разметку и при правке плодил новую версию, поэтому переносим его на задачу, как раньше описание.
+  if (!taskColumns.some((column) => column.name === "tags_json")) {
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'");
+    sqlite.exec("UPDATE tasks SET tags_json = COALESCE((SELECT tags_json FROM task_revisions WHERE id = tasks.current_revision_id), '[]')");
+  }
   if (!taskColumns.some((column) => column.name === "description")) {
     sqlite.exec("ALTER TABLE tasks ADD COLUMN description TEXT");
     sqlite.exec("UPDATE tasks SET description = (SELECT description FROM task_revisions WHERE id = tasks.current_revision_id)");
@@ -368,6 +376,11 @@ function migrate(sqlite: DatabaseSync): void {
   }
 }
 
+/** Теги вводятся строкой через запятую: пустые куски и повторы отбрасываем, порядок сохраняем. */
+function normalizeTags(tags: readonly string[]): string[] {
+  return [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
+}
+
 function mapTaskRevision(row: TaskRevisionRow): TaskRevision {
   const common = {
     id: row.id,
@@ -424,6 +437,7 @@ export function createStore(filename: string) {
     return {
       id: task.id,
       ...(task.description ? { description: task.description } : {}),
+      tags: JSON.parse(task.tags_json) as string[],
       archivedAt: task.archived_at,
       createdAt: task.created_at,
       updatedAt: task.updated_at,
@@ -515,8 +529,8 @@ export function createStore(filename: string) {
         const id = randomUUID();
         const createdAt = now();
         sqlite
-          .prepare("INSERT INTO tasks (id, current_revision_id, description, archived_at, created_at, updated_at) VALUES (?, NULL, ?, NULL, ?, ?)")
-          .run(id, input.description ?? null, createdAt, createdAt);
+          .prepare("INSERT INTO tasks (id, current_revision_id, description, tags_json, archived_at, created_at, updated_at) VALUES (?, NULL, ?, ?, NULL, ?, ?)")
+          .run(id, input.description ?? null, JSON.stringify(normalizeTags(input.tags ?? [])), createdAt, createdAt);
         writeTaskRevision(id, 1, input);
         return materializeTask(id)!;
       });
@@ -533,13 +547,26 @@ export function createStore(filename: string) {
         return materializeTask(id)!;
       });
     },
+    setTaskTags(id: string, tags: readonly string[]) {
+      const current = materializeTask(id);
+      if (!current) throw new Error(`Task ${id} not found`);
+      sqlite.prepare("UPDATE tasks SET tags_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(normalizeTags(tags)), now(), id);
+      return materializeTask(id)!;
+    },
     getTaskRevision,
-    /** Описание задачи по её версии: у прогонов на руках только task_revision_id. */
+    /** Описание и теги задачи по её версии: у прогонов на руках только task_revision_id. */
     taskDescriptionByRevision(taskRevisionId: string): string | null {
       return one<{ description: string | null }>(
         "SELECT tasks.description AS description FROM tasks JOIN task_revisions ON task_revisions.task_id = tasks.id WHERE task_revisions.id = ?",
         taskRevisionId,
       )?.description ?? null;
+    },
+    taskTagsByRevision(taskRevisionId: string): string[] {
+      const row = one<{ tags_json: string }>(
+        "SELECT tasks.tags_json AS tags_json FROM tasks JOIN task_revisions ON task_revisions.task_id = tasks.id WHERE task_revisions.id = ?",
+        taskRevisionId,
+      );
+      return row ? JSON.parse(row.tags_json) as string[] : [];
     },
     listTasks() {
       return all<TaskRow>("SELECT * FROM tasks WHERE archived_at IS NULL ORDER BY created_at").map((row) => materializeTask(row.id)!);
@@ -762,12 +789,13 @@ export function createStore(filename: string) {
     listLeaderboardTaskRuns() {
       return all<LeaderboardTaskRunRow>(`
         SELECT benchmark_runs.id AS run_id, benchmark_runs.model_id, benchmark_runs.model_ref,
-               task_revisions.tags_json,
+               tasks.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following,
                json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value') AS generation_tps
         FROM benchmark_runs
         LEFT JOIN task_runs ON task_runs.benchmark_run_id = benchmark_runs.id
         LEFT JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
+        LEFT JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
         ORDER BY benchmark_runs.sequence
       `);
@@ -857,11 +885,12 @@ export function createStore(filename: string) {
       return all<DecisionRow>(`
         SELECT task_runs.id, task_runs.status, task_runs.result_json,
                benchmark_runs.id AS run_id, benchmark_runs.status AS run_status, benchmark_runs.model_id, benchmark_runs.execution_profile_id,
-               task_revisions.tags_json,
+               tasks.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following
         FROM task_runs
         JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
         JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
+        JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
         WHERE task_runs.status IN ('completed', 'failed')
         ORDER BY task_runs.created_at
@@ -874,13 +903,14 @@ export function createStore(filename: string) {
                pair_reviews.first_task_run_id, pair_reviews.second_task_run_id,
                first_run.model_id AS first_model_id,
                second_run.model_id AS second_model_id,
-               task_revisions.tags_json
+               tasks.tags_json
         FROM pair_reviews
         JOIN task_runs AS first_task ON first_task.id = pair_reviews.first_task_run_id
         JOIN task_runs AS second_task ON second_task.id = pair_reviews.second_task_run_id
         JOIN benchmark_runs AS first_run ON first_run.id = first_task.benchmark_run_id
         JOIN benchmark_runs AS second_run ON second_run.id = second_task.benchmark_run_id
         JOIN task_revisions ON task_revisions.id = first_task.task_revision_id
+        JOIN tasks ON tasks.id = task_revisions.task_id
         ORDER BY pair_reviews.updated_at
       `).map((row) => ({ ...row, winnerModelId: row.winner_task_run_id === null ? null : row.winner_task_run_id === row.first_task_run_id ? row.first_model_id : row.second_model_id }));
     },

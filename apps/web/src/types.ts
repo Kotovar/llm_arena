@@ -2,6 +2,8 @@ export type Task = {
   id: string;
   // Заметка «для себя»: не уходит в модель и не привязана к версии промпта.
   description?: string;
+  /** Теги живут на задаче: их правка не создаёт новую версию промпта. */
+  tags: string[];
   currentRevision: {
     id: string;
     taskId: string;
@@ -139,7 +141,7 @@ export type GalleryMetrics = {
 export type GalleryResult = {
   taskRunId: string;
   runId: string;
-  prompt: { id: string; taskId?: string | null; name: string; description?: string | null; prompt: string };
+  prompt: { id: string; taskId?: string | null; name: string; description?: string | null; prompt: string; tags?: string[] };
   model: { id: string; name: string; kind?: Model["kind"]; modelRef?: string };
   reasoningEffort?: string | null;
   profile?: { name: string; context: number | "auto" } | null;
