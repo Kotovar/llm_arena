@@ -1,4 +1,4 @@
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, useData } from "../shell.js";
@@ -34,6 +34,12 @@ function colorByKey(points: DecisionPoint[]) {
     const index = keys.indexOf(pointKey(point));
     return index < SERIES_COLORS.length ? SERIES_COLORS[index]! : null;
   };
+}
+
+// Ненулевая доля не должна округляться в «0%»: именно так неудачи однажды и потерялись из виду.
+function failureLabel(rate: number) {
+  const percent = rate * 100;
+  return percent > 0 && percent < 1 ? "<1%" : `${Math.round(percent)}%`;
 }
 
 function speedLabel(value: number) {
@@ -105,7 +111,7 @@ function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: De
       </g>)}
     </svg>
     <ul className="scatter-legend">{points.map((point) => <li key={pointKey(point)}><span className="legend-mark" style={color(point) ? { background: color(point)!, borderColor: color(point)! } : undefined} />{pointLabel(point)}</li>)}</ul>
-    <table className="analytics-table">
+    <div className="analytics-scroll"><table className="analytics-table">
       <caption>Те же связки числами</caption>
       <thead><tr>
         <th scope="col">Связка</th>
@@ -123,11 +129,11 @@ function Scatter({ points, color }: { points: DecisionPoint[]; color: (point: De
         <td className="mono">{point.medianTokensPerSecond === null ? "—" : speedLabel(point.medianTokensPerSecond)}</td>
         <td className="mono">{point.medianDurationMs === null ? "—" : formatDuration(point.medianDurationMs)}</td>
         <td className="mono">{point.peakVramMiB === null ? "—" : formatVram(point.peakVramMiB)}</td>
-        <td className="mono">{`${Math.round(point.failureRate * 100)}%`}</td>
+        <td className="mono">{failureLabel(point.failureRate)}</td>
         <td className="mono">{`${point.interruptedRunCount} из ${point.runCount}`}</td>
         <td className="mono">{point.sampleCount}</td>
       </tr>)}</tbody>
-    </table>
+    </table></div>
   </>;
 }
 
@@ -136,7 +142,7 @@ function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPo
   for (const slice of slices) for (const point of slice.points) keys.set(pointKey(point), pointLabel(point));
   if (!keys.size) return <Empty>Пока нет ни одного замера по срезам нагрузки.</Empty>;
   const quality = (points: DecisionPoint[], key: string) => points.find((point) => pointKey(point) === key)?.qualityPercent ?? null;
-  return <table className="heatmap">
+  return <div className="analytics-scroll"><table className="heatmap">
     <caption>Доля баллов по срезам нагрузки. Столбец «Без тегов» — промпты, которым тег не проставлен.</caption>
     <thead><tr><th scope="col">Связка</th>{slices.map((slice) => <th scope="col" key={slice.label}>{slice.label}</th>)}</tr></thead>
     <tbody>{[...keys].map(([key, label]) => <tr key={key}>
@@ -147,7 +153,7 @@ function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPo
         return <td key={slice.label} className="mono" style={value === null ? undefined : { background: `color-mix(in srgb, var(--series-1) ${Math.round(value)}%, transparent)` }}>{value === null ? "—" : `${value}%`}</td>;
       })}
     </tr>)}</tbody>
-  </table>;
+  </table></div>;
 }
 
 type View = "scatter" | "slices" | "pareto";
@@ -166,7 +172,8 @@ export function AnalyticsPage() {
   const tasks = useData<Task[]>("tasks", "/tasks");
   const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const query = sliceQuery(slice);
-  const points = useData<DecisionPoint[]>(`decision-points${query}`, `/analytics/decision-points${query}`);
+  // Ключ той же формы, что у запросов тепловой карты: иначе общий срез грузится дважды.
+  const points = useQuery({ queryKey: ["decision-points", query], queryFn: () => api<DecisionPoint[]>(`/analytics/decision-points${query}`) });
   // Общий столбец есть всегда, «Без тегов» — только когда теги вообще заведены: иначе он его повторяет.
   const heatmapColumns = [{ label: "Вся нагрузка", query: "" }, ...tags.map((tag) => ({ label: tag, query: `?tag=${encodeURIComponent(tag)}` })), ...(tags.length ? [{ label: "Без тегов", query: "?untagged=1" }] : [])];
   const sliceQueries = useQueries({

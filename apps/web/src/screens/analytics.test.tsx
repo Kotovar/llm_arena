@@ -49,6 +49,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("доля неудач", () => {
+  it("не округляет редкую неудачу в ноль", async () => {
+    const all = [point({ failureRate: 0.004 }), point({ modelId: "model-2", modelName: "Медленная", failureRate: 0 })];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(all), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderInApp(<AnalyticsPage />, "/analytics");
+
+    expect(await screen.findByText("<1%")).toBeTruthy();
+  });
+});
+
 describe("короткий список", () => {
   it("оставляет только недоминируемые связки", () => {
     const best = point();

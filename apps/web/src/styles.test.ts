@@ -36,6 +36,11 @@ describe("цветовая доступность", () => {
   it("не использует блёклый плейсхолдер", () => {
     expect(css).toMatch(/::placeholder[^}]*color:\s*var\(--muted\)/);
   });
+
+  // Правило с fill перебивало бы атрибут fill у точки и красило все связки одним цветом.
+  it("не задаёт цвет точек диаграммы правилом css", () => {
+    expect(css).not.toMatch(/\.scatter circle \{[^}]*[^-]fill:/);
+  });
 });
 
 describe("responsive result layout", () => {

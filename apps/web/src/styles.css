@@ -187,8 +187,11 @@ a { color: var(--signal); text-decoration: none; }
 .legend-mark { width: 11px; height: 11px; border: 2px solid var(--line-strong); border-radius: 50%; }
 .scatter line { stroke: var(--line-strong); stroke-width: 1; }
 .scatter line.scatter-grid { stroke: var(--line); stroke-dasharray: 3 4; }
-.scatter circle { fill: var(--signal); fill-opacity: 0.75; }
+/* Цвет точки задаётся атрибутом fill: правило с цветом здесь перебивало бы его и красило все точки одинаково. */
+.scatter circle { fill-opacity: 0.75; }
 .scatter text { fill: var(--muted); font-size: 11px; }
+.analytics-scroll { overflow-x: auto; }
+.analytics-scroll > table { width: max-content; min-width: 100%; }
 .analytics-table, .heatmap { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 13px; }
 .analytics-table caption, .heatmap caption { margin-bottom: 8px; color: var(--muted); font-size: 12px; text-align: left; }
 .analytics-table th, .analytics-table td, .heatmap th, .heatmap td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; }
