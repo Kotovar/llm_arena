@@ -327,6 +327,8 @@ describe("теги промпта в результате", () => {
     await renderResult();
 
     const heading = await screen.findByRole("heading", { level: 3, name: "Аквариум" });
-    expect(heading.parentElement?.querySelector(".prompt-tag-list")?.textContent).toBe("код");
+    // Теги стоят в одной строке с названием, а не под ним.
+    const title = heading.closest(".result-title")!;
+    expect(within(title as HTMLElement).getByText("код")).toBeTruthy();
   });
 });

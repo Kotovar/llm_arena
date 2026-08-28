@@ -219,6 +219,10 @@ a { color: var(--signal); text-decoration: none; }
 .pair-verdict { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .pair-verdict button { padding: 5px 11px; border-radius: 999px; font-size: 12px; }
 .pair-verdict button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }
+/* Теги стоят справа от названия промпта, а не строкой под ним. */
+.result-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.result-title h3 { margin: 0; }
+.result-title .prompt-tag-list { margin-top: 0; }
 .prompt-tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .prompt-tag-list em { padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-style: normal; font-size: 11px; }
 .prompt-tags-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 12px 0; }
