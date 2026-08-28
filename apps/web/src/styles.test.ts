@@ -84,4 +84,10 @@ describe("responsive result layout", () => {
     expect(css).toMatch(/\.model-economics input\s*\{[^}]*display:\s*block;[^}]*margin-top:\s*6px/);
     expect(css).toMatch(/\.model-economics small\s*\{[^}]*flex:\s*1 1 100%/);
   });
+
+  it("держит кнопку тегов на одной линии с полем", () => {
+    expect(css).toMatch(/\.prompt-tags-form\s*\{[^}]*align-items:\s*end/);
+    // Пояснение уходит на свою строку: внутри label оно опускало бы кнопку ниже поля.
+    expect(css).toMatch(/\.prompt-tags-form small\s*\{[^}]*flex:\s*1 1 100%/);
+  });
 });

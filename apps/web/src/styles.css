@@ -222,7 +222,7 @@ a { color: var(--signal); text-decoration: none; }
 .prompt-tags-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 12px 0; }
 .prompt-tags-form label { flex: 1 1 240px; color: var(--muted); font-size: 12px; }
 .prompt-tags-form input { display: block; width: 100%; margin-top: 6px; padding: 9px; }
-.prompt-tags-form small { display: block; margin-top: 6px; }
+.prompt-tags-form small { flex: 1 1 100%; margin: 0; color: var(--muted); font-size: 12px; }
 .gallery-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .gallery-tags button { padding: 7px 13px; border-radius: 999px; font-size: 12px; }
 .gallery-tags button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }
