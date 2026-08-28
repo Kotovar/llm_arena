@@ -174,7 +174,7 @@ a { color: var(--signal); text-decoration: none; }
 .model-economics { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 15px; }
 .model-economics label { flex: 1 1 200px; color: var(--muted); font-size: 12px; }
 .model-economics input { display: block; width: 100%; margin-top: 6px; padding: 9px; }
-.model-economics small { flex: 1 1 100%; color: var(--muted); font-size: 12px; }
+.model-economics small { flex: 1 1 100%; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
 .compare-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
 .compare-tabs button { padding: 8px 15px; border-radius: 999px; font-size: 13px; }
 .compare-tabs button.active { color: #0e1423; border-color: var(--signal); background: var(--signal); }

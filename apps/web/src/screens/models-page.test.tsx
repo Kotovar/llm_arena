@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderInApp } from "../test-harness.js";
@@ -68,5 +68,20 @@ describe("профили локальной модели", () => {
 
     expect((screen.getByRole("button", { name: "Удалить профиль «Automatic»" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("button", { name: "Удалить профиль «Скорость»" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("разрешает перетаскивание только за ручку карточки", async () => {
+    await renderInApp(<ModelsPage />);
+    const handle = await screen.findByRole("img", { name: /Перетащите модель/u });
+    const card = handle.closest("details")!;
+
+    // Без нажатия на ручку карточка не таскается: иначе выделение текста внутри неё уезжает в drag.
+    expect(card.draggable).toBe(false);
+
+    fireEvent.pointerDown(handle);
+    expect(card.draggable).toBe(true);
+
+    fireEvent.pointerUp(handle);
+    expect(card.draggable).toBe(false);
   });
 });
