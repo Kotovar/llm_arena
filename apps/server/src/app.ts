@@ -10,6 +10,7 @@ import {
   resultShaSchema,
   setModelOrderSchema,
   createRunSchema,
+  modelEconomicsSchema,
   createTaskSchema,
   reviewSchema,
   retryTaskRunSchema,
@@ -65,6 +66,7 @@ const leaderboardSliceSchema = z.object({
   tag: z.string().trim().min(1).optional(),
   untagged: z.literal("1").optional().transform((value) => value === "1"),
 }).strict().refine((value) => !(value.tag && value.untagged), "Choose either a tag or the untagged slice");
+const updateModelEconomicsSchema = z.object({ economics: modelEconomicsSchema.nullable() }).strict();
 const pairReviewSchema = z.object({
   leftTaskRunId: z.string().uuid(),
   rightTaskRunId: z.string().uuid(),
@@ -354,6 +356,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const { name } = parse(renameModelSchema, request.body);
     return store.renameModel(request.params.id, name);
   });
+  app.put<{ Params: { id: string } }>("/api/models/:id/economics", async (request) => {
+    const { economics } = parse(updateModelEconomicsSchema, request.body);
+    return store.updateModelEconomics(request.params.id, economics);
+  });
   app.put("/api/models/order", async (request) => store.setModelOrder(parse(setModelOrderSchema, request.body).modelIds));
   app.put<{ Params: { id: string } }>("/api/models/:id/capabilities", async (request) => {
     const input = parse(updateModelCapabilitiesSchema, request.body);
@@ -418,7 +424,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get<{ Querystring: { tag?: string; untagged?: string } }>("/api/leaderboard", async (request) => {
     const slice = parse(leaderboardSliceSchema, request.query);
     type Totals = {
-      modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; runs: Set<string>; reviewedTaskRunCount: number;
+      modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; estimatedCostPerRun: number | null; runs: Set<string>; reviewedTaskRunCount: number;
       scoreSum: number; possibleSum: number; speedSum: number; speedSamples: number;
       correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; visualReviewed: number;
     };
@@ -432,6 +438,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         modelId: row.model_id,
         modelName: model?.name ?? row.model_ref ?? row.model_id.slice(0, 8),
         modelKind: model?.kind ?? "cloud",
+        // Цена — оценка пользователя: месячная подписка, поделённая на ожидаемое число прогонов.
+        estimatedCostPerRun: model?.economics ? model.economics.monthlyCost / model.economics.includedRunEstimate : null,
         runs: new Set<string>(),
         reviewedTaskRunCount: 0,
         scoreSum: 0,

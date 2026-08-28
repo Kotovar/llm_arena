@@ -348,6 +348,18 @@ describe("run queue", () => {
     expect(store.taskRunAggregate(taskRun.id)).toBeUndefined();
   });
 
+  it("хранит экономику подписки только целиком и позволяет её убрать", () => {
+    const store = testStore();
+    const model = store.createModel({ name: "Облачная", kind: "cloud", provider: "openai", modelRef: "cloud", economics: { monthlyCost: 20, includedRunEstimate: 100 } });
+
+    expect(store.getModel(model.id)?.economics).toEqual({ monthlyCost: 20, includedRunEstimate: 100 });
+
+    expect(store.updateModelEconomics(model.id, { monthlyCost: 30, includedRunEstimate: 60 }).economics).toEqual({ monthlyCost: 30, includedRunEstimate: 60 });
+    expect(store.updateModelEconomics(model.id, null).economics).toBeNull();
+    // Модель без введённой экономики не выдумывает цену.
+    expect(store.createModel({ name: "Вторая", kind: "cloud", provider: "openai", modelRef: "second" }).economics).toBeNull();
+  });
+
   it("drops the visual criterion from the maximum when it was not applied", () => {
     const store = testStore();
     const task = store.createTask({ name: "Answer", kind: "prompt", prompt: "One", tags: [] });

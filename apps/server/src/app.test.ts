@@ -1390,6 +1390,31 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("считает цену прогона только из введённой пользователем оценки", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-economics-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const priced = store.createModel({ name: "Оценённая", kind: "cloud", provider: "openai", modelRef: "priced" });
+    const free = store.createModel({ name: "Без оценки", kind: "cloud", provider: "openai", modelRef: "free" });
+    for (const modelId of [priced.id, free.id]) {
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+      store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, modelId), { task: task.currentRevision });
+    }
+    expect((await app.inject({ method: "PUT", url: `/api/models/${priced.id}/economics`, payload: { economics: { monthlyCost: 20, includedRunEstimate: 100 } } })).statusCode).toBe(200);
+    // Половина оценки — не оценка: такую заявку отклоняем, а не додумываем второе число.
+    expect((await app.inject({ method: "PUT", url: `/api/models/${free.id}/economics`, payload: { economics: { monthlyCost: 20 } } })).statusCode).toBe(400);
+
+    const entries = (await app.inject({ method: "GET", url: "/api/leaderboard" })).json() as Array<{ modelId: string; estimatedCostPerRun: number | null }>;
+    expect(entries.find((entry) => entry.modelId === priced.id)?.estimatedCostPerRun).toBeCloseTo(0.2);
+    expect(entries.find((entry) => entry.modelId === free.id)?.estimatedCostPerRun).toBeNull();
+    await app.close();
+    store.close();
+  });
+
   it("ranks only the chosen workload slice", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-tags-"));
     directories.push(directory);

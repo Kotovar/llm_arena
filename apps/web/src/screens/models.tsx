@@ -162,6 +162,10 @@ export function ModelsPage() {
     mutationFn: ({ modelId, name }: { modelId: string; name: string }) => api(`/models/${modelId}`, { method: "PATCH", body: JSON.stringify({ name }) }),
     onSuccess: invalidateModels,
   });
+  const saveEconomics = useMutation({
+    mutationFn: ({ modelId, economics }: { modelId: string; economics: Model["economics"] }) => api(`/models/${modelId}/economics`, { method: "PUT", body: JSON.stringify({ economics }) }),
+    onSuccess: invalidateModels,
+  });
   const reorder = useMutation({
     mutationFn: (modelIds: string[]) => api<Model[]>("/models/order", { method: "PUT", body: JSON.stringify({ modelIds }) }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["models"] }),
@@ -202,6 +206,16 @@ export function ModelsPage() {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     createCloud.mutate({ name: data.get("name"), kind: "cloud", provider: cloudProvider, modelRef: cloudModelRef });
+  }
+
+  function submitEconomics(event: FormEvent<HTMLFormElement>, modelId: string) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const monthlyCost = Number(data.get("monthlyCost"));
+    const includedRunEstimate = Number(data.get("includedRunEstimate"));
+    // Половины оценки не бывает: пустые поля — это «цену не считаем», а не ноль.
+    const economics = monthlyCost > 0 && includedRunEstimate > 0 ? { monthlyCost, includedRunEstimate } : null;
+    saveEconomics.mutate({ modelId, economics });
   }
 
   function submitRename(event: FormEvent<HTMLFormElement>, modelId: string) {
@@ -272,6 +286,7 @@ export function ModelsPage() {
         const modelProfiles = visibleProfiles.filter((profile) => profile.modelId === model.id);
         return <details className={draggedModelId === model.id ? "model-card dragging" : "model-card"} key={model.id} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", model.id); setDraggedModelId(model.id); }} onDragEnd={() => setDraggedModelId(null)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); const draggedId = draggedModelId ?? event.dataTransfer.getData("text/plain"); if (draggedId && draggedId !== model.id) reorder.mutate(moveModel(models.data ?? [], draggedId, model.id).map((item) => item.id)); setDraggedModelId(null); }}><summary className="model-card-summary"><span className="model-drag-handle" role="img" aria-label="Перетащите модель, чтобы изменить порядок" title="Перетащите, чтобы изменить порядок">⠿</span><span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span>{model.kind === "local-gguf" && model.sizeBytes ? <span className="model-card-facts">{ggufSummary(model.sizeBytes, model.expertCount)}</span> : null}</span><span className="model-card-state">{settings.data?.externalModelId === model.id ? <span className="chip active-chip">Активна для omp-local</span> : null}<span className="expand-label">Настройки</span></span></summary><div className="model-card-content">
           <form className="model-rename" onSubmit={(event) => submitRename(event, model.id)}><label>Название в результатах<input name="name" defaultValue={model.name} required /></label><button className="primary" disabled={rename.isPending && rename.variables?.modelId === model.id}>{rename.isPending && rename.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить название"}</button></form>
+          {model.kind === "cloud" ? <form className="model-economics" onSubmit={(event) => submitEconomics(event, model.id)}><label>Подписка в месяц<input name="monthlyCost" type="number" min="0" step="0.01" defaultValue={model.economics?.monthlyCost ?? ""} placeholder="не считаем" /></label><label>Прогонов за эти деньги<input name="includedRunEstimate" type="number" min="0" step="1" defaultValue={model.economics?.includedRunEstimate ?? ""} placeholder="не считаем" /></label><button disabled={saveEconomics.isPending && saveEconomics.variables?.modelId === model.id}>{saveEconomics.isPending && saveEconomics.variables?.modelId === model.id ? "Сохраняем…" : "Сохранить оценку"}</button><small>Ваша оценка, а не цена провайдера: она делится на число прогонов и показывается в лидерборде как ориентир. Пустые поля — цену не показываем.</small></form> : null}
           {rename.error && rename.variables?.modelId === model.id ? <p className="error">{rename.error.message}</p> : null}
           {model.kind === "local-gguf" ? <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} /> : null}
           {saveCapabilities.error && saveCapabilities.variables?.modelId === model.id ? <p className="error">{saveCapabilities.error.message}</p> : null}

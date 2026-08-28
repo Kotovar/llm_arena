@@ -33,6 +33,8 @@ export type Model = {
   path: string | null;
   alias: string | null;
   capabilities: { toolUse: boolean; vision: boolean; reasoning: boolean };
+  /** Оценка пользователя: месячная подписка и ожидаемое число прогонов. Нет — цену не показываем. */
+  economics: { monthlyCost: number; includedRunEstimate: number } | null;
   mmprojPath: string | null;
   sizeBytes?: number;
   expertCount?: number;
@@ -93,6 +95,7 @@ export type LeaderboardEntry = {
   reviewedTaskRunCount: number;
   scorePercent: number | null;
   generationTokensPerSecond: number | null;
+  estimatedCostPerRun: number | null;
   criteria: { correctness: number | null; codeQuality: number | null; uiQuality: number | null; instructionFollowing: number | null };
 };
 export type Fixture = { id: string; name: string; checks: Array<{ id: string; label: string }>; preview?: unknown };

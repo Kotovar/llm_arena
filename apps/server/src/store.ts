@@ -9,6 +9,8 @@ import {
   type CreateRun,
   type CreateTask,
   type ModelCapabilities,
+  type ModelEconomics,
+  modelEconomicsSchema,
   type Review,
   type RunStatus,
   type TaskImage,
@@ -179,6 +181,7 @@ type ModelRow = {
   path: string | null;
   alias: string | null;
   capabilities_json: string;
+  economics_json: string | null;
   mmproj_path: string | null;
   archived_at: string | null;
   created_at: string;
@@ -186,8 +189,9 @@ type ModelRow = {
 };
 
 const defaultModelCapabilities: ModelCapabilities = { toolUse: false, vision: false, reasoning: false };
-type StoredModelInput = Omit<CreateModel, "capabilities"> & {
+type StoredModelInput = Omit<CreateModel, "capabilities" | "economics"> & {
   capabilities?: ModelCapabilities;
+  economics?: ModelEconomics | null;
   mmprojPath?: string | null;
 };
 
@@ -204,6 +208,12 @@ function parseCapabilities(value: string): ModelCapabilities {
   }
 }
 
+function parseEconomics(value: string | null): ModelEconomics | null {
+  if (!value) return null;
+  const parsed = modelEconomicsSchema.safeParse(JSON.parse(value));
+  return parsed.success ? parsed.data : null;
+}
+
 function mapModel(row: ModelRow) {
   const capabilities = row.kind === "cloud" ? cloudModelCapabilities : parseCapabilities(row.capabilities_json);
   return {
@@ -215,6 +225,7 @@ function mapModel(row: ModelRow) {
     path: row.path,
     alias: row.alias,
     capabilities,
+    economics: parseEconomics(row.economics_json),
     mmprojPath: row.mmproj_path,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -321,6 +332,9 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!modelColumns.some((column) => column.name === "archived_at")) {
     sqlite.exec("ALTER TABLE models ADD COLUMN archived_at TEXT");
+  }
+  if (!modelColumns.some((column) => column.name === "economics_json")) {
+    sqlite.exec("ALTER TABLE models ADD COLUMN economics_json TEXT");
   }
   if (!modelColumns.some((column) => column.name === "capabilities_json")) {
     sqlite.exec("ALTER TABLE models ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{\"toolUse\":false,\"vision\":false,\"reasoning\":false}'");
@@ -521,8 +535,8 @@ export function createStore(filename: string) {
       const capabilities = input.kind === "cloud" ? cloudModelCapabilities : input.capabilities ?? defaultModelCapabilities;
       const position = one<{ position: number }>("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM models")?.position ?? 0;
       sqlite
-        .prepare("INSERT INTO models (id, position, name, kind, provider, model_ref, path, alias, capabilities_json, mmproj_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, position, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(capabilities), input.mmprojPath ?? null, createdAt, createdAt);
+        .prepare("INSERT INTO models (id, position, name, kind, provider, model_ref, path, alias, capabilities_json, economics_json, mmproj_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, position, input.name, input.kind, input.provider, input.modelRef, input.path ?? null, input.alias ?? null, JSON.stringify(capabilities), input.economics ? JSON.stringify(input.economics) : null, input.mmprojPath ?? null, createdAt, createdAt);
       return mapModel(one<ModelRow>("SELECT * FROM models WHERE id = ?", id)!);
     },
     getModel(id: string) {
@@ -562,6 +576,14 @@ export function createStore(filename: string) {
       sqlite.prepare("UPDATE models SET capabilities_json = ?, mmproj_path = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(nextCapabilities), mmprojPath, updatedAt, id);
       return mapModel({ ...row, capabilities_json: JSON.stringify(nextCapabilities), mmproj_path: mmprojPath, updated_at: updatedAt });
+    },
+    updateModelEconomics(id: string, economics: ModelEconomics | null) {
+      const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NULL", id);
+      if (!row) throw new Error("Model not found");
+      const updatedAt = now();
+      const economicsJson = economics ? JSON.stringify(economics) : null;
+      sqlite.prepare("UPDATE models SET economics_json = ?, updated_at = ? WHERE id = ?").run(economicsJson, updatedAt, id);
+      return mapModel({ ...row, economics_json: economicsJson, updated_at: updatedAt });
     },
     archiveModel(id: string) {
       const timestamp = now();

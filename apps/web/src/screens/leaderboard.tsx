@@ -22,6 +22,13 @@ const criteriaColumns = [
   ["instructionFollowing", "Задание", "Насколько точно выполнены требования промпта."],
 ] as const;
 
+/** Цена прогона — оценка пользователя, поэтому и подаётся как оценка, а не как факт. */
+function costLabel(entry: LeaderboardEntry) {
+  if (entry.estimatedCostPerRun === null) return "—";
+  const value = entry.estimatedCostPerRun;
+  return `≈ ${value < 1 ? value.toFixed(2) : value.toFixed(1)} за прогон`;
+}
+
 function speedLabel(entry: LeaderboardEntry) {
   return entry.generationTokensPerSecond === null ? "—" : `~${entry.generationTokensPerSecond.toFixed(1)} т/с`;
 }
@@ -34,6 +41,7 @@ function Row({ entry, place }: { entry: LeaderboardEntry; place?: number }) {
     <td className="leaderboard-score">{entry.scorePercent === null ? "Не оценено" : `${entry.scorePercent.toFixed(1)}%`}{thin ? <small className="leaderboard-thin" title={`Оценено промптов: ${entry.reviewedTaskRunCount}`}>мало данных</small> : null}</td>
     {criteriaColumns.map(([key]) => <td className="mono" key={key}>{entry.criteria[key] === null ? "—" : entry.criteria[key]!.toFixed(1)}</td>)}
     <td className="mono">{speedLabel(entry)}</td>
+    <td className="mono">{costLabel(entry)}</td>
     <td>{entry.runCount}</td>
     <td>{entry.reviewedTaskRunCount}</td>
   </tr>;
@@ -72,6 +80,7 @@ export function LeaderboardPage() {
         <th scope="col">Доля баллов</th>
         {criteriaColumns.map(([key, label, hint]) => <th scope="col" key={key} title={hint}>{label}</th>)}
         <th scope="col" title="Средняя скорость генерации по всем замерам модели. Контекст и профиль у промптов разные, поэтому цифра ориентировочная.">Скорость</th>
+        <th scope="col" title="Оценка пользователя: месячная подписка, поделённая на ожидаемое число прогонов. Не цена провайдера и не факт по токенам.">Цена прогона</th>
         <th scope="col">Прогонов</th>
         <th scope="col">Оценено промптов</th>
       </tr></thead><tbody>

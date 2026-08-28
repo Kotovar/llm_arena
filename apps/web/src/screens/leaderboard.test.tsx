@@ -9,6 +9,7 @@ function entry(modelId: string, modelName: string, modelKind: "local-gguf" | "cl
   return {
     modelId, modelName, modelKind, runCount: 3, reviewedTaskRunCount: 5, scorePercent,
     generationTokensPerSecond: 20,
+    estimatedCostPerRun: null,
     criteria: { correctness: 8, codeQuality: 8, uiQuality: null, instructionFollowing: 8 },
   };
 }
@@ -17,7 +18,7 @@ let requested: string[];
 
 beforeEach(() => {
   requested = [];
-  const leaderboard = [entry("cloud-1", "Облачная", "cloud", 90), entry("local-1", "Локальная", "local-gguf", 70)];
+  const leaderboard = [{ ...entry("cloud-1", "Облачная", "cloud", 90), estimatedCostPerRun: 0.2 }, entry("local-1", "Локальная", "local-gguf", 70)];
   const tasks = [{ id: "task-1", currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["coding-agent"], images: [] } }];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     requested.push(url);
@@ -56,5 +57,14 @@ describe("лидерборд", () => {
     expect(await screen.findByText("Облачная")).toBeTruthy();
     await waitFor(() => expect(screen.queryByText("Локальная")).toBeNull());
     expect(requested).toContain("/api/leaderboard?tag=coding-agent");
+  });
+
+  it("показывает цену прогона как оценку и молчит, когда её не вводили", async () => {
+    await renderInApp(<LeaderboardPage />);
+
+    const priced = (await screen.findByText("Облачная")).closest("tr")!;
+    const free = screen.getByText("Локальная").closest("tr")!;
+    expect(within(priced).getByText("≈ 0.20 за прогон")).toBeTruthy();
+    expect(within(free).getAllByText("—").length).toBeGreaterThan(0);
   });
 });
