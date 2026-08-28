@@ -1,10 +1,10 @@
 /* Шрифты лежат в пакетах рядом: приложение работает без сети, ссылаться на CDN нельзя. */
-@import "@fontsource-variable/onest/wght.css";
+@import "@fontsource-variable/noto-sans/wght.css";
 @import "@fontsource-variable/jetbrains-mono/wght.css";
 
 :root {
-  /* Onest рисовался вместе с кириллицей, а не досовывал её к латинице; переменный — значит веса 640 и 750 существуют. */
-  --font-ui: "Onest Variable", ui-sans-serif, system-ui, sans-serif;
+  /* Noto Sans — то, чем страница рисовалась до подключения шрифта; пакет фиксирует её, а не полагается на систему. */
+  --font-ui: "Noto Sans Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
   /* Четыре поверхности вместо трёх десятков почти одинаковых тёмно-синих. */
   --surface-0: #0e1423;

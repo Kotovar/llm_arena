@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
-    "@fontsource-variable/onest": "^5.3.0",
+    "@fontsource-variable/noto-sans": "^5.3.0",
     "@llm-arena/shared": "workspace:*",
     "@tanstack/react-query": "^5.0.0",
     "@tanstack/react-router": "^1.0.0",
