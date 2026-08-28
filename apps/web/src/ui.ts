@@ -281,6 +281,11 @@ export function attemptSummary(aggregate: { attempts: number; completedAttempts:
   ].filter(Boolean).join(" · ");
 }
 
+/** Пик VRAM человеческими числами: мегабайты гигабайтами, без хвоста из десятка цифр. */
+export function formatVram(mebibytes: number) {
+  return mebibytes >= 1024 ? `${String(oneDecimal(mebibytes / 1024)).replace(".", ",")} ГиБ` : `${Math.round(mebibytes)} МиБ`;
+}
+
 export function formatMeasuredMetric(name: string, item?: { value: number | null; source?: string }) {
   if (item?.value === null || item?.value === undefined) return "N/A";
   return `${item.source === "estimated" ? "≈ " : ""}${formatMetricValue(name, item.value)}`;

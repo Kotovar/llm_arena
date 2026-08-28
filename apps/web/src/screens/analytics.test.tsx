@@ -19,7 +19,7 @@ function point(overrides: Partial<DecisionPoint> = {}): DecisionPoint {
     qualityPercent: 80,
     medianTokensPerSecond: 42,
     medianDurationMs: 1000,
-    peakVramMiB: 12000,
+    peakVramMiB: 15846,
     failureRate: 0,
     estimatedCostPerRun: null,
     ...overrides,
@@ -30,7 +30,7 @@ let requested: string[];
 
 beforeEach(() => {
   requested = [];
-  const all = [point(), point({ modelId: "model-2", modelName: "Медленная", profileId: null, profileName: null, qualityPercent: 60, medianTokensPerSecond: 20, peakVramMiB: 15000 })];
+  const all = [point(), point({ modelId: "model-2", modelName: "Медленная", profileId: null, profileName: null, qualityPercent: 60, medianTokensPerSecond: 20, peakVramMiB: 20000 })];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     requested.push(url);
     const body = url.startsWith("/api/tasks")
@@ -50,7 +50,7 @@ afterEach(() => {
 describe("короткий список", () => {
   it("оставляет только недоминируемые связки", () => {
     const best = point();
-    const worse = point({ modelId: "model-2", qualityPercent: 60, medianTokensPerSecond: 20, peakVramMiB: 15000 });
+    const worse = point({ modelId: "model-2", qualityPercent: 60, medianTokensPerSecond: 20, peakVramMiB: 20000 });
     const cheaper = point({ modelId: "model-3", qualityPercent: 60, medianTokensPerSecond: 20, peakVramMiB: 4000 });
 
     expect(paretoShortlist([best, worse, cheaper]).map((item) => item.modelId)).toEqual(["model-1", "model-3"]);
@@ -62,14 +62,32 @@ describe("короткий список", () => {
 });
 
 describe("аналитика решений", () => {
-  it("рисует точки и повторяет их таблицей", async () => {
+  it("рисует точки разными цветами, подписывает их и повторяет таблицей", async () => {
     await renderInApp(<AnalyticsPage />, "/analytics");
 
     expect(await screen.findByRole("img", { name: "Качество и скорость" })).toBeTruthy();
     expect(screen.getByText("Pareto: 1 связка")).toBeTruthy();
+    const fills = [...document.querySelectorAll(".scatter circle")].map((circle) => circle.getAttribute("fill"));
+    expect(new Set(fills).size).toBe(2);
+    // Опознавать связку по одному цвету нельзя: у каждой точки есть подпись.
+    expect([...document.querySelectorAll(".scatter-point-label")].map((label) => label.textContent)).toEqual(["Локальная · Скорость", "Медленная"]);
     const table = screen.getByRole("table", { name: "Те же связки числами" });
     expect(within(table).getByText("Локальная · Скорость")).toBeTruthy();
-    expect(within(table).getByText("Медленная")).toBeTruthy();
+    expect(within(table).getByText("15,5 ГиБ")).toBeTruthy();
+    expect(within(table).getByText("42 токенов/с")).toBeTruthy();
+  });
+
+  it("раскладывает виды по вкладкам", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("img", { name: "Качество и скорость" });
+
+    expect(screen.queryByRole("table", { name: "Доля баллов по срезам нагрузки" })).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "Срезы нагрузки" }));
+
+    expect(await screen.findByRole("table", { name: "Доля баллов по срезам нагрузки" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "Качество и скорость" })).toBeNull();
   });
 
   it("не рисует неизмеренное нулём, но показывает связку в таблице", async () => {
@@ -97,7 +115,5 @@ describe("аналитика решений", () => {
     await waitFor(() => expect(requested).toContain("/api/analytics/decision-points?tag=web"));
     const table = await screen.findByRole("table", { name: "Те же связки числами" });
     await waitFor(() => expect(within(table).queryByText("Медленная")).toBeNull());
-    // Тепловая карта живёт своими запросами по каждому срезу и остаётся на месте.
-    expect(screen.getByRole("table", { name: "Доля баллов по срезам нагрузки" })).toBeTruthy();
   });
 });

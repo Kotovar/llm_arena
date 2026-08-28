@@ -175,11 +175,16 @@ a { color: var(--signal); text-decoration: none; }
 .model-economics label { flex: 1 1 200px; color: var(--muted); font-size: 12px; }
 .model-economics input { display: block; width: 100%; margin-top: 6px; padding: 9px; }
 .model-economics small { flex: 1 1 100%; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
-.scatter { width: 100%; height: auto; }
+.scatter { width: 100%; height: auto; margin-bottom: 18px; }
+:root { --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; }
+.scatter-point-label { fill: #d7dcea; font-size: 11px; }
+.scatter-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0 0 20px; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+.scatter-legend li { display: flex; align-items: center; gap: 7px; }
+.legend-mark { width: 11px; height: 11px; border: 2px solid var(--line-strong); border-radius: 50%; }
 .scatter line { stroke: var(--line); stroke-width: 1; }
 .scatter circle { fill: var(--signal); fill-opacity: 0.75; }
 .scatter text { fill: var(--muted); font-size: 11px; }
-.analytics-table, .heatmap { width: 100%; margin-top: 16px; border-collapse: collapse; font-size: 13px; }
+.analytics-table, .heatmap { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 13px; }
 .analytics-table caption, .heatmap caption { margin-bottom: 8px; color: var(--muted); font-size: 12px; text-align: left; }
 .analytics-table th, .analytics-table td, .heatmap th, .heatmap td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; }
 .analytics-table th[scope="row"], .heatmap th[scope="row"] { font-weight: 600; }

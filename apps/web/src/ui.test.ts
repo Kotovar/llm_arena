@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptSummary, betterResult, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -446,5 +446,12 @@ describe("сводка повторов", () => {
   it("не выдаёт единственный удавшийся замер за медиану", () => {
     expect(attemptSummary({ attempts: 3, completedAttempts: 1, medianTokensPerSecond: 40, minTokensPerSecond: 40, maxTokensPerSecond: 40, medianDurationMs: null, minDurationMs: null, maxDurationMs: null }))
       .toBe("Повторов: 1 из 3 · скорость: 40 токенов/с");
+  });
+});
+
+describe("пик VRAM", () => {
+  it("переводит мегабайты в гигабайты и не тянет длинный хвост", () => {
+    expect(formatVram(15846)).toBe("15,5 ГиБ");
+    expect(formatVram(512)).toBe("512 МиБ");
   });
 });
