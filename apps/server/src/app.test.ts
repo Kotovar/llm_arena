@@ -1415,6 +1415,60 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("собирает точки решения по модели и профилю в выбранном срезе", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-decision-points-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const app = buildApp({ store, config });
+
+    const agentTask = store.createTask({ name: "Agent", kind: "prompt", prompt: "Answer", tags: ["coding-agent"] });
+    const plainTask = store.createTask({ name: "Plain", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
+    const profile = store.createExecutionProfile({ modelId: model.id, name: "Скорость", parameters: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 512, ubatchSize: 256, flashAttention: "auto", cacheReuse: 128 }, calibrated: true, ggufSha256: null });
+    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
+
+    const run = store.createRun({ taskRevisionIds: [agentTask.currentRevision.id], modelId: model.id, executionProfileId: profile.id, runnerId: "llama-chat", resultMode: "text" });
+    mkdirSync(join(config.dataDir, "runs", run.id), { recursive: true });
+    writeFileSync(join(config.dataDir, "runs", run.id, "system-summary.json"), JSON.stringify({ peakVramMiB: 15100, peakTemperatureC: 70 }));
+    const measured = async (revisionId: string, position: number, tps: number | null, status: "completed" | "failed", score?: number) => {
+      const taskRun = store.createTaskRun(run.id, revisionId, position, join(directory, `t${position}`), { task: { id: revisionId } });
+      store.saveTaskRunResult(taskRun.id, tps === null ? { finalAnswer: "A" } : { finalAnswer: "A", metrics: { generationTokensPerSecond: { value: tps }, totalDurationMs: { value: 1000 } } }, status);
+      if (score !== undefined) await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/review`, payload: review(score) });
+      return taskRun;
+    };
+    await measured(agentTask.currentRevision.id, 0, 40, "completed", 8);
+    await measured(agentTask.currentRevision.id, 1, 42, "completed", 8);
+    await measured(agentTask.currentRevision.id, 2, 50, "failed");
+    // Промпт из другого среза: в срез coding-agent он попасть не должен.
+    await measured(plainTask.currentRevision.id, 3, 5, "completed", 2);
+
+    const sliced = await app.inject({ method: "GET", url: "/api/analytics/decision-points?tag=coding-agent" });
+    expect(sliced.json()).toEqual([expect.objectContaining({
+      modelId: model.id,
+      profileId: profile.id,
+      profileName: "Скорость",
+      tag: "coding-agent",
+      untagged: false,
+      sampleCount: 3,
+      qualityPercent: 80,
+      medianTokensPerSecond: 42,
+      medianDurationMs: 1000,
+      peakVramMiB: 15100,
+      failureRate: expect.closeTo(0.33, 2),
+      estimatedCostPerRun: null,
+    })]);
+
+    const all = await app.inject({ method: "GET", url: "/api/analytics/decision-points" });
+    expect((all.json() as Array<{ sampleCount: number; tag: string | null; untagged: boolean }>)[0]).toMatchObject({ sampleCount: 4, tag: null, untagged: false });
+
+    const untagged = await app.inject({ method: "GET", url: "/api/analytics/decision-points?untagged=1" });
+    expect((untagged.json() as Array<{ sampleCount: number; untagged: boolean; qualityPercent: number | null }>)[0]).toMatchObject({ sampleCount: 1, untagged: true, qualityPercent: 20 });
+    await app.close();
+    store.close();
+  });
+
   it("ranks only the chosen workload slice", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-tags-"));
     directories.push(directory);

@@ -119,6 +119,20 @@ type CompletedResultRow = {
   task_prompt: string;
 };
 
+type DecisionRow = {
+  id: string;
+  status: "completed" | "failed";
+  result_json: string | null;
+  run_id: string;
+  model_id: string;
+  execution_profile_id: string | null;
+  tags_json: string;
+  correctness: number | null;
+  code_quality: number | null;
+  ui_quality: number | null;
+  instruction_following: number | null;
+};
+
 type PairReviewRow = {
   id: string;
   first_task_run_id: string;
@@ -825,6 +839,21 @@ export function createStore(filename: string) {
         JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
         JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
         WHERE task_runs.status = 'completed'
+        ORDER BY task_runs.created_at
+      `);
+    },
+    /** Терминальные результаты с профилем, тегами версии промпта и оценкой: сырьё для точек решения. */
+    listDecisionRows() {
+      return all<DecisionRow>(`
+        SELECT task_runs.id, task_runs.status, task_runs.result_json,
+               benchmark_runs.id AS run_id, benchmark_runs.model_id, benchmark_runs.execution_profile_id,
+               task_revisions.tags_json,
+               reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following
+        FROM task_runs
+        JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
+        JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
+        LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
+        WHERE task_runs.status IN ('completed', 'failed')
         ORDER BY task_runs.created_at
       `);
     },

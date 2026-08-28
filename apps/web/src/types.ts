@@ -230,3 +230,21 @@ export type PairReview = {
   comment: string;
   updatedAt: string;
 };
+
+/** Точка решения: одна модель с одним профилем в одном срезе нагрузки. null — метрику не мерили. */
+export type DecisionPoint = {
+  modelId: string;
+  modelName: string;
+  modelKind: "local-gguf" | "cloud";
+  profileId: string | null;
+  profileName: string | null;
+  tag: string | null;
+  untagged: boolean;
+  sampleCount: number;
+  qualityPercent: number | null;
+  medianTokensPerSecond: number | null;
+  medianDurationMs: number | null;
+  peakVramMiB: number | null;
+  failureRate: number;
+  estimatedCostPerRun: number | null;
+};
