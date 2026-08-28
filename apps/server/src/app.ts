@@ -52,7 +52,7 @@ type PreviewLike = {
   start(taskRunId: string, resultSha: string): Promise<unknown>;
   stop(): Promise<void>;
   stopIf?(taskRunId: string, resultSha: string): Promise<void>;
-  heartbeat(): void;
+  heartbeat(target?: { taskRunId: string; resultSha: string }): void;
   removeTaskRunPreviews?(taskRunIds: string[]): Promise<void>;
 };
 
@@ -812,6 +812,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       remaining: pairs.length,
       pair: {
         taskName: sides[0]!.taskName,
+        // Имён моделей здесь нет вовсе: пока вердикт не сохранён, их неоткуда взять даже из ответа сети.
         // Полный промпт судье не нужен и занимает пол-экрана: показываем заметку о задаче.
         description: store.taskDescriptionByRevision(sides[0]!.revisionId) ?? null,
         modelKind: sides[0]!.modelKind,
@@ -821,7 +822,6 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           resultSha: side.previewSha,
           answer: side.previewSha ? "" : side.answer,
         })),
-        reveal: sides.map((side) => store.getModel(side.modelId)?.name ?? "Неизвестная модель"),
       },
     };
   });
@@ -840,12 +840,18 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (left.status !== "completed" || right.status !== "completed") throw new Error("Pair review needs two completed results");
     const winnerTaskRunId = input.winner === "tie" ? null : input.winner === "left" ? left.id : right.id;
     const saved = store.savePairReview([left.id, right.id], winnerTaskRunId, input.comment);
+    const modelName = (taskRunId: string) => {
+      const owner = store.getRun(store.getTaskRun(taskRunId)!.benchmark_run_id);
+      return (owner ? store.getModel(owner.model_id)?.name : undefined) ?? "Неизвестная модель";
+    };
     return reply.code(201).send({
       leftTaskRunId: left.id,
       rightTaskRunId: right.id,
       winner: saved.winner_task_run_id === null ? "tie" : saved.winner_task_run_id === left.id ? "left" : "right",
       comment: saved.comment,
       updatedAt: saved.updated_at,
+      // Модели называем только вместе с сохранённым вердиктом: до него их знать судье незачем.
+      reveal: [modelName(left.id), modelName(right.id)],
     });
   });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => store.saveReview(request.params.id, parse(reviewSchema, request.body)));
@@ -908,8 +914,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     assertWorkspaceCommit(join(taskRun.artifact_path, "control", "baseline.git"), version.resultSha);
     return preview.start(taskRun.id, version.resultSha);
   });
-  app.post("/api/preview/heartbeat", async () => {
-    preview?.heartbeat();
+  app.post<{ Body: unknown }>("/api/preview/heartbeat", async (request) => {
+    const target = request.body === undefined ? undefined : parse(previewStopSchema, request.body);
+    preview?.heartbeat(target);
     return { status: "ok" };
   });
   app.delete<{ Body: unknown }>("/api/preview", async (request, reply) => {

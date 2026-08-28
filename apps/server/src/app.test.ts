@@ -1355,18 +1355,20 @@ describe("REST API", () => {
     expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?untagged=1" })).json() as { remaining: number }).remaining).toBe(0);
 
     const queued = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
-    const body = queued.json() as { remaining: number; pair: { taskName: string; description: string | null; modelKind: string; sides: Array<{ taskRunId: string; answer: string; resultSha: string | null }>; reveal: string[] } };
+    const body = queued.json() as { remaining: number; pair: { taskName: string; description: string | null; modelKind: string; sides: Array<{ taskRunId: string; answer: string; resultSha: string | null }> } };
     // Пары: две облачные модели между собой; локальная модель не с кем сравнить.
     expect(body.remaining).toBe(2);
     expect(body.pair.taskName).toBe("Аквариум");
     expect(body.pair.description).toBe("Заметка о задаче");
     expect(body.pair.modelKind).toBe("cloud");
     expect(body.pair.sides.map((side) => side.taskRunId).sort()).not.toContain(undefined);
-    expect(JSON.stringify(body.pair.sides)).not.toMatch(/Кальмар|Осьминог|Локальная|generationTokensPerSecond|codex/u);
-    expect(body.pair.reveal).toHaveLength(2);
+    // Имён моделей нет во всём ответе очереди, а не только в карточках сторон.
+    expect(JSON.stringify(body.pair)).not.toMatch(/Кальмар|Осьминог|Локальная|generationTokensPerSecond|codex/u);
 
     const [a, b] = body.pair.sides;
-    await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: a!.taskRunId, rightTaskRunId: b!.taskRunId, winner: "left" } });
+    // Имена моделей приходят только вместе с сохранённым вердиктом.
+    const verdict = await app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: a!.taskRunId, rightTaskRunId: b!.taskRunId, winner: "left" } });
+    expect((verdict.json() as { reveal: string[] }).reveal).toHaveLength(2);
     const after = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
     expect((after.json() as { remaining: number }).remaining).toBe(1);
     expect([left.id, right.id]).toHaveLength(2);

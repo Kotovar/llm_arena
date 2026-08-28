@@ -332,3 +332,22 @@ describe("теги промпта в результате", () => {
     expect(within(title as HTMLElement).getByText("код")).toBeTruthy();
   });
 });
+
+describe("остановка preview", () => {
+  it("гасит именно свой preview, а не все запущенные", async () => {
+    const user = userEvent.setup();
+    const preview = { taskRunId: "run-task-1", resultSha: "a".repeat(40), url: "http://127.0.0.1:4321/" };
+    const withPreview = taskRun({ snapshot_json: JSON.stringify({
+      task: { id: "revision-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: [], images: [] },
+      fixture: { id: "web-app", name: "Web", preview: { readyPath: "/" } },
+    }) });
+    await renderInApp(<TaskResult taskRun={withPreview} runId="run-1" preview={preview} onPreview={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "Остановить preview" }));
+
+    // Пустой DELETE снял бы и соседний preview слепого сравнения.
+    const stop = fetchMock.mock.calls.find(([url, init]) => url === "/api/preview" && (init as RequestInit | undefined)?.method === "DELETE");
+    expect(stop).toBeDefined();
+    expect(JSON.parse(String((stop![1] as RequestInit).body))).toEqual({ taskRunId: preview.taskRunId, resultSha: preview.resultSha });
+  });
+});

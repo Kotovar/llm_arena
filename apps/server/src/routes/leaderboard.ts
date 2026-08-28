@@ -2,6 +2,17 @@ import type { FastifyInstance } from "fastify";
 import type { ArenaStore } from "../store.js";
 import { leaderboardSliceSchema, type SliceQuery } from "./slice.js";
 
+function medianAttemptSpeed(store: ArenaStore, taskRunId: string): number | null {
+  const values = store.listTaskAttempts(taskRunId)
+    .filter((attempt) => attempt.attempt > 0 && attempt.status === "completed")
+    .map((attempt) => {
+      try { return (JSON.parse(attempt.result_json ?? "{}") as { metrics?: { generationTokensPerSecond?: { value?: number | null } } }).metrics?.generationTokensPerSecond?.value ?? null; }
+      catch { return null; }
+    })
+    .filter((value): value is number => typeof value === "number");
+  return values.length ? values.toSorted((left, right) => left - right)[Math.floor(values.length / 2)]! : null;
+}
+
 export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStore): void {
   app.get<{ Querystring: SliceQuery }>("/api/leaderboard", async (request) => {
     const slice = leaderboardSliceSchema.parse(request.query);
@@ -46,8 +57,11 @@ export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStor
         entry.instructionFollowing += row.instruction_following!;
         if (row.ui_quality !== 0) entry.visualReviewed += 1;
       }
-      if (row.generation_tps !== null) {
-        entry.speedSum += row.generation_tps;
+      // Где промпт прогоняли повторно, скорость берём медианой попыток — так же, как аналитика.
+      // Иначе один и тот же прогон давал бы на двух экранах разные цифры.
+      const speed = row.task_run_id === null ? null : medianAttemptSpeed(store, row.task_run_id) ?? row.generation_tps;
+      if (speed !== null) {
+        entry.speedSum += speed;
         entry.speedSamples += 1;
       }
       totals.set(row.model_id, entry);

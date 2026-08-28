@@ -43,14 +43,15 @@ beforeEach(() => {
         { taskRunId: "task-run-1", resultSha: "a".repeat(40), answer: "" },
         { taskRunId: "task-run-2", resultSha: "b".repeat(40), answer: "" },
       ],
-      reveal: ["Кальмар", "Осьминог"],
     },
   };
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     requests.push(url);
     if (init?.method === "POST") {
       posted.push({ url, body: JSON.parse(String(init.body)) });
-      const body = url.endsWith("/preview") ? { url: `http://127.0.0.1:4321/${url.split("/")[3]}` } : {};
+      const body = url.endsWith("/preview") ? { url: `http://127.0.0.1:4321/${url.split("/")[3]}` }
+        : url === "/api/reviews/pair" ? { reveal: ["Кальмар", "Осьминог"] }
+        : {};
       return new Response(JSON.stringify(body), { status: 201, headers: { "content-type": "application/json" } });
     }
     if (init?.method === "DELETE") return new Response(null, { status: 204 });
@@ -81,6 +82,8 @@ describe("слепая очередь", () => {
     expect(screen.getByText("Заметка о задаче")).toBeTruthy();
     const queue = screen.getByText("Аквариум").closest("section")!;
     expect(queue.textContent).not.toMatch(/Кальмар|Осьминог/u);
+    // Имён нет и в самом ответе очереди: слепота не держится на том, что интерфейс их не рисует.
+    expect(JSON.stringify(blindPair)).not.toMatch(/Кальмар|Осьминог/u);
 
     await user.click(screen.getByRole("button", { name: "Запустить вариант A" }));
     await user.click(screen.getByRole("button", { name: "Запустить вариант B" }));

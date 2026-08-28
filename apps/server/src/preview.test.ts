@@ -110,6 +110,56 @@ describe("preview command", () => {
     store.close();
   });
 
+  it("продлевает аренду только названного preview", async () => {
+    vi.useFakeTimers();
+    try {
+      const directory = mkdtempSync(join(tmpdir(), "llm-arena-preview-lease-"));
+      directories.push(directory);
+      const config = loadConfig("../../arena.config.yaml");
+      config.dataDir = join(directory, ".data");
+      const store = createStore(join(directory, "arena.sqlite"));
+      const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+      const task = store.createTask({ name: "Web", kind: "coding", prompt: "Build", fixtureId: "web", tags: [] });
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+      const source = join(directory, "fixture");
+      mkdirSync(source);
+      writeFileSync(join(source, "index.html"), "preview");
+      const fixture = { id: "web", name: "Web", source, checks: [], preview: { command: { argv: ["preview", "{port}"] }, readyPath: "/" } };
+      const results = [0, 1].map((position) => {
+        const artifactPath = join(directory, `lease-${position}`);
+        const artifacts = finalizeWorkspace(prepareWorkspace(source, artifactPath));
+        const taskRun = store.createTaskRun(run.id, task.currentRevision.id, position, artifactPath, { task: task.currentRevision, fixture });
+        store.saveTaskRunResult(taskRun.id, { artifacts });
+        return { taskRunId: taskRun.id, resultSha: artifacts.resultSha };
+      });
+      const processes: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+      const supervisor = {
+        spawn: () => {
+          const process = { stdin: { end: vi.fn() }, completed: new Promise(() => {}), stop: vi.fn().mockResolvedValue(undefined) };
+          processes.push(process);
+          return process as unknown as OwnedProcess;
+        },
+      } as unknown as ProcessSupervisor;
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 200 })));
+      const preview = new PreviewManager(store, config, supervisor);
+
+      await preview.start(results[0]!.taskRunId, results[0]!.resultSha);
+      await preview.start(results[1]!.taskRunId, results[1]!.resultSha);
+
+      // Живая вкладка продлевает только свой preview: брошенный соседний должен истечь по аренде.
+      await vi.advanceTimersByTimeAsync(PreviewManager.leaseMs - 1_000);
+      preview.heartbeat(results[1]!);
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(processes[0]!.stop).toHaveBeenCalledOnce();
+      expect(processes[1]!.stop).not.toHaveBeenCalled();
+      await preview.stop();
+      store.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("держит два preview рядом и вытесняет самый старый третьим", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-preview-pair-"));
     directories.push(directory);

@@ -125,22 +125,36 @@ function MetricStrip({ result, conditions }: { result: Record<string, unknown> |
   return <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Сумма новых входных токенов во всех обращениях агента к модели"><span>Новый вход</span><strong>{metric(result, "inputTokens")}</strong></div><div title="Токены контекста, повторно использованные из кеша"><span>Из кеша</span><strong>{metric(result, "cachedInputTokens")}</strong></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div>{fill ? <div title="Сколько токенов держал контекст в последнем обращении к модели"><span>Контекст в финале</span><strong>{fill.percent === null ? fill.label : `${fill.percent}%`}</strong>{fill.percent === null ? null : <small>{fill.label}</small>}</div> : null}<div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong>{conditions ? <small>{conditions}</small> : null}</div></div>;
 }
 
-export function usePreviewHeartbeat(active: boolean) {
+/** Продлеваем аренду только своих preview: чужие не должны жить за счёт нашей вкладки. */
+export function usePreviewHeartbeat(targets: Array<{ taskRunId: string; resultSha: string }>) {
+  const key = targets.map((target) => `${target.taskRunId}:${target.resultSha}`).join(",");
   useEffect(() => {
-    if (!active) return;
-    const heartbeat = window.setInterval(() => void api("/preview/heartbeat", { method: "POST" }), 15_000);
+    if (!key) return;
+    const heartbeat = window.setInterval(() => {
+      for (const target of key.split(",")) {
+        const [taskRunId, resultSha] = target.split(":") as [string, string];
+        void api("/preview/heartbeat", { method: "POST", body: JSON.stringify({ taskRunId, resultSha }) });
+      }
+    }, 15_000);
     return () => window.clearInterval(heartbeat);
-  }, [active]);
+  }, [key]);
 }
 
 // Preview-сервер один на всё приложение (см. PreviewManager.leaseMs) — если оставить страницу,
 // пока preview активен, он проработает ещё до 2 минут без пользы. Останавливаем адресно при уходе.
+/** Останавливаем ровно свой preview: пустой DELETE погасил бы и соседний, запущенный рядом. */
+export function stopPreviewTarget(preview: { taskRunId: string; resultSha: string } | undefined) {
+  return preview
+    ? api("/preview", { method: "DELETE", body: JSON.stringify({ taskRunId: preview.taskRunId, resultSha: preview.resultSha }) })
+    : Promise.resolve();
+}
+
 export function useStopPreviewOnUnmount(preview: PreviewState | undefined) {
   const ref = useRef(preview);
   useEffect(() => { ref.current = preview; }, [preview]);
   useEffect(() => () => {
     const active = ref.current;
-    if (active) void api("/preview", { method: "DELETE", body: JSON.stringify({ taskRunId: active.taskRunId, resultSha: active.resultSha }) });
+    if (active) void stopPreviewTarget(active);
   }, []);
 }
 
@@ -162,8 +176,8 @@ function LogDialog({ title, endpoint, onClose }: { title: string; endpoint: stri
   </dialog>;
 }
 
-export function ResultPreview({ url, onClose, closing, title = "Готовое web-приложение" }: { url: string; onClose: () => void; closing?: boolean; title?: string }) {
-  usePreviewHeartbeat(true);
+export function ResultPreview({ url, target, onClose, closing, title = "Готовое web-приложение" }: { url: string; target: { taskRunId: string; resultSha: string }; onClose: () => void; closing?: boolean; title?: string }) {
+  usePreviewHeartbeat([target]);
   useEffect(() => {
     // Фокус часто внутри iframe, поэтому слушаем на окне, а не на секции.
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !closing) onClose(); };
@@ -253,7 +267,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
   const review = useMutation({ mutationFn: (body: unknown) => api(`/task-runs/${taskRun.id}/review`, { method: "PUT", body: JSON.stringify(body) }), onSuccess: async () => { await client.invalidateQueries({ queryKey: ["run", runId] }); setSaved(true); } });
   const selectFinal = useMutation({ mutationFn: (resultSha: string) => api<ResultVersion>(`/task-runs/${taskRun.id}/selected-version`, { method: "PUT", body: JSON.stringify({ resultSha }) }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const preview = useMutation({ mutationFn: (resultSha: string) => api<PreviewState>(`/task-runs/${taskRun.id}/preview`, { method: "POST", body: JSON.stringify({ resultSha }) }), onSuccess: onPreview });
-  const closePreview = useMutation({ mutationFn: () => api("/preview", { method: "DELETE" }), onSuccess: () => onPreview(undefined) });
+  const closePreview = useMutation({ mutationFn: () => stopPreviewTarget(activePreview), onSuccess: () => onPreview(undefined) });
   const zed = useMutation({ mutationFn: () => api<{ workspace: string }>(`/task-runs/${taskRun.id}/open-in-zed`, { method: "POST" }), onSuccess: ({ workspace }) => toast(`Открыто в Zed: ${workspace}`) });
   const cancel = useMutation({ mutationFn: () => api(`/task-runs/${taskRun.id}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
   const cancelRun = useMutation({ mutationFn: () => api(`/runs/${runId}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
@@ -274,7 +288,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
   }, [activeVersion.key]);
   useEffect(() => {
     if (activePreview?.taskRunId !== taskRun.id || activePreview.resultSha === activeVersion.resultSha) return;
-    void api("/preview", { method: "DELETE" }).finally(() => onPreview(undefined));
+    void stopPreviewTarget(activePreview).finally(() => onPreview(undefined));
   }, [activePreview?.resultSha, activePreview?.taskRunId, activeVersion.resultSha, taskRun.id]);
   const zedErrorWorkspace = (zed.error as (Error & { data?: { workspace?: string } }) | null)?.data?.workspace;
   function rate(event: FormEvent<HTMLFormElement>) { event.preventDefault(); review.mutate(snapshot.task.kind === "coding" ? draft : { ...draft, uiQuality: 0 }); }
@@ -326,7 +340,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     {result ? <MetricStrip result={result} conditions={measurementConditions(snapshot.profile)} /> : null}
     {taskRun.attempts ? <p className="attempt-summary mono">{attemptSummary(taskRun.attempts)}</p> : null}
     <ChecksStrip result={result} />
-    {snapshot.fixture?.preview && canUseVersion ? previewUrl ? <ResultPreview url={previewUrl} onClose={() => closePreview.mutate()} closing={closePreview.isPending} /> : <section className={showShot ? "preview-cta with-shot" : "preview-cta"}>{showShot ? <img className="preview-shot" src={`/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(activeVersion.resultSha!)}`} alt={`Снимок web-приложения: ${activeVersion.label}`} loading="lazy" onError={() => setShotMissing(true)} /> : null}<div><span className="mono">Версия готова</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Одновременно живут два preview: если их уже два, самый старый остановится." : "Откроем зафиксированные файлы выбранной SHA-версии."}</p></div><button className="primary" onClick={() => preview.mutate(activeVersion.resultSha!)} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
+    {snapshot.fixture?.preview && canUseVersion ? previewUrl ? <ResultPreview url={previewUrl} target={activePreview!} onClose={() => closePreview.mutate()} closing={closePreview.isPending} /> : <section className={showShot ? "preview-cta with-shot" : "preview-cta"}>{showShot ? <img className="preview-shot" src={`/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(activeVersion.resultSha!)}`} alt={`Снимок web-приложения: ${activeVersion.label}`} loading="lazy" onError={() => setShotMissing(true)} /> : null}<div><span className="mono">Версия готова</span><strong>Запустить web-приложение</strong><p>{otherPreviewActive ? "Одновременно живут два preview: если их уже два, самый старый остановится." : "Откроем зафиксированные файлы выбранной SHA-версии."}</p></div><button className="primary" onClick={() => preview.mutate(activeVersion.resultSha!)} disabled={preview.isPending}>{preview.isPending ? "Запускаем…" : "Запустить preview →"}</button></section> : null}
     {preview.error ? <p className="error">{preview.error.message}</p> : null}
     {result?.finalAnswer ? <details className="answer-surface"><summary><span className="mono">{activeVersion.label}</span><strong>Ответ модели</strong></summary><pre className="answer">{String(result.finalAnswer)}</pre></details> : null}
     <div className="actions">{restartable ? <>{localTemperature === undefined ? null : <label className="restart-temperature">Температура<input type="number" min={0} max={2} step={0.05} value={temperature} onChange={(event) => setTemperature(event.currentTarget.value)} /></label>}<button className="primary" disabled={retryTaskRun.isPending} onClick={restart}>{retryTaskRun.isPending ? "Перезапускаем…" : "Запустить заново"}</button></> : null}<Link to="/" search={{ task: snapshot.task.taskId, mode: snapshot.task.kind === "coding" ? "web" as const : "text" as const }}>Повторить на другой модели</Link>{result?.finalAnswer ? <button onClick={() => void copyAnswer()}>Копировать ответ</button> : null}{snapshot.task.kind === "coding" ? <button className="primary" onClick={() => zed.mutate()} disabled={zed.isPending}>{zed.isPending ? "Открываем Zed…" : "Открыть текущий workspace в Zed"}</button> : null}<button disabled={!activeVersion.resultSha} onClick={() => { if (artifact !== undefined) { setArtifact(undefined); return; } if (activeVersion.resultSha) void apiText(`/task-runs/${taskRun.id}/diff?resultSha=${encodeURIComponent(activeVersion.resultSha)}`).then(setArtifact).catch((error: Error) => setArtifact(error.message)); }}>{artifact === undefined ? "Изменения версии" : "Скрыть изменения"}</button><button onClick={() => setLogView({ title: "Сырые логи", endpoint: logsPath })}>Сырые логи</button><button onClick={() => setLogView({ title: "Ошибки", endpoint: `${logsPath}?stream=stderr` })}>Ошибки</button></div>

@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Status, useData } from "../shell.js";
 import type { Model, PairReview, Run, Runner, Task, TaskRun } from "../types.js";
 import { betterResult, formatRelativeTime, formatReviewSummary, matchTaskRuns, reviewPossible, reviewSummary, reviewTotal, runModelName } from "../ui.js";
-import { metric, ResultPreview, usePreviewHeartbeat, useStopPreviewOnUnmount } from "./results.js";
+import { metric, ResultPreview, stopPreviewTarget, usePreviewHeartbeat, useStopPreviewOnUnmount } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
 type TaskSnapshot = { fixture?: { preview?: unknown } };
@@ -45,7 +45,7 @@ function pairVerdict(reviews: PairReview[], left: TaskRun | undefined, right: Ta
 type BlindSide = { taskRunId: string; resultSha: string | null; answer: string };
 type BlindPair = {
   remaining: number;
-  pair: { taskName: string; description: string | null; modelKind: "local-gguf" | "cloud"; sides: BlindSide[]; reveal: string[] } | null;
+  pair: { taskName: string; description: string | null; modelKind: "local-gguf" | "cloud"; sides: BlindSide[] } | null;
 };
 
 function BlindSidePane({ side, letter, revealed, running, url, onRun }: { side: BlindSide; letter: string; revealed: string | undefined; running: boolean; url: string | undefined; onRun: () => void }) {
@@ -71,28 +71,39 @@ function BlindQueue() {
   // Пара выбирается случайно, поэтому любой автоматический перезапрос подменил бы её под руками судьи:
   // новая пара берётся только по явной команде («Следующая пара», «Пропустить») или при смене среза.
   const next = useQuery({ queryKey: ["pair-next", query], queryFn: () => api<BlindPair>(`/reviews/pair/next${query}`), staleTime: Infinity, refetchOnWindowFocus: false, refetchOnMount: false, refetchOnReconnect: false });
-  const [given, setGiven] = useState<Verdict>();
-  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [given, setGiven] = useState<{ winner: Verdict; reveal: string[] }>();
+  const [previews, setPreviews] = useState<Record<string, { url: string; resultSha: string }>>({});
+  const started = useRef<Array<{ taskRunId: string; resultSha: string }>>([]);
   const pair = next.data?.pair;
-  usePreviewHeartbeat(Object.keys(previews).length > 0);
-  useEffect(() => () => void api("/preview", { method: "DELETE" }), []);
+  usePreviewHeartbeat(Object.entries(previews).map(([taskRunId, item]) => ({ taskRunId, resultSha: item.resultSha })));
+  // Гасим ровно свои preview: пустой DELETE снял бы и те, что запущены на другом экране.
+  const stopStarted = async () => {
+    const targets = started.current.splice(0);
+    // Остановка — дело добровольное: если сервер уже недоступен, аренда погасит preview сама.
+    for (const target of targets) await stopPreviewTarget(target).catch(() => undefined);
+  };
+  useEffect(() => () => { void stopStarted(); }, []);
   const run = useMutation({
     mutationFn: (side: BlindSide) => api<{ url: string }>(`/task-runs/${side.taskRunId}/preview`, { method: "POST", body: JSON.stringify({ resultSha: side.resultSha }) }),
-    onSuccess: (result, side) => setPreviews((current) => ({ ...current, [side.taskRunId]: result.url })),
+    onSuccess: (result, side) => {
+      started.current = [...started.current, { taskRunId: side.taskRunId, resultSha: side.resultSha! }];
+      setPreviews((current) => ({ ...current, [side.taskRunId]: { url: result.url, resultSha: side.resultSha! } }));
+    },
   });
   const judge = useMutation({
-    mutationFn: (winner: Verdict) => api("/reviews/pair", { method: "POST", body: JSON.stringify({ leftTaskRunId: pair!.sides[0]!.taskRunId, rightTaskRunId: pair!.sides[1]!.taskRunId, winner }) }),
-    onSuccess: (_result, winner) => { setGiven(winner); void client.invalidateQueries({ queryKey: ["pair-reviews"] }); },
+    // Имена моделей приходят вместе с сохранённым вердиктом: до него их нет и в ответе сети.
+    mutationFn: (winner: Verdict) => api<{ reveal: string[] }>("/reviews/pair", { method: "POST", body: JSON.stringify({ leftTaskRunId: pair!.sides[0]!.taskRunId, rightTaskRunId: pair!.sides[1]!.taskRunId, winner }) }),
+    onSuccess: (result, winner) => { setGiven({ winner, reveal: result.reveal }); void client.invalidateQueries({ queryKey: ["pair-reviews"] }); },
   });
   const advance = async () => {
     setGiven(undefined);
     setPreviews({});
-    await api("/preview", { method: "DELETE" });
+    await stopStarted();
     await next.refetch();
   };
   const chips = tags.length ? <div className="leaderboard-filters" role="group" aria-label="Срез слепой оценки">
-    <button type="button" className={tag ? "" : "active"} aria-pressed={!tag} onClick={() => { setTag(""); setGiven(undefined); setPreviews({}); }}>Все промпты</button>
-    {tags.map((item) => <button type="button" key={item} className={tag === item ? "active" : ""} aria-pressed={tag === item} onClick={() => { setTag(item); setGiven(undefined); setPreviews({}); }}>{item}</button>)}
+    <button type="button" className={tag ? "" : "active"} aria-pressed={!tag} onClick={() => { setTag(""); setGiven(undefined); setPreviews({}); void stopStarted(); }}>Все промпты</button>
+    {tags.map((item) => <button type="button" key={item} className={tag === item ? "active" : ""} aria-pressed={tag === item} onClick={() => { setTag(item); setGiven(undefined); setPreviews({}); void stopStarted(); }}>{item}</button>)}
   </div> : null;
   if (next.isPending) return <div className="blind-queue">{chips}<span>Ищем пару для слепой оценки…</span></div>;
   if (next.error) return <p className="error">{next.error.message}</p>;
@@ -105,14 +116,14 @@ function BlindQueue() {
       key={side.taskRunId}
       side={side}
       letter={index === 0 ? "A" : "B"}
-      revealed={given ? pair.reveal[index] : undefined}
+      revealed={given?.reveal[index]}
       running={run.isPending && run.variables?.taskRunId === side.taskRunId}
-      url={previews[side.taskRunId]}
+      url={previews[side.taskRunId]?.url}
       onRun={() => run.mutate(side)}
     />)}</div>
     {run.error ? <p className="error">{run.error.message}</p> : null}
     {given
-      ? <div className="blind-actions"><strong>{given === "tie" ? "Ничья" : `Лучше вариант ${given === "left" ? "A" : "B"}`}</strong><button type="button" className="primary" onClick={() => void advance()}>Следующая пара</button></div>
+      ? <div className="blind-actions"><strong>{given.winner === "tie" ? "Ничья" : `Лучше вариант ${given.winner === "left" ? "A" : "B"}`}</strong><button type="button" className="primary" onClick={() => void advance()}>Следующая пара</button></div>
       : <div className="blind-actions" role="group" aria-label="Кто лучше">{verdicts.map(([value, verdictLabel]) => <button type="button" key={value} disabled={judge.isPending} onClick={() => judge.mutate(value)}>{verdictLabel}</button>)}<button type="button" onClick={() => void advance()}>Пропустить</button></div>}
     {judge.error ? <p className="error">{judge.error.message}</p> : null}
   </section>;
@@ -146,7 +157,7 @@ export function ComparePage() {
   const runScore = (run?: Run) => formatReviewSummary(run ? reviewSummary(run.taskRuns?.map((task) => task.review) ?? [], run.taskRuns?.length ?? 0) : undefined);
 
   return <Page title="Сравнение результатов" eyebrow="Сравнение" intro="Промпты сопоставляются по сохранённой версии — разный порядок и разные наборы сравнению не мешают.">
-    {preview ? <ResultPreview url={preview.url} onClose={() => stopPreview.mutate()} closing={stopPreview.isPending} title="Предпросмотр результата" /> : null}
+    {preview ? <ResultPreview url={preview.url} target={preview} onClose={() => stopPreview.mutate()} closing={stopPreview.isPending} title="Предпросмотр результата" /> : null}
     {startPreview.error ? <p className="error">{startPreview.error.message}</p> : null}
     {savePair.error ? <p className="error">{savePair.error.message}</p> : null}
     <div className="compare-tabs" role="tablist" aria-label="Режим сравнения">

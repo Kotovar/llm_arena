@@ -174,8 +174,15 @@ export class PreviewManager {
   // Полностью усыплённую вкладку это не покрывает — тогда preview будет реапнут, и это осознанный компромисс.
   static readonly leaseMs = 120_000;
 
-  heartbeat(): void {
-    for (const [key, entry] of this.#active) {
+  /**
+   * Аренда продлевается адресно: иначе живая вкладка держала бы вечно и чужой preview,
+   * который её владелец уже бросил, — а именно от этого аренда и защищает.
+   */
+  heartbeat(target?: { taskRunId: string; resultSha: string }): void {
+    const keys = target ? [previewKey(target.taskRunId, target.resultSha.toLowerCase())] : [...this.#active.keys()];
+    for (const key of keys) {
+      const entry = this.#active.get(key);
+      if (!entry) continue;
       if (entry.lease) clearTimeout(entry.lease);
       entry.lease = setTimeout(() => void this.#stopEntry(key), PreviewManager.leaseMs);
     }

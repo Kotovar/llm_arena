@@ -100,6 +100,7 @@ type TaskRunRow = {
 
 type LeaderboardTaskRunRow = {
   run_id: string;
+  task_run_id: string | null;
   model_id: string;
   model_ref: string | null;
   tags_json: string | null;
@@ -308,8 +309,12 @@ function migrate(sqlite: DatabaseSync): void {
   if (!runColumns.some((column) => column.name === "temperature")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN temperature REAL");
   }
+  // Каждая колонка проверяется отдельно: одна проверка на два ALTER после падения между ними
+  // навсегда оставила бы вторую колонку ненаписанной.
   if (!runColumns.some((column) => column.name === "repeat_count")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!runColumns.some((column) => column.name === "warmup_attempt")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN warmup_attempt INTEGER NOT NULL DEFAULT 0");
   }
   if (!runColumns.some((column) => column.name === "model_ref")) {
@@ -788,7 +793,7 @@ export function createStore(filename: string) {
      */
     listLeaderboardTaskRuns() {
       return all<LeaderboardTaskRunRow>(`
-        SELECT benchmark_runs.id AS run_id, benchmark_runs.model_id, benchmark_runs.model_ref,
+        SELECT benchmark_runs.id AS run_id, task_runs.id AS task_run_id, benchmark_runs.model_id, benchmark_runs.model_ref,
                tasks.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following,
                json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value') AS generation_tps
