@@ -134,6 +134,15 @@ type DecisionRow = {
   instruction_following: number | null;
 };
 
+type PairVerdictRow = {
+  winner_task_run_id: string | null;
+  first_task_run_id: string;
+  second_task_run_id: string;
+  first_model_id: string;
+  second_model_id: string;
+  tags_json: string;
+};
+
 type PairReviewRow = {
   id: string;
   first_task_run_id: string;
@@ -857,6 +866,23 @@ export function createStore(filename: string) {
         WHERE task_runs.status IN ('completed', 'failed')
         ORDER BY task_runs.created_at
       `);
+    },
+    /** Вердикты с моделями обеих сторон и тегами версии промпта: сырьё для сводки побед. */
+    listPairVerdicts() {
+      return all<PairVerdictRow>(`
+        SELECT pair_reviews.winner_task_run_id,
+               pair_reviews.first_task_run_id, pair_reviews.second_task_run_id,
+               first_run.model_id AS first_model_id,
+               second_run.model_id AS second_model_id,
+               task_revisions.tags_json
+        FROM pair_reviews
+        JOIN task_runs AS first_task ON first_task.id = pair_reviews.first_task_run_id
+        JOIN task_runs AS second_task ON second_task.id = pair_reviews.second_task_run_id
+        JOIN benchmark_runs AS first_run ON first_run.id = first_task.benchmark_run_id
+        JOIN benchmark_runs AS second_run ON second_run.id = second_task.benchmark_run_id
+        JOIN task_revisions ON task_revisions.id = first_task.task_revision_id
+        ORDER BY pair_reviews.updated_at
+      `).map((row) => ({ ...row, winnerModelId: row.winner_task_run_id === null ? null : row.winner_task_run_id === row.first_task_run_id ? row.first_model_id : row.second_model_id }));
     },
     listPairReviews() {
       return all<PairReviewRow>("SELECT * FROM pair_reviews ORDER BY updated_at");

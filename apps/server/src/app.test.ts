@@ -1415,6 +1415,50 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("сводит слепые вердикты по моделям и парам соперников", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-pair-summary-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+
+    const agentTask = store.createTask({ name: "Agent", kind: "prompt", prompt: "Answer", tags: ["coding-agent"] });
+    const plainTask = store.createTask({ name: "Plain", kind: "prompt", prompt: "Answer", tags: [] });
+    const agent = store.createModel({ name: "Agent Model", kind: "cloud", provider: "openai", modelRef: "agent" });
+    const rival = store.createModel({ name: "Rival Model", kind: "cloud", provider: "openai", modelRef: "rival" });
+    const result = (modelId: string, revisionId: string, position: number) => {
+      const run = store.createRun({ taskRevisionIds: [revisionId], modelId, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+      const taskRun = store.createTaskRun(run.id, revisionId, position, join(directory, `${modelId}-${position}`), { task: { id: revisionId } });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: "A" });
+      return taskRun;
+    };
+    const verdict = async (left: string, right: string, winner: "left" | "right" | "tie") =>
+      app.inject({ method: "POST", url: "/api/reviews/pair", payload: { leftTaskRunId: left, rightTaskRunId: right, winner } });
+
+    for (const position of [0, 1]) {
+      await verdict(result(agent.id, agentTask.currentRevision.id, position).id, result(rival.id, agentTask.currentRevision.id, position).id, "left");
+    }
+    await verdict(result(agent.id, agentTask.currentRevision.id, 2).id, result(rival.id, agentTask.currentRevision.id, 2).id, "tie");
+    // Вердикт по промпту из другого среза в срез coding-agent попасть не должен.
+    await verdict(result(agent.id, plainTask.currentRevision.id, 3).id, result(rival.id, plainTask.currentRevision.id, 3).id, "right");
+
+    const sliced = await app.inject({ method: "GET", url: "/api/reviews/pair/summary?tag=coding-agent" });
+    expect(sliced.json()).toEqual([
+      // Три пары — ниже порога уверенности, поэтому процент не показываем, только счёт.
+      expect.objectContaining({ modelName: "Agent Model", wins: 2, losses: 0, ties: 1, decided: 3, winPercent: null }),
+      expect.objectContaining({ modelName: "Rival Model", wins: 0, losses: 2, ties: 1, decided: 3, winPercent: null }),
+    ]);
+    expect((sliced.json() as Array<{ opponents: Array<{ modelName: string; wins: number; losses: number }> }>)[0]!.opponents)
+      .toEqual([expect.objectContaining({ modelName: "Rival Model", wins: 2, losses: 0, ties: 1 })]);
+
+    const all = await app.inject({ method: "GET", url: "/api/reviews/pair/summary" });
+    expect((all.json() as Array<{ modelName: string; wins: number; losses: number; decided: number }>)).toEqual([
+      expect.objectContaining({ modelName: "Agent Model", wins: 2, losses: 1, decided: 4 }),
+      expect.objectContaining({ modelName: "Rival Model", wins: 1, losses: 2, decided: 4 }),
+    ]);
+    await app.close();
+    store.close();
+  });
+
   it("регистрирует лидерборд и аналитику из отдельных модулей", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-routes-"));
     directories.push(directory);

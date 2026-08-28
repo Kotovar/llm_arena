@@ -34,6 +34,7 @@ import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
+import { leaderboardSliceSchema, type SliceQuery } from "./routes/slice.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 import { readGpuInfo } from "./system-metrics.js";
 import { loadOwnerId, stopOwnedLlamaServers } from "./lifecycle.js";
@@ -54,6 +55,9 @@ type PreviewLike = {
   heartbeat(): void;
   removeTaskRunPreviews?(taskRunIds: string[]): Promise<void>;
 };
+
+// Ниже этого числа решённых пар доля побед — это шум: один вердикт даёт целые проценты.
+const CONFIDENT_PAIRS = 5;
 
 function parse<T>(schema: ZodType<T>, value: unknown): T {
   return schema.parse(value);
@@ -706,6 +710,49 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
    * и web-результат с web-результатом. Имена моделей отдаём отдельным полем: интерфейс
    * показывает его только после вердикта.
    */
+  /**
+   * Сводка слепых вердиктов: сколько раз модель побеждала, проигрывала и сводила вничью.
+   * Долю побед показываем только от порога уверенности — две пары процентом называть нечестно.
+   */
+  app.get<{ Querystring: SliceQuery }>("/api/reviews/pair/summary", async (request) => {
+    const slice = leaderboardSliceSchema.parse(request.query);
+    type Record_ = { wins: number; losses: number; ties: number; decided: number };
+    const empty = (): Record_ => ({ wins: 0, losses: 0, ties: 0, decided: 0 });
+    const totals = new Map<string, Record_ & { opponents: Map<string, Record_> }>();
+    const count = (record: Record_, outcome: "win" | "loss" | "tie") => {
+      record.decided += 1;
+      if (outcome === "win") record.wins += 1;
+      else if (outcome === "loss") record.losses += 1;
+      else record.ties += 1;
+    };
+    for (const verdict of store.listPairVerdicts()) {
+      const tags = JSON.parse(verdict.tags_json) as string[];
+      if (slice.tag !== undefined && !tags.includes(slice.tag)) continue;
+      if (slice.untagged && tags.length !== 0) continue;
+      for (const [modelId, opponentId] of [[verdict.first_model_id, verdict.second_model_id], [verdict.second_model_id, verdict.first_model_id]] as const) {
+        const entry = totals.get(modelId) ?? { ...empty(), opponents: new Map<string, Record_>() };
+        // Ничья не достаётся никому, но парой быть не перестаёт.
+        const outcome = verdict.winnerModelId === null ? "tie" as const : verdict.winnerModelId === modelId ? "win" as const : "loss" as const;
+        count(entry, outcome);
+        const versus = entry.opponents.get(opponentId) ?? empty();
+        count(versus, outcome);
+        entry.opponents.set(opponentId, versus);
+        totals.set(modelId, entry);
+      }
+    }
+    const modelName = (modelId: string) => store.getModel(modelId)?.name ?? modelId.slice(0, 8);
+    return [...totals].map(([modelId, entry]) => ({
+      modelId,
+      modelName: modelName(modelId),
+      wins: entry.wins,
+      losses: entry.losses,
+      ties: entry.ties,
+      decided: entry.decided,
+      winPercent: entry.decided >= CONFIDENT_PAIRS ? Math.round((entry.wins / entry.decided) * 1000) / 10 : null,
+      opponents: [...entry.opponents].map(([opponentId, versus]) => ({ modelId: opponentId, modelName: modelName(opponentId), ...versus }))
+        .sort((left, right) => right.decided - left.decided),
+    })).sort((left, right) => right.wins - left.wins || right.decided - left.decided);
+  });
   app.get("/api/reviews/pair/next", async () => {
     const judged = new Set(store.listPairReviews().map((review) => [review.first_task_run_id, review.second_task_run_id].join("|")));
     type Candidate = {

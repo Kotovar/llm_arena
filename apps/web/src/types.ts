@@ -251,3 +251,15 @@ export type DecisionPoint = {
   failureRate: number;
   estimatedCostPerRun: number | null;
 };
+
+/** Сводка слепых вердиктов по модели. winPercent = null — решённых пар слишком мало для процента. */
+export type PairSummary = {
+  modelId: string;
+  modelName: string;
+  wins: number;
+  losses: number;
+  ties: number;
+  decided: number;
+  winPercent: number | null;
+  opponents: Array<{ modelId: string; modelName: string; wins: number; losses: number; ties: number; decided: number }>;
+};

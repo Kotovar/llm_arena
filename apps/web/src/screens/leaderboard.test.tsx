@@ -15,14 +15,21 @@ function entry(modelId: string, modelName: string, modelKind: "local-gguf" | "cl
 }
 
 let requested: string[];
+let pairs: Array<{ modelId: string; modelName: string; wins: number; losses: number; ties: number; decided: number; winPercent: number | null; opponents: Array<{ modelId: string; modelName: string; wins: number; losses: number; ties: number; decided: number }> }>;
 
 beforeEach(() => {
   requested = [];
   const leaderboard = [{ ...entry("cloud-1", "Облачная", "cloud", 90), estimatedCostPerRun: 0.2 }, entry("local-1", "Локальная", "local-gguf", 70)];
+  pairs = [
+    { modelId: "cloud-1", modelName: "Облачная", wins: 6, losses: 2, ties: 0, decided: 8, winPercent: 75, opponents: [{ modelId: "local-1", modelName: "Локальная", wins: 6, losses: 2, ties: 0, decided: 8 }] },
+    { modelId: "local-1", modelName: "Локальная", wins: 2, losses: 6, ties: 0, decided: 8, winPercent: 25, opponents: [{ modelId: "cloud-1", modelName: "Облачная", wins: 2, losses: 6, ties: 0, decided: 8 }] },
+  ];
   const tasks = [{ id: "task-1", currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["coding-agent"], images: [] } }];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     requested.push(url);
-    const body = url.startsWith("/api/tasks") ? tasks : url.includes("tag=") ? [leaderboard[0]] : leaderboard;
+    const body = url.startsWith("/api/tasks") ? tasks
+      : url.startsWith("/api/reviews/pair/summary") ? pairs
+      : url.includes("tag=") ? [leaderboard[0]] : leaderboard;
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   }));
 });
@@ -66,5 +73,28 @@ describe("лидерборд", () => {
     const free = screen.getByText("Локальная").closest("tr")!;
     expect(within(priced).getByText("≈ 0.20 за прогон")).toBeTruthy();
     expect(within(free).getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("показывает долю побед рядом с долей баллов и счёт по соперникам", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<LeaderboardPage />);
+
+    const row = (await screen.findByText("Облачная")).closest("tr")!;
+    expect(within(row).getByText("75.0%")).toBeTruthy();
+
+    await user.click(screen.getByText("Кто кого в слепых дуэлях"));
+
+    const table = screen.getByRole("table", { name: "Счёт по парам соперников" });
+    expect(within(table).getAllByText("Локальная").length).toBeGreaterThan(0);
+    // Доля баллов и доля побед отвечают на разные вопросы — это сказано прямо.
+    expect(screen.getByText(/Это разные вопросы/u)).toBeTruthy();
+  });
+
+  it("не показывает процент, пока решённых пар мало", async () => {
+    pairs = [{ modelId: "cloud-1", modelName: "Облачная", wins: 2, losses: 1, ties: 0, decided: 3, winPercent: null, opponents: [] }];
+    await renderInApp(<LeaderboardPage />);
+
+    const row = (await screen.findByText("Облачная")).closest("tr")!;
+    expect(within(row).getByText("2 из 3")).toBeTruthy();
   });
 });

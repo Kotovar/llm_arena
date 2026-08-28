@@ -176,6 +176,9 @@ a { color: var(--signal); text-decoration: none; }
 .model-economics label { flex: 1 1 200px; color: var(--muted); font-size: 12px; }
 .model-economics input { display: block; width: 100%; margin-top: 6px; padding: 9px; }
 .model-economics small { flex: 1 1 100%; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.head-to-head { margin-top: 18px; }
+.head-to-head > summary { cursor: pointer; color: var(--signal); font-size: 12px; font-weight: 700; }
+.head-to-head .slice-hint { margin: 12px 0; }
 .scatter { width: 100%; height: auto; margin-bottom: 18px; }
 :root { --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; }
 .scatter-point-label { fill: #d7dcea; font-size: 11px; }
