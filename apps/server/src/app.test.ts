@@ -1415,6 +1415,21 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("регистрирует лидерборд и аналитику из отдельных модулей", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-routes-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+
+    expect((await app.inject({ method: "GET", url: "/api/leaderboard" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points" })).statusCode).toBe(200);
+    // Схема среза общая: невозможная комбинация отклоняется одинаково в обоих модулях.
+    expect((await app.inject({ method: "GET", url: "/api/leaderboard?tag=a&untagged=1" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points?tag=a&untagged=1" })).statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
   it("собирает точки решения по модели и профилю в выбранном срезе", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-decision-points-"));
     directories.push(directory);

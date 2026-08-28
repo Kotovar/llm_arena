@@ -32,6 +32,8 @@ import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-
 import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
+import { registerAnalyticsRoutes } from "./routes/analytics.js";
+import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 import { readGpuInfo } from "./system-metrics.js";
 import { loadOwnerId, stopOwnedLlamaServers } from "./lifecycle.js";
@@ -61,11 +63,6 @@ const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict(
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
 const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
-// Срез нагрузки: либо один тег, либо явный срез «без тегов»; обе метки сразу — противоречие.
-const leaderboardSliceSchema = z.object({
-  tag: z.string().trim().min(1).optional(),
-  untagged: z.literal("1").optional().transform((value) => value === "1"),
-}).strict().refine((value) => !(value.tag && value.untagged), "Choose either a tag or the untagged slice");
 const updateModelEconomicsSchema = z.object({ economics: modelEconomicsSchema.nullable() }).strict();
 const pairReviewSchema = z.object({
   leftTaskRunId: z.string().uuid(),
@@ -421,76 +418,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
 
   app.get("/api/runs", async () => store.listRuns().map((run) => ({ ...withPublicError(run), activityStatus: activityStatus(run), activeTaskName: activeTaskName(run.id) })));
-  app.get<{ Querystring: { tag?: string; untagged?: string } }>("/api/leaderboard", async (request) => {
-    const slice = parse(leaderboardSliceSchema, request.query);
-    type Totals = {
-      modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; estimatedCostPerRun: number | null; runs: Set<string>; reviewedTaskRunCount: number;
-      scoreSum: number; possibleSum: number; speedSum: number; speedSamples: number;
-      correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; visualReviewed: number;
-    };
-    const totals = new Map<string, Totals>();
-    for (const row of store.listLeaderboardTaskRuns()) {
-      const tags = row.tags_json === null ? undefined : JSON.parse(row.tags_json) as string[];
-      if (slice.tag !== undefined && !tags?.includes(slice.tag)) continue;
-      if (slice.untagged && tags?.length !== 0) continue;
-      const model = store.getModel(row.model_id);
-      const entry = totals.get(row.model_id) ?? {
-        modelId: row.model_id,
-        modelName: model?.name ?? row.model_ref ?? row.model_id.slice(0, 8),
-        modelKind: model?.kind ?? "cloud",
-        // Цена — оценка пользователя: месячная подписка, поделённая на ожидаемое число прогонов.
-        estimatedCostPerRun: model?.economics ? model.economics.monthlyCost / model.economics.includedRunEstimate : null,
-        runs: new Set<string>(),
-        reviewedTaskRunCount: 0,
-        scoreSum: 0,
-        possibleSum: 0,
-        speedSum: 0,
-        speedSamples: 0,
-        correctness: 0,
-        codeQuality: 0,
-        uiQuality: 0,
-        instructionFollowing: 0,
-        visualReviewed: 0,
-      };
-      entry.runs.add(row.run_id);
-      if (row.correctness !== null) {
-        entry.reviewedTaskRunCount += 1;
-        entry.scoreSum += row.correctness + row.code_quality! + row.ui_quality! + row.instruction_following!;
-        // Визуал не применяется к текстовому ответу, поэтому и максимум у него меньше.
-        entry.possibleSum += row.ui_quality === 0 ? 30 : 40;
-        entry.correctness += row.correctness;
-        entry.codeQuality += row.code_quality!;
-        entry.uiQuality += row.ui_quality!;
-        entry.instructionFollowing += row.instruction_following!;
-        if (row.ui_quality !== 0) entry.visualReviewed += 1;
-      }
-      if (row.generation_tps !== null) {
-        entry.speedSum += row.generation_tps;
-        entry.speedSamples += 1;
-      }
-      totals.set(row.model_id, entry);
-    }
-    // Максимум за промпт зависит от типа задачи, поэтому сравниваем долю набранного, а не сырую сумму.
-    return [...totals.values()]
-      .map(({ scoreSum, possibleSum, speedSum, speedSamples, correctness, codeQuality, uiQuality, instructionFollowing, visualReviewed, runs, ...entry }) => {
-        // Визуал делим на число задач, где он применялся: у текстовых ответов его нет.
-        const average = (sum: number, count: number) => count ? Math.round((sum / count) * 10) / 10 : null;
-        return {
-          ...entry,
-          runCount: runs.size,
-          scorePercent: possibleSum ? Math.round((scoreSum / possibleSum) * 1000) / 10 : null,
-          // Средняя по замерам всех промптов модели: контекст и профиль у них разные, поэтому цифра ориентировочная.
-          generationTokensPerSecond: speedSamples ? Math.round((speedSum / speedSamples) * 10) / 10 : null,
-          criteria: {
-            correctness: average(correctness, entry.reviewedTaskRunCount),
-            codeQuality: average(codeQuality, entry.reviewedTaskRunCount),
-            uiQuality: average(uiQuality, visualReviewed),
-            instructionFollowing: average(instructionFollowing, entry.reviewedTaskRunCount),
-          },
-        };
-      })
-      .sort((a, b) => (b.scorePercent ?? -1) - (a.scorePercent ?? -1));
-  });
+  registerLeaderboardRoutes(app, store);
+  registerAnalyticsRoutes(app, store, config);
   app.get("/api/gallery", async () => {
     const featured = new Set(store.listGalleryFeatured().map((item) => item.task_run_id));
     return store.listRuns().flatMap((run) => {
@@ -777,94 +706,6 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
    * и web-результат с web-результатом. Имена моделей отдаём отдельным полем: интерфейс
    * показывает его только после вердикта.
    */
-  /**
-   * Точки решения: по строке на «модель + профиль» в выбранном срезе нагрузки. Ничего не додумываем —
-   * неизмеренная метрика остаётся null, облачные и локальные профили в одну точку не сливаются.
-   */
-  app.get<{ Querystring: { tag?: string; untagged?: string } }>("/api/analytics/decision-points", async (request) => {
-    const slice = parse(leaderboardSliceSchema, request.query);
-    const median = (values: number[]) => values.length
-      ? values.toSorted((left, right) => left - right)[Math.floor(values.length / 2)]!
-      : null;
-    const round = (value: number, digits = 1) => Math.round(value * 10 ** digits) / 10 ** digits;
-    // Пик VRAM пишется файлом рядом с прогоном: в базе его нет, а выдумывать нечего.
-    const peakVram = new Map<string, number | null>();
-    const runPeakVram = (runId: string) => {
-      if (!peakVram.has(runId)) {
-        try {
-          const summary = JSON.parse(readFileSync(join(config.dataDir, "runs", runId, "system-summary.json"), "utf8")) as { peakVramMiB?: unknown };
-          peakVram.set(runId, typeof summary.peakVramMiB === "number" ? summary.peakVramMiB : null);
-        } catch {
-          peakVram.set(runId, null);
-        }
-      }
-      return peakVram.get(runId) ?? null;
-    };
-    type Point = {
-      modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; profileId: string | null; profileName: string | null;
-      tag: string | null; untagged: boolean; sampleCount: number; failed: number;
-      runs: Map<string, "completed" | "interrupted">; scoreSum: number; possibleSum: number;
-      speed: number[]; duration: number[]; peakVramMiB: number | null; estimatedCostPerRun: number | null;
-    };
-    const points = new Map<string, Point>();
-    for (const row of store.listDecisionRows()) {
-      const tags = JSON.parse(row.tags_json) as string[];
-      if (slice.tag !== undefined && !tags.includes(slice.tag)) continue;
-      if (slice.untagged && tags.length !== 0) continue;
-      const key = `${row.model_id}|${row.execution_profile_id ?? ""}`;
-      const model = store.getModel(row.model_id);
-      const profile = row.execution_profile_id ? store.getExecutionProfile(row.execution_profile_id) : undefined;
-      const point = points.get(key) ?? {
-        modelId: row.model_id,
-        modelName: model?.name ?? row.model_id.slice(0, 8),
-        modelKind: model?.kind ?? "cloud",
-        profileId: row.execution_profile_id,
-        profileName: profile?.name ?? null,
-        tag: slice.tag ?? null,
-        // Срез «без тегов» — не то же самое, что «все промпты»: одним полем tag их не различить.
-        untagged: Boolean(slice.untagged),
-        sampleCount: 0,
-        failed: 0,
-        runs: new Map<string, "completed" | "interrupted">(),
-        scoreSum: 0,
-        possibleSum: 0,
-        speed: [],
-        duration: [],
-        peakVramMiB: null,
-        estimatedCostPerRun: model?.economics ? model.economics.monthlyCost / model.economics.includedRunEstimate : null,
-      };
-      point.sampleCount += 1;
-      if (row.status === "failed") point.failed += 1;
-      // Прогон может сорваться целиком — упасть на старте бэкенда или быть остановленным вручную.
-      // Промптовые неудачи этого не показывают, поэтому считаем сорванные прогоны отдельно.
-      point.runs.set(row.run_id, row.run_status === "failed" || row.run_status === "cancelled" ? "interrupted" : "completed");
-      if (row.correctness !== null) {
-        point.scoreSum += row.correctness + row.code_quality! + row.ui_quality! + row.instruction_following!;
-        point.possibleSum += row.ui_quality === 0 ? 30 : 40;
-      }
-      // Повторы дают устойчивую цифру по промпту: если они есть, берём их, а не единственный замер.
-      const attempts = store.listTaskAttempts(row.id).filter((attempt) => attempt.attempt > 0 && attempt.status === "completed");
-      const sources = attempts.length ? attempts.map((attempt) => attempt.result_json) : [row.result_json];
-      for (const source of sources) {
-        let metrics: Record<string, { value?: number | null }> | undefined;
-        try { metrics = (JSON.parse(source ?? "{}") as { metrics?: Record<string, { value?: number | null }> }).metrics; } catch { metrics = undefined; }
-        if (typeof metrics?.generationTokensPerSecond?.value === "number") point.speed.push(metrics.generationTokensPerSecond.value);
-        if (typeof metrics?.totalDurationMs?.value === "number") point.duration.push(metrics.totalDurationMs.value);
-      }
-      const vram = runPeakVram(row.run_id);
-      if (vram !== null) point.peakVramMiB = Math.max(point.peakVramMiB ?? 0, vram);
-      points.set(key, point);
-    }
-    return [...points.values()].map(({ scoreSum, possibleSum, speed, duration, failed, runs, ...point }) => ({
-      ...point,
-      runCount: runs.size,
-      interruptedRunCount: [...runs.values()].filter((status) => status === "interrupted").length,
-      qualityPercent: possibleSum ? round((scoreSum / possibleSum) * 100) : null,
-      medianTokensPerSecond: median(speed),
-      medianDurationMs: median(duration),
-      failureRate: point.sampleCount ? round(failed / point.sampleCount, 4) : 0,
-    })).sort((left, right) => (right.qualityPercent ?? -1) - (left.qualityPercent ?? -1));
-  });
   app.get("/api/reviews/pair/next", async () => {
     const judged = new Set(store.listPairReviews().map((review) => [review.first_task_run_id, review.second_task_run_id].join("|")));
     type Candidate = {
