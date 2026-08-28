@@ -64,7 +64,9 @@ function BlindSidePane({ side, letter, revealed, running, url, onRun }: { side: 
  */
 function BlindQueue() {
   const client = useQueryClient();
-  const next = useQuery({ queryKey: ["pair-next"], queryFn: () => api<BlindPair>("/reviews/pair/next") });
+  // Пара выбирается случайно, поэтому любой автоматический перезапрос подменил бы её под руками судьи:
+  // новая пара берётся только по явной команде («Следующая пара», «Пропустить»).
+  const next = useQuery({ queryKey: ["pair-next"], queryFn: () => api<BlindPair>("/reviews/pair/next"), staleTime: Infinity, refetchOnWindowFocus: false, refetchOnMount: false, refetchOnReconnect: false });
   const [given, setGiven] = useState<Verdict>();
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const pair = next.data?.pair;
@@ -142,7 +144,8 @@ export function ComparePage() {
       <button type="button" role="tab" aria-selected={tab === "blind"} className={tab === "blind" ? "active" : ""} onClick={() => setTab("blind")}>Слепой тест</button>
       <button type="button" role="tab" aria-selected={tab === "manual"} className={tab === "manual" ? "active" : ""} onClick={() => setTab("manual")}>Ручное сравнение</button>
     </div>
-    {tab === "blind" ? <BlindQueue /> : <>
+    <div hidden={tab !== "blind"}><BlindQueue /></div>
+    <div hidden={tab !== "manual"}>
     <div className="compare-pickers"><select value={left} onChange={(event) => select("left")(event.currentTarget.value)} aria-label="Первый запуск"><option value="">Первый запуск</option>{completed.map((run) => <option key={run.id} value={run.id} disabled={run.id === right}>{label(run)}</option>)}</select><span>и</span><select value={right} onChange={(event) => select("right")(event.currentTarget.value)} aria-label="Второй запуск"><option value="">Второй запуск</option>{completed.map((run) => <option key={run.id} value={run.id} disabled={run.id === left}>{label(run)}</option>)}</select></div>
     {rows.length ? <div className="compare-table"><header><strong>Промпт</strong><div><strong>{leftRun.data ? label(leftRun.data) : "Первый"}</strong><span>{runScore(leftRun.data)}</span></div><div><strong>{rightRun.data ? label(rightRun.data) : "Второй"}</strong><span>{runScore(rightRun.data)}</span></div></header>{rows.map((row, index) => {
       const [first, second] = [row.left, row.right];
@@ -151,6 +154,6 @@ export function ComparePage() {
       const comparable = first?.status === "completed" && second?.status === "completed";
       return <section className="compare-match" key={row.revisionId}><div className="compare-prompt"><span className="mono">Промпт {index + 1}</span><strong>{(first ?? second)?.taskName ?? row.revisionId.slice(0, 8)}</strong>{(first ?? second)?.taskDescription ? <small className="task-description">{(first ?? second)!.taskDescription}</small> : null}{comparable ? <div className="pair-verdict" role="group" aria-label={`Кто лучше: промпт ${index + 1}`}>{verdicts.map(([value, verdictLabel]) => <button type="button" key={value} className={saved === value ? "active" : ""} aria-pressed={saved === value} disabled={savePair.isPending} onClick={() => savePair.mutate({ leftTaskRunId: first!.id, rightTaskRunId: second!.id, winner: value })}>{verdictLabel}</button>)}</div> : null}</div><ResultCell taskRun={first} side="первого" best={winner === "left"} previewTaskRunId={preview?.taskRunId} previewPending={startPreview.isPending} onPreview={(taskRun) => startPreview.mutate(taskRun)} /><ResultCell taskRun={second} side="второго" best={winner === "right"} previewTaskRunId={preview?.taskRunId} previewPending={startPreview.isPending} onPreview={(taskRun) => startPreview.mutate(taskRun)} /></section>;
     })}</div> : <Empty>Выберите два завершённых запуска.</Empty>}
-    </>}
+    </div>
   </Page>;
 }

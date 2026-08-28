@@ -25,10 +25,14 @@ const runs = [
 ];
 
 let posted: Array<{ url: string; body: unknown }>;
+let requests: string[];
 let blindPair: unknown;
+
+const requestedPairs = () => requests.filter((url) => url === "/api/reviews/pair/next").length;
 
 beforeEach(() => {
   posted = [];
+  requests = [];
   blindPair = {
     remaining: 1,
     pair: {
@@ -43,6 +47,7 @@ beforeEach(() => {
     },
   };
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    requests.push(url);
     if (init?.method === "POST") {
       posted.push({ url, body: JSON.parse(String(init.body)) });
       const body = url.endsWith("/preview") ? { url: `http://127.0.0.1:4321/${url.split("/")[3]}` } : {};
@@ -93,6 +98,38 @@ describe("слепая очередь", () => {
     expect(await screen.findByText("Кальмар")).toBeTruthy();
     expect(screen.getByText("Осьминог")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Следующая пара" })).toBeTruthy();
+  });
+
+  it("не подменяет пару при возврате на вкладку", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<ComparePage />, "/compare");
+    await screen.findByText("Аквариум");
+
+    await user.click(screen.getByRole("button", { name: "Запустить вариант A" }));
+    await waitFor(() => expect(screen.getAllByTitle(/^Вариант [AB]$/u)).toHaveLength(1));
+
+    // Возврат в окно после «открыть в новой вкладке» не должен считаться просьбой сменить пару.
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(requestedPairs()).toBe(1);
+    expect(screen.getAllByTitle(/^Вариант [AB]$/u)).toHaveLength(1);
+  });
+
+  it("сохраняет запущенные preview при переключении вкладок страницы", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<ComparePage />, "/compare");
+    await screen.findByText("Аквариум");
+
+    await user.click(screen.getByRole("button", { name: "Запустить вариант A" }));
+    await waitFor(() => expect(screen.getAllByTitle(/^Вариант [AB]$/u)).toHaveLength(1));
+
+    await user.click(screen.getByRole("tab", { name: "Ручное сравнение" }));
+    await user.click(screen.getByRole("tab", { name: "Слепой тест" }));
+
+    expect(requestedPairs()).toBe(1);
+    expect(screen.getAllByTitle(/^Вариант [AB]$/u)).toHaveLength(1);
   });
 
   it("честно сообщает, что пару собрать не из чего", async () => {
