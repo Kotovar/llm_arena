@@ -1,10 +1,11 @@
-/* Inter лежит в пакете рядом: приложение работает без сети, ссылаться на CDN нельзя. */
-@import "@fontsource-variable/inter/wght.css";
+/* Шрифты лежат в пакетах рядом: приложение работает без сети, ссылаться на CDN нельзя. */
+@import "@fontsource-variable/onest/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
 
 :root {
-  /* Переменный Inter — единственный шрифт, у которого веса 640 и 750 ниже действительно существуют. */
-  --font-ui: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  /* Onest рисовался вместе с кириллицей, а не досовывал её к латинице; переменный — значит веса 640 и 750 существуют. */
+  --font-ui: "Onest Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
   /* Четыре поверхности вместо трёх десятков почти одинаковых тёмно-синих. */
   --surface-0: #0e1423;
   --surface-1: #0f1524;
@@ -239,8 +240,6 @@ td.mono, .pareto-list .mono { color: #d9e1ed; font-size: 13px; }
 .analytics-table caption, .heatmap caption { margin-bottom: 8px; color: var(--muted); font-size: 12px; text-align: left; }
 .analytics-table th, .analytics-table td, .heatmap th, .heatmap td { padding: 8px 8px; border-bottom: 1px solid var(--line); text-align: left; }
 .heatmap td { width: 110px; text-align: right; }
-/* Насыщенная ячейка светлее собственного текста, поэтому чернила на ней тёмные. */
-.heatmap td.heatmap-strong { color: var(--surface-0); font-weight: 600; }
 .heatmap th[scope="col"]:not(:first-child) { width: 110px; text-align: right; }
 .slice-hint { margin: -8px 0 16px; color: var(--muted); font-size: 12px; }
 .analytics-table th[scope="row"], .heatmap th[scope="row"] { font-weight: 600; }

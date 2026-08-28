@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderInApp } from "../test-harness.js";
 import type { DecisionPoint } from "../types.js";
-import { AnalyticsPage, paretoShortlist } from "./analytics.js";
+import { AnalyticsPage, labelPlacer, paretoShortlist } from "./analytics.js";
 
 function point(overrides: Partial<DecisionPoint> = {}): DecisionPoint {
   return {
@@ -49,7 +49,31 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("раскладка подписей", () => {
+  it("не выпускает подпись за нижний край графика", () => {
+    const place = labelPlacer();
+    // Четыре точки у самого низа шкалы в одном окне по x: сдвигать все вниз некуда.
+    const offsets = [0, 1, 2, 3].map(() => place(200, 284));
+    expect(Math.max(...offsets)).toBeLessThanOrEqual(300);
+    expect(Math.min(...offsets)).toBeGreaterThanOrEqual(36);
+    expect(new Set(offsets).size).toBe(4);
+  });
+});
+
 describe("доля неудач", () => {
+  it("не заливает ячейку теплокарты гуще, чем выдерживает текст", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await user.click(await screen.findByRole("tab", { name: "Срезы нагрузки" }));
+
+    const heatmap = await screen.findByRole("table", { name: /Доля баллов по срезам/u });
+    const cell = [...heatmap.querySelectorAll("td")]
+      .find((td) => td.getAttribute("style"))!;
+    const percent = Number(/(\d+)%/u.exec(cell.getAttribute("style")!)![1]);
+    // Светлый текст держит 4.5:1 только до 60% густоты заливки.
+    expect(percent).toBeLessThanOrEqual(60);
+  });
+
   it("не округляет редкую неудачу в ноль", async () => {
     const all = [point({ failureRate: 0.004 }), point({ modelId: "model-2", modelName: "Медленная", failureRate: 0 })];
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(all), { status: 200, headers: { "content-type": "application/json" } })));

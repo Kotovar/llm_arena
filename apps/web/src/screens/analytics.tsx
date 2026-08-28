@@ -76,13 +76,23 @@ export function paretoShortlist(points: DecisionPoint[]) {
  * Раскладка подписей: подпись ставится рядом со своей точкой и сдвигается вниз,
  * пока не разойдётся с уже поставленными. Иначе кучные связки пишут имена друг поверх друга.
  */
-function labelPlacer() {
+const LABEL_TOP = 36;
+const LABEL_BOTTOM = 300;
+
+export function labelPlacer() {
   const placed: Array<{ x: number; y: number }> = [];
+  const clashes = (x: number, offset: number) => placed.some((item) => Math.abs(item.y - offset) < 13 && Math.abs(item.x - x) < 150);
   return (x: number, y: number) => {
     let offset = y;
-    while (placed.some((item) => Math.abs(item.y - offset) < 13 && Math.abs(item.x - x) < 150)) offset += 13;
-    placed.push({ x, y: offset });
-    return offset;
+    while (offset <= LABEL_BOTTOM && clashes(x, offset)) offset += 13;
+    // Внизу графика место кончается быстрее, чем подписи: упёрлись — идём вверх от собственной точки.
+    if (offset > LABEL_BOTTOM) {
+      offset = y;
+      while (offset >= LABEL_TOP && clashes(x, offset)) offset -= 13;
+    }
+    const placedOffset = Math.min(Math.max(offset, LABEL_TOP), LABEL_BOTTOM);
+    placed.push({ x, y: placedOffset });
+    return placedOffset;
   };
 }
 
@@ -186,8 +196,9 @@ function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPo
         const value = quality(slice.points, key);
         // Ячейка без замера остаётся пустой: ноль здесь означал бы «модель провалилась».
         if (value === null) return <td key={slice.label} className="mono">—</td>;
-        // С половины шкалы заливка гуще светлого текста, и надпись на ней тонет: переворачиваем чернила.
-        return <td key={slice.label} className={value >= 55 ? "mono heatmap-strong" : "mono"} style={{ background: `color-mix(in srgb, var(--series-1) ${Math.round(value)}%, transparent)` }}>{`${value}%`}</td>;
+        // Заливка доходит только до 60% густоты: дальше светлый текст на ней падает ниже 4.5:1,
+        // а тёмный набирает свои 4.5:1 лишь к 92% — между ними не проходит ни один цвет чернил.
+        return <td key={slice.label} className="mono" style={{ background: `color-mix(in srgb, var(--series-1) ${Math.round(value * 0.6)}%, transparent)` }}>{`${value}%`}</td>;
       })}
     </tr>)}</tbody>
   </table></div>;
