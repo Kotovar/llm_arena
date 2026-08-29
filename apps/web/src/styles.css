@@ -435,6 +435,8 @@ input[type="checkbox"]:checked, input[type="radio"]:checked { border-color: var(
 input[type="checkbox"]:hover:not(:disabled), input[type="radio"]:hover:not(:disabled) { border-color: var(--signal); }
 input[type="checkbox"]:disabled, input[type="radio"]:disabled { cursor: not-allowed; opacity: .45; }
 @media (prefers-reduced-motion: reduce) { input[type="checkbox"]::before, input[type="radio"]::before { transition: none; } }
+input[type="number"] { appearance: textfield; }
+input[type="number"]::-webkit-outer-spin-button, input[type="number"]::-webkit-inner-spin-button { appearance: none; margin: 0; }
 input[type="range"] { cursor: pointer; }
 input[type="file"] { padding: 8px 8px; cursor: pointer; }
 input[type="file"]::file-selector-button { margin-right: 12px; padding: 8px 12px; color: inherit; background: var(--surface-hover); border: 1px solid var(--line); border-radius: var(--r-sm); cursor: pointer; }
