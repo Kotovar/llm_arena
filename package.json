@@ -1,7 +1,7 @@
 {
   "name": "llm-arena",
   "private": true,
-  "packageManager": "pnpm@11.21.0",
+  "packageManager": "pnpm@12.0.0",
   "scripts": {
     "dev": "pnpm --filter @llm-arena/shared build && pnpm --parallel --filter @llm-arena/server --filter @llm-arena/web dev",
     "build": "pnpm -r build",
