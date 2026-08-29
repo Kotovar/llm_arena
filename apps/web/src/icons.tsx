@@ -27,3 +27,11 @@ export function ExternalIcon() {
 export function CheckIcon() {
   return <Icon><path d="M3 8.5l3.5 3.5L13 5" /></Icon>;
 }
+
+export function ChevronUpIcon() {
+  return <Icon><path d="M4 10l4-4 4 4" /></Icon>;
+}
+
+export function ChevronDownIcon() {
+  return <Icon><path d="M4 6l4 4 4-4" /></Icon>;
+}

@@ -1,7 +1,8 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { api } from "./api.js";
+import { ChevronDownIcon, ChevronUpIcon } from "./icons.js";
 import { useToast } from "./toast.js";
 import type { GpuInfo, Model, Run } from "./types.js";
 import { finishedSince, runIsActive, runModelName, statusLabel } from "./ui.js";
@@ -21,6 +22,30 @@ export function Empty({ children, action }: { children: ReactNode; action?: Reac
 /** Пока данные едут, показываем их будущую форму: текст «загружаем» тут же сменяется таблицей и всё прыгает. */
 export function Skeleton({ rows = 4 }: { rows?: number }) {
   return <div className="skeleton" role="status" aria-label="Загружаем данные">{Array.from({ length: rows }, (_, index) => <span key={index} />)}</div>;
+}
+
+/**
+ * Нативные стрелки числового поля не оформляются ни в одном движке, поэтому они спрятаны
+ * в styles.css, а шаг задаётся своими кнопками через stepUp/stepDown — те сами уважают
+ * min, max и step. Событие input отправляем вручную: программная смена value его не рождает.
+ */
+// step только числом: на step="any" нативный stepUp бросает InvalidStateError.
+export function NumberField({ step: stepSize, ...props }: Omit<ComponentProps<"input">, "type" | "step"> & { step?: number }) {
+  const field = useRef<HTMLInputElement>(null);
+  const locked = Boolean(props.disabled || props.readOnly);
+  const step = (direction: "up" | "down") => {
+    const input = field.current;
+    if (!input) return;
+    if (direction === "up") input.stepUp(); else input.stepDown();
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  // preventDefault на нажатии: иначе клик уводит фокус на кнопку, спрятанную от скринридера.
+  const stepButton = (direction: "up" | "down", icon: ReactNode) =>
+    <button type="button" tabIndex={-1} disabled={locked} onMouseDown={(event) => event.preventDefault()} onClick={() => step(direction)}>{icon}</button>;
+  return <span className="number-field">
+    <input {...props} step={stepSize} ref={field} type="number" />
+    <span className="number-steps" aria-hidden>{stepButton("up", <ChevronUpIcon />)}{stepButton("down", <ChevronDownIcon />)}</span>
+  </span>;
 }
 
 export function Status({ value }: { value: string }) {
