@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 
 import { api, apiText } from "../api.js";
 import { useConfirm } from "../confirm.js";
 import { ArrowLeftIcon, ArrowRightIcon, CloseIcon, ExternalIcon } from "../icons.js";
-import { Empty, NumberField, Page, Panel, Status, useData } from "../shell.js";
+import { Empty, NumberField, Page, Panel, Status, useData, useHotkey } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
 import { attemptSummary, checkStatusLabel, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
@@ -123,7 +123,9 @@ function resultVersions(taskRun: TaskRun): DisplayVersion[] {
 
 function MetricStrip({ result, conditions }: { result: Record<string, unknown> | undefined; conditions?: string | undefined }) {
   const fill = contextFill(result?.metrics as Record<string, { value: number | null }> | undefined);
-  return <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Сумма новых входных токенов во всех обращениях агента к модели"><span>Новый вход</span><strong>{metric(result, "inputTokens")}</strong></div><div title="Токены контекста, повторно использованные из кеша"><span>Из кеша</span><strong>{metric(result, "cachedInputTokens")}</strong></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div>{fill ? <div title="Сколько токенов держал контекст в последнем обращении к модели"><span>Контекст в финале</span><strong>{fill.percent === null ? fill.label : `${fill.percent}%`}</strong>{fill.percent === null ? null : <small>{fill.label}</small>}</div> : null}<div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong>{conditions ? <small>{conditions}</small> : null}</div></div>;
+  // Ячеек всегда шесть: сетка держит ровные строки, а неизмеренная метрика показывает «N/A»,
+  // как и все остальные, — вместо того чтобы исчезать и рвать раскладку.
+  return <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Новые входные токены во всех обращениях агента к модели и отдельно те, что взяты из кеша"><span>Вход</span><strong>{metric(result, "inputTokens")}</strong><small>из кеша {metric(result, "cachedInputTokens")}</small></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div><div title="Сколько токенов держал контекст в последнем обращении к модели"><span>Контекст в финале</span><strong>{!fill ? "N/A" : fill.percent === null ? fill.label : `${fill.percent}%`}</strong>{fill?.percent === null || !fill ? null : <small>{fill.label}</small>}</div><div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong>{conditions ? <small>{conditions}</small> : null}</div></div>;
 }
 
 /** Продлеваем аренду только своих preview: чужие не должны жить за счёт нашей вкладки. */
@@ -436,6 +438,11 @@ export function RunDetail({ runId }: { runId: string }) {
   const { confirm, view: confirmView } = useConfirm();
   const remove = useMutation({ mutationFn: () => api(`/runs/${runId}`, { method: "DELETE" }), onSuccess: () => navigate({ to: "/runs" }) });
   const resume = useMutation({ mutationFn: () => api(`/runs/${runId}/resume`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey: ["run", runId] }) });
+  // Список промптов считается ниже по телу, за ранними return, поэтому стрелки ходят через ref:
+  // сами хуки обязаны вызываться безусловно. Шаг за границу списка безопасен — он ничего не делает.
+  const stepper = useRef<(delta: number) => void>(() => {});
+  useHotkey("ArrowLeft", () => stepper.current(-1));
+  useHotkey("ArrowRight", () => stepper.current(1));
   if (run.error) return <Page title="Запуск не найден" eyebrow="Результат" intro="Он мог быть удалён вместе с файлами, либо сервер сейчас недоступен."><p className="error">{run.error.message}</p><p className="actions"><Link to="/runs">← Ко всем результатам</Link></p></Page>;
   if (!run.data) return <Page title="Загрузка запуска" eyebrow="Результат"><Empty>Читаем сохранённые данные…</Empty></Page>;
   const snapshot = run.data.snapshot_json ? JSON.parse(run.data.snapshot_json) as { tasks?: unknown[]; benchmark?: { tasks?: unknown[] }; model?: { name?: string; modelRef?: string }; reasoningEffort?: string | null; environment?: RunEnvironment; profile?: { name?: string; parameters?: Record<string, unknown> } } : undefined;
@@ -461,14 +468,29 @@ export function RunDetail({ runId }: { runId: string }) {
   const activeTaskRun = items[activeIndex]?.taskRun;
   const nextUnrated = items.slice(activeIndex + 1).find((item) => !item.score) ?? items.find((item) => !item.score && item.taskRun.id !== activeId);
   const step = (delta: number) => { const next = items[activeIndex + delta]; if (next) setSelectedTaskRunId(next.taskRun.id); };
+  stepper.current = step;
+  // Промпты повторяем по taskId, а не по версии: повтор идёт на актуальном тексте, как и «на другой модели».
+  const repeatTasks = (snapshot?.tasks as Array<{ taskId?: string }> | undefined)?.map((task) => task.taskId).filter((id): id is string => Boolean(id)) ?? [];
+  const repeatSearch = repeatTasks.length ? {
+    tasks: repeatTasks.join(","),
+    model: run.data.model_id,
+    mode: run.data.result_mode,
+    omp: Boolean(run.data.use_omp_agent),
+    ...(run.data.execution_profile_id ? { profile: run.data.execution_profile_id } : {}),
+    ...(run.data.runner_id ? { runner: run.data.runner_id } : {}),
+    ...(run.data.model_ref ? { ref: run.data.model_ref } : {}),
+    ...(run.data.reasoning_effort ? { effort: run.data.reasoning_effort } : {}),
+    ...(run.data.repeat_count > 1 ? { repeat: run.data.repeat_count } : {}),
+    ...(run.data.warmup_attempt ? { warmup: true } : {}),
+  } : undefined;
   return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", ompModeLabel(run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName ?? followupTaskName, runningFollowup)} />
     {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? `Уточнение${followupTaskName ? `: ${followupTaskName}` : ""}` : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}${activeTaskName ? `: ${activeTaskName}` : ""}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
     {snapshot?.environment ? <Environment environment={snapshot.environment} profile={snapshot.profile} /> : null}
     {run.data.error && !hasTaskError ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
-    <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive && remaining > 0 ? <button className="primary" disabled={resume.isPending} onClick={() => resume.mutate()}>{resume.isPending ? "Запускаем…" : `К следующему (осталось ${remaining})`}</button> : null}{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}>{items.length ? <div className="run-split"><PromptRail items={items} activeId={activeId!} reviewed={scores.reviewed} onSelect={setSelectedTaskRunId} />
+    <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive && remaining > 0 ? <button className="primary" disabled={resume.isPending} onClick={() => resume.mutate()}>{resume.isPending ? "Запускаем…" : `К следующему (осталось ${remaining})`}</button> : null}{!isActive && repeatSearch ? <Link to="/" search={repeatSearch} title="Те же промпты, модель и параметры">Повторить запуск</Link> : null}{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}>{items.length ? <div className="run-split"><PromptRail items={items} activeId={activeId!} reviewed={scores.reviewed} onSelect={setSelectedTaskRunId} />
       <div className="run-pane">
-        {items.length > 1 ? <div className="prompt-nav"><button type="button" disabled={activeIndex <= 0} onClick={() => step(-1)} aria-label="Предыдущий промпт"><ArrowLeftIcon /></button><span className="mono">Промпт {activeIndex + 1} из {items.length}</span><button type="button" disabled={activeIndex >= items.length - 1} onClick={() => step(1)} aria-label="Следующий промпт"><ArrowRightIcon /></button>{nextUnrated ? <button type="button" onClick={() => setSelectedTaskRunId(nextUnrated.taskRun.id)}>К следующему неоценённому</button> : null}</div> : null}
+        {items.length > 1 ? <div className="prompt-nav"><button type="button" disabled={activeIndex <= 0} onClick={() => step(-1)} aria-label="Предыдущий промпт" title="←"><ArrowLeftIcon /></button><span className="mono">Промпт {activeIndex + 1} из {items.length}</span><button type="button" disabled={activeIndex >= items.length - 1} onClick={() => step(1)} aria-label="Следующий промпт" title="→"><ArrowRightIcon /></button>{nextUnrated ? <button type="button" onClick={() => setSelectedTaskRunId(nextUnrated.taskRun.id)}>К следующему неоценённому</button> : null}</div> : null}
         {activeTaskRun ? <TaskResult key={activeTaskRun.id} taskRun={activeTaskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} onDeleted={() => setSelectedTaskRunId(undefined)} deletable={items.length > 1} /> : null}
       </div></div> : null}{isActive && !items.length ? <Empty>Готовим рабочее окружение и запускаем модель…</Empty> : null}{remove.error ? <p className="error">{remove.error.message}</p> : null}{resume.error ? <p className="error">{resume.error.message}</p> : null}</Panel>{confirmView}
   </Page>;

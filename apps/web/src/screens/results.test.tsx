@@ -231,6 +231,32 @@ describe("панель версий", () => {
   });
 });
 
+describe("полоса метрик", () => {
+  const strip = () => document.querySelector(".metric-strip")!;
+
+  it("держит шесть ячеек, даже когда контекст не измерен", async () => {
+    await renderResult(taskRun({ result_json: JSON.stringify({ finalAnswer: "Готово", metrics: {} }) }));
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    // Ровно шесть: сетка из трёх колонок раскладывается на две полные строки без сирот.
+    expect(strip().children).toHaveLength(6);
+    expect(within(strip() as HTMLElement).getByText("Контекст в финале")).toBeDefined();
+  });
+
+  it("показывает кеш подписью к входным токенам, а не отдельной ячейкой", async () => {
+    await renderResult(taskRun({
+      result_json: JSON.stringify({ finalAnswer: "Готово", metrics: { inputTokens: { value: 49_627 }, cachedInputTokens: { value: 301_232 }, finalContextTokens: { value: 33_539 }, contextWindowTokens: { value: 100_096 } } }),
+    }));
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    const cells = strip() as HTMLElement;
+    expect(cells.children).toHaveLength(6);
+    expect(within(cells).queryByText("Из кеша")).toBeNull();
+    expect(within(cells).getByText(/из кеша/u).textContent).toContain("301 232");
+    expect(within(cells).getByText("34%")).toBeDefined();
+  });
+});
+
 describe("список промптов запуска", () => {
   const run = {
     id: "run-1",
@@ -308,6 +334,60 @@ describe("список промптов запуска", () => {
     expect(within(details).getByText(/Test GPU/u)).toBeDefined();
     // Незапущенный llama-server и неизвестная SHA не должны выглядеть как факты.
     expect(within(details).getAllByText("не определено")).toHaveLength(2);
+  });
+
+  it("переключает промпты стрелками клавиатуры", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    await user.keyboard("{ArrowRight}");
+    expect(await screen.findByRole("heading", { level: 3, name: "Часы" })).toBeDefined();
+
+    await user.keyboard("{ArrowLeft}");
+    expect(await screen.findByRole("heading", { level: 3, name: "Аквариум" })).toBeDefined();
+
+    // Шаг за границу списка ничего не ломает и никуда не уводит.
+    await user.keyboard("{ArrowLeft}");
+    expect(await screen.findByRole("heading", { level: 3, name: "Аквариум" })).toBeDefined();
+  });
+
+  it("собирает ссылку повтора со всеми параметрами запуска", async () => {
+    const repeatable = {
+      ...run,
+      model_id: "model-1",
+      execution_profile_id: "profile-1",
+      model_ref: "gpt",
+      reasoning_effort: "high",
+      repeat_count: 3,
+      warmup_attempt: 1,
+      use_omp_agent: 1,
+      snapshot_json: JSON.stringify({ tasks: [{ taskId: "task-1" }, { taskId: "task-2" }], model: { name: "Модель" } }),
+    };
+    fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/runs/") ? repeatable : []), { status: 200, headers: { "content-type": "application/json" } }));
+    await renderInApp(<RunDetail runId="run-1" />);
+
+    const link = await screen.findByRole<HTMLAnchorElement>("link", { name: "Повторить запуск" });
+    const search = new URL(link.href, "http://localhost").searchParams;
+    expect(Object.fromEntries(search)).toEqual({
+      tasks: "task-1,task-2",
+      model: "model-1",
+      mode: "web",
+      omp: "true",
+      profile: "profile-1",
+      runner: "codex",
+      ref: "gpt",
+      effort: "high",
+      repeat: "3",
+      warmup: "true",
+    });
+  });
+
+  it("не предлагает повтор, пока в снапшоте нет промптов", async () => {
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    expect(screen.queryByRole("link", { name: "Повторить запуск" })).toBeNull();
   });
 
   it("ведёт к следующему неоценённому промпту", async () => {

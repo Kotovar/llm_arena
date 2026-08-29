@@ -120,6 +120,65 @@ describe("профиль локальной модели", () => {
     await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ repeatCount: 3, warmupAttempt: true })]));
   });
 
+  it("восстанавливает параметры повторяемого запуска из адреса", async () => {
+    const user = userEvent.setup();
+    payloads["/api/models"] = [{ id: "model-1", name: "Модель", kind: "cloud", provider: "openai", modelRef: "model", path: null, alias: null, capabilities: { toolUse: true, vision: false, reasoning: true }, mmprojPath: null }];
+    payloads["/api/model-catalog"] = { codex: { models: [{ id: "gpt", label: "GPT", efforts: ["low", "high"], defaultEffort: "low" }] } };
+    await renderInApp(<Launcher />, "/?tasks=task-2&model=model-1&mode=text&ref=gpt&effort=high&repeat=3&warmup=true");
+    await screen.findByText("Аквариум");
+
+    await user.click(await screen.findByRole("button", { name: /Запустить/u }));
+
+    await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({
+      // Повтор идёт по актуальной версии промпта: в адресе лежит taskId, а не идентификатор версии.
+      taskRevisionIds: ["task-2-rev"],
+      modelId: "model-1",
+      resultMode: "text",
+      modelRef: "gpt",
+      reasoningEffort: "high",
+      repeatCount: 3,
+      warmupAttempt: true,
+    })]));
+  });
+
+  it("не молчит, когда модель повторяемого запуска уже отключена", async () => {
+    await renderInApp(<Launcher />, "/?tasks=task-1&model=model-удалена");
+    await screen.findByText("Аквариум");
+
+    expect(await screen.findByText("Модель того запуска больше не подключена — промпты перенесены, а модель и её параметры выберите заново.")).toBeDefined();
+    // Несуществующий id не застревает в выборе: подставлена доступная модель, запуск возможен.
+    expect(screen.getByRole<HTMLSelectElement>("combobox", { name: "Подключение" }).value).toBe("model-1");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: /Запустить/u }).disabled).toBe(false);
+  });
+
+  it("откатывает уровень обдумывания, которого у модели больше нет", async () => {
+    const user = userEvent.setup();
+    payloads["/api/models"] = [{ id: "model-1", name: "Модель", kind: "cloud", provider: "openai", modelRef: "gpt", path: null, alias: null, capabilities: { toolUse: true, vision: false, reasoning: true }, mmprojPath: null }];
+    payloads["/api/model-catalog"] = { codex: { models: [{ id: "gpt", label: "GPT", efforts: ["low", "high"], defaultEffort: "low" }] } };
+    await renderInApp(<Launcher />, "/?tasks=task-1&model=model-1&effort=xhigh");
+    await screen.findByText("Аквариум");
+
+    await user.click(await screen.findByRole("button", { name: /Запустить/u }));
+
+    await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ reasoningEffort: "low" })]));
+  });
+
+  it("запускает по Ctrl+Enter и открывает поиск промптов по «/»", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<Launcher />, "/");
+    await screen.findByText("Аквариум");
+
+    await user.keyboard("/");
+    expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: "Поиск промптов" }));
+
+    // Из поля ввода одиночная «/» — просто текст, а сочетание с модификатором работает и там.
+    await user.keyboard("/");
+    expect(screen.getByRole<HTMLInputElement>("searchbox", { name: "Поиск промптов" }).value).toBe("/");
+
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ taskRevisionIds: ["task-1-rev", "task-2-rev"] })]));
+  });
+
   it("фильтрует список промптов по тегу, не трогая уже выбранное", async () => {
     const user = userEvent.setup();
     payloads["/api/tasks"] = [task("task-1", "Аквариум", ["web"]), task("task-2", "Песок")];

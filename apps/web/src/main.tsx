@@ -119,14 +119,24 @@ function TasksPage() {
 }
 
 const rootRoute = createRootRoute({ component: Shell });
+/**
+ * Повтор запуска приносит все его параметры адресом. Флаги и число держим настоящими boolean/number:
+ * строковые "1" и "3" роутер экранировал бы кавычками, и ссылка становилась бы нечитаемой.
+ */
+const launcherTextKeys = ["task", "tasks", "model", "profile", "runner", "ref", "effort"] as const;
+export type LauncherSearch = Partial<Record<(typeof launcherTextKeys)[number], string>>
+  & { mode?: "text" | "web"; omp?: boolean; warmup?: boolean; repeat?: number };
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: Launcher,
-  validateSearch: (search: Record<string, unknown>) => ({
-    ...(typeof search.task === "string" ? { task: search.task } : {}),
+  validateSearch: (search: Record<string, unknown>): LauncherSearch => ({
+    ...Object.fromEntries(launcherTextKeys.flatMap((key) => typeof search[key] === "string" ? [[key, search[key]]] : [])),
     ...(search.mode === "text" || search.mode === "web" ? { mode: search.mode } : {}),
-  } as { task?: string; mode?: "text" | "web" }),
+    ...(typeof search.omp === "boolean" ? { omp: search.omp } : {}),
+    ...(typeof search.warmup === "boolean" ? { warmup: search.warmup } : {}),
+    ...(typeof search.repeat === "number" ? { repeat: search.repeat } : {}),
+  }),
 });
 const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: "/tasks", component: TasksPage });
 const modelsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/models", component: ModelsPage });

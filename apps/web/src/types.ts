@@ -199,11 +199,14 @@ export type TaskRun = {
 export type Run = {
   id: string;
   model_id: string;
+  execution_profile_id: string | null;
   runner_id: string;
   result_mode: "text" | "web";
   use_omp_agent: number;
   model_ref: string | null;
   reasoning_effort: string | null;
+  repeat_count: number;
+  warmup_attempt: number;
   status: string;
   activityStatus?: string;
   activeTaskName?: string | null;

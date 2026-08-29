@@ -21,9 +21,14 @@ export async function renderInApp(ui: ReactNode, path = "/"): Promise<RenderResu
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => ui,
+    // Схема повторяет боевую из main.tsx: лаунчер принимает все параметры повтора запуска.
     validateSearch: (search: Record<string, unknown>) => ({
-      task: typeof search.task === "string" ? search.task : undefined,
+      ...Object.fromEntries(["task", "tasks", "model", "profile", "runner", "ref", "effort"]
+        .flatMap((key) => typeof search[key] === "string" ? [[key, search[key]]] : [])),
       mode: search.mode === "text" || search.mode === "web" ? search.mode : undefined,
+      omp: typeof search.omp === "boolean" ? search.omp : undefined,
+      warmup: typeof search.warmup === "boolean" ? search.warmup : undefined,
+      repeat: typeof search.repeat === "number" ? search.repeat : undefined,
     }),
   });
   // Заглушки маршрутов, на которые ссылаются экраны: без них <Link> падает.

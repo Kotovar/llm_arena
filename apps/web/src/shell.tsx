@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { api } from "./api.js";
 import { ChevronDownIcon, ChevronUpIcon } from "./icons.js";
 import { useToast } from "./toast.js";
@@ -48,6 +48,35 @@ export function NumberField({ step: stepSize, ...props }: Omit<ComponentProps<"i
   </span>;
 }
 
+/**
+ * Сочетание описывается строкой («ctrl+Enter», «/», «ArrowLeft»), а не колбэком-матчером:
+ * стабильная строка в зависимостях избавляет от переподписки на каждый рендер.
+ */
+export function useHotkey(combo: string, run: (() => void) | undefined) {
+  const handler = useRef(run);
+  useEffect(() => { handler.current = run; });
+  useEffect(() => {
+    const parts = combo.split("+");
+    const key = parts[parts.length - 1]!;
+    const needsModifier = parts.includes("ctrl");
+    const onKey = (event: KeyboardEvent) => {
+      if (!handler.current || event.key !== key || event.altKey) return;
+      // Cmd на macOS и Ctrl в остальных местах — одно и то же сочетание для человека.
+      if (needsModifier !== (event.ctrlKey || event.metaKey)) return;
+      // Пока открыт модальный диалог, экран под ним не должен реагировать на стрелки.
+      if (document.querySelector("dialog[open]")) return;
+      const target = event.target as HTMLElement | null;
+      const typing = Boolean(target?.closest("input, textarea, select, [contenteditable=\"true\"]"));
+      // Из поля ввода работают только сочетания с модификатором: одиночная клавиша там — просто текст.
+      if (typing && !needsModifier) return;
+      event.preventDefault();
+      handler.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [combo]);
+}
+
 export function Status({ value }: { value: string }) {
   return <span className={`status status-${value}`}>{statusLabel(value)}</span>;
 }
@@ -82,6 +111,27 @@ function HostCard() {
   </div>;
 }
 
+/**
+ * Прогон идёт минутами, и вкладку на это время сворачивают: о завершении сообщаем средствами системы.
+ * Спрашивать разрешение полагается из обработчика клика — см. вызов в лаунчере.
+ */
+export function requestNotifications() {
+  if (!("Notification" in window) || Notification.permission !== "default") return Promise.resolve();
+  return Notification.requestPermission().then(() => undefined, () => undefined);
+}
+
+export function useSystemNotification() {
+  return useCallback((title: string, body: string) => {
+    // Вкладка на виду — там уже есть тост, второе уведомление было бы дублем.
+    if (!("Notification" in window) || Notification.permission !== "granted" || !document.hidden) return;
+    try {
+      new Notification(title, { body, tag: "llm-arena-run" });
+    } catch {
+      // На части платформ конструктор запрещён (нужен service worker) — тоста достаточно.
+    }
+  }, []);
+}
+
 function Elapsed({ since }: { since: string | null }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -103,14 +153,17 @@ function ActivityCard() {
     refetchInterval: (query) => query.state.data?.some(runIsActive) ? 2_000 : 15_000,
   });
   const models = useQuery({ queryKey: ["models"], queryFn: () => api<Model[]>("/models") });
+  const notify = useSystemNotification();
   useEffect(() => {
     if (!runs.data) return;
     for (const run of finishedSince(previous.current, runs.data)) {
       const name = runModelName(run, models.data ?? []);
-      toast(`${name}: ${statusLabel(run.status).toLowerCase()}`, run.status === "completed" ? "success" : "error");
+      const message = `${name}: ${statusLabel(run.status).toLowerCase()}`;
+      toast(message, run.status === "completed" ? "success" : "error");
+      notify("Прогон завершён", message);
     }
     previous.current = runs.data;
-  }, [runs.data, models.data, toast]);
+  }, [runs.data, models.data, toast, notify]);
   const active = runs.data?.filter(runIsActive) ?? [];
   if (!active.length) return null;
   const [current, ...queued] = active;
