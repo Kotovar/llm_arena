@@ -114,7 +114,7 @@ export function GalleryPage() {
     : gallery.data ?? [];
   const toggleTag = (tag: string) => setSelectedTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]);
   const matrix = galleryMatrix(visible);
-  return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея" intro="Итоговые web-результаты.">
+  return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея">
     {gallery.isPending ? <Skeleton rows={4} /> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
     {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty action={<Link to="/">Запустить web-задачу</Link>}>Пока нет успешных web-результатов с выбранной версией. Итоговую версию выбирают на странице результата.</Empty> : null}
