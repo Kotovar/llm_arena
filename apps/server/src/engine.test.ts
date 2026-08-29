@@ -33,7 +33,62 @@ describe("benchmark engine", () => {
     });
 
     await expect(engine.calibrate(manual.id)).resolves.toMatchObject({ gpu: { freeMiB: 463 } });
-    await expect(engine.calibrate(automatic.id)).rejects.toThrow("Configured VRAM reserve was not preserved (463/750 MiB)");
+    await expect(engine.calibrate(automatic.id)).rejects.toThrow(/свободно 463 МиБ при резерве 750 МиБ/u);
+
+    await engine.stop();
+    store.close();
+  });
+
+  // llama.cpp промахивается мимо своего --fit-target на десятки МиБ: автопрофиль обязан
+  // проходить собственную проверку, пока промах в пределах допуска.
+  it("accepts an automatic profile that misses the VRAM target within tolerance", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-calibration-tolerance-"));
+    directories.push(root);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    const store = createStore(join(root, "arena.sqlite"));
+    const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(root, "model.gguf"), alias: "local" });
+    const parameters = { context: "auto" as const, nGpuLayers: "auto" as const, cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto" as const, cacheReuse: 256, fit: true, fitTargetMiB: 750, fitContextMin: 100_000 };
+    const profile = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, calibrated: false, ggufSha256: null });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("calibration-tolerance-test", 100), {
+      createLlamaManager: () => ({ async start() { return { baseUrl: "http://127.0.0.1:1234", async stop() {} }; } }),
+      fetch: async () => ({ ok: true, status: 200 }),
+      readGpuInfo: () => ({ name: "NVIDIA", totalMiB: 16303, usedMiB: 15572, freeMiB: 731 }),
+      readExecutableVersion: () => null,
+    });
+
+    await expect(engine.calibrate(profile.id)).resolves.toMatchObject({ profile: { calibrated: true }, gpu: { freeMiB: 731 } });
+
+    await engine.stop();
+    store.close();
+  });
+
+  // Граница допуска и защита от маленького резерва: 64 МиБ послабления не должны обнулять проверку.
+  it("keeps the reserve check meaningful at the tolerance boundary and for a tiny reserve", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-calibration-boundary-"));
+    directories.push(root);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    const store = createStore(join(root, "arena.sqlite"));
+    const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(root, "model.gguf"), alias: "local" });
+    const base = { context: "auto" as const, nGpuLayers: "auto" as const, cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto" as const, cacheReuse: 256, fit: true, fitContextMin: 100_000 };
+    const roomy = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters: { ...base, fitTargetMiB: 750 }, calibrated: false, ggufSha256: null });
+    const tiny = store.createExecutionProfile({ modelId: model.id, name: "Tiny", parameters: { ...base, fitTargetMiB: 40 }, calibrated: false, ggufSha256: null });
+    let freeMiB = 0;
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("calibration-boundary-test", 100), {
+      createLlamaManager: () => ({ async start() { return { baseUrl: "http://127.0.0.1:1234", async stop() {} }; } }),
+      fetch: async () => ({ ok: true, status: 200 }),
+      readGpuInfo: () => ({ name: "NVIDIA", totalMiB: 16_303, usedMiB: 16_303 - freeMiB, freeMiB }),
+      readExecutableVersion: () => null,
+    });
+
+    freeMiB = 686;
+    await expect(engine.calibrate(roomy.id)).resolves.toMatchObject({ gpu: { freeMiB: 686 } });
+    freeMiB = 685;
+    await expect(engine.calibrate(roomy.id)).rejects.toThrow(/свободно 685 МиБ при резерве 750 МиБ/u);
+    // Допуск ужимается до половины резерва, иначе 40 - 64 дало бы отрицательный порог.
+    freeMiB = 10;
+    await expect(engine.calibrate(tiny.id)).rejects.toThrow(/допуск 20 МиБ/u);
 
     await engine.stop();
     store.close();

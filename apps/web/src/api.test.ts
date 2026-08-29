@@ -13,7 +13,7 @@ describe("api errors", () => {
   it("does not expose an unknown English server error in UI", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "upstream exception: private implementation detail" }), { status: 500 })));
 
-    await expect(api("/runs")).rejects.toThrow("Не удалось выполнить запрос. Подробности доступны в техническом логе.");
+    await expect(api("/runs")).rejects.toThrow(/Текст ошибки сервер пишет в свой вывод/u);
   });
 
   it("reports a network failure in Russian", async () => {

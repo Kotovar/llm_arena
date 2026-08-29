@@ -1,4 +1,5 @@
-const defaultError = "Не удалось выполнить запрос. Подробности доступны в техническом логе.";
+// Английский текст ошибки наружу не отдаём, но и отсылать некуда, кроме вывода самого сервера.
+const defaultError = "Не удалось выполнить запрос. Текст ошибки сервер пишет в свой вывод — посмотрите терминал, где он запущен.";
 
 const translatedErrors: Record<string, string> = {
   "Finish the remaining prompts of this run before restarting with another temperature":

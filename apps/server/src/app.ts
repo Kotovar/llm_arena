@@ -251,10 +251,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return resolveCompletedResultVersion(taskRun, resultSha ?? selected!.resultSha);
   };
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) return reply.code(400).send({ error: "Invalid request", issues: error.issues });
     const message = error instanceof Error ? error.message : String(error);
     const status = /not found/iu.test(message) ? 404 : 400;
+    // Английские ошибки веб-клиент прячет за общей заглушкой, поэтому единственный след — вывод сервера.
+    console.error(`[api] ${request.method} ${request.url} → ${message}`);
     return reply.code(status).send({ error: message });
   });
 

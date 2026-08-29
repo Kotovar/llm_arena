@@ -60,6 +60,11 @@ function runnerImages(dataDir: string, images: readonly TaskImage[]) {
   return images.map((image) => ({ path: taskImagePath(dataDir, image), mimeType: image.mimeType }));
 }
 
+/** Допуск к резерву VRAM: настолько llama.cpp промахивается мимо своего же --fit-target. */
+const FIT_TOLERANCE_MIB = 64;
+
+const HEAVY_LANE_BUSY = "Сейчас выполняется другой тяжёлый процесс (запуск, проверка модели или калибровка). Дождитесь его завершения.";
+
 export class BenchmarkEngine {
   readonly #controllers = new Map<string, AbortController>();
   readonly #taskControllers = new Map<string, AbortController>();
@@ -589,8 +594,10 @@ export class BenchmarkEngine {
     return true;
   }
 
+  // Ошибки калибровки и проверки модели пользователь читает прямо в интерфейсе, поэтому они
+  // по-русски и с путём к журналу: английский текст веб-клиент прячет за общей заглушкой.
   async calibrate(profileId: string) {
-    if (this.#calibrating || this.#testing || this.#controllers.size > 0 || this.#pumping) throw new Error("Heavyweight lane is busy");
+    if (this.#calibrating || this.#testing || this.#controllers.size > 0 || this.#pumping) throw new Error(HEAVY_LANE_BUSY);
     const profile = this.store.getExecutionProfile(profileId);
     if (!profile) throw new Error("Execution profile not found");
     const model = this.store.getModel(profile.modelId);
@@ -613,11 +620,17 @@ export class BenchmarkEngine {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: model.alias, messages: [{ role: "user", content: "Reply OK" }], max_tokens: 8, temperature: 0 }),
       });
-      if (!warmup.ok) throw new Error(`Automatic profile warmup failed (${warmup.status})`);
+      if (!warmup.ok) throw new Error(`Модель не ответила на пробный запрос (HTTP ${warmup.status}). Журнал проверки: ${log}`);
       const gpu = this.runtime.readGpuInfo(this.config.nvidiaSmi);
       appendFileSync(log, `gpu=${gpu.name} usedMiB=${gpu.usedMiB} freeMiB=${gpu.freeMiB}\n`);
       const reserveMiB = profile.parameters.fitTargetMiB ?? this.config.defaults.vramReserveMiB;
-      if (profile.parameters.fit && gpu.freeMiB < reserveMiB) throw new Error(`Configured VRAM reserve was not preserved (${gpu.freeMiB}/${reserveMiB} MiB)`);
+      // --fit-target для llama.cpp — цель оценщика, а не гарантия: он стабильно недобирает
+      // десятки МиБ. Ловим грубый промах, а не погрешность, иначе автопрофиль не проходит
+      // собственную проверку. Целиться выше нельзя: лишний слой уедет на CPU и сместит tokens/s.
+      // Допуск не должен съедать резерв целиком: при маленьком fitTargetMiB фиксированные 64 МиБ
+      // увели бы порог в ноль, и проверка перестала бы ловить что-либо вообще.
+      const toleranceMiB = Math.min(FIT_TOLERANCE_MIB, Math.floor(reserveMiB / 2));
+      if (profile.parameters.fit && gpu.freeMiB < reserveMiB - toleranceMiB) throw new Error(`Резерв видеопамяти не соблюдён: после загрузки свободно ${gpu.freeMiB} МиБ при резерве ${reserveMiB} МиБ (допуск ${toleranceMiB} МиБ). Уменьшите резерв или контекст в профиле. Журнал проверки: ${log}`);
       // ponytail: проверка не меняет параметры, поэтому отмечаем текущую ревизию, а не плодим новую.
       return { profile: this.store.markProfileCalibrated(profile.id), gpu };
     } catch (error) {
@@ -631,7 +644,7 @@ export class BenchmarkEngine {
   }
 
   async testModel(modelId: string, runnerId: string) {
-    if (this.#calibrating || this.#testing || this.#controllers.size > 0 || this.#pumping) throw new Error("Heavyweight lane is busy");
+    if (this.#calibrating || this.#testing || this.#controllers.size > 0 || this.#pumping) throw new Error(HEAVY_LANE_BUSY);
     const model = this.store.getModel(modelId);
     if (!model) throw new Error("Model not found");
     const definition = this.config.runners.find((runner) => runner.id === runnerId);
