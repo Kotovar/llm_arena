@@ -1,4 +1,5 @@
 import { z } from "zod";
+export { DEFAULT_LLAMA_TEMPERATURE } from "./constants.js";
 
 export const taskKindSchema = z.enum(["prompt", "coding"]);
 export const runStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled"]);
@@ -127,8 +128,6 @@ export const llamaProfileSchema = z.object({
   }
 });
 
-/** Дефолт llama-server (0.8) на длинном контексте срывает tool call, поэтому арена держит свой. */
-export const DEFAULT_LLAMA_TEMPERATURE = 0.2;
 
 export const retryTaskRunSchema = z.object({
   temperature: z.number().min(0).max(2).nullable().optional(),
@@ -269,7 +268,6 @@ export type RunStatus = z.infer<typeof runStatusSchema>;
 export type RunnerKind = z.infer<typeof runnerKindSchema>;
 export type RunnerDefinition = z.infer<typeof runnerDefinitionSchema>;
 export type FixtureManifest = z.infer<typeof fixtureManifestSchema>;
-export type CommandSpec = z.infer<typeof commandSpecSchema>;
 export type NormalizedRunResult = z.infer<typeof normalizedRunResultSchema>;
 export type Review = z.infer<typeof reviewSchema>;
 export type SelectResultVersion = z.infer<typeof selectResultVersionSchema>;

@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resultShaSchema } from "@llm-arena/shared";
@@ -74,8 +74,4 @@ export function materializeWorkspaceVersion(gitDir: string, resultSha: string, w
   if (archive.status !== 0) throw new Error(`git archive failed: ${archive.stderr.toString()}`);
   const extract = spawnSync("tar", ["-x", "-C", workspace], { input: archive.stdout });
   if (extract.status !== 0) throw new Error(`tar extract failed: ${extract.stderr.toString()}`);
-}
-
-export function readArtifactText(path: string): string {
-  return readFileSync(path, "utf8");
 }

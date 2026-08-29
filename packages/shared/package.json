@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./constants": {
+      "types": "./dist/constants.d.ts",
+      "default": "./dist/constants.js"
     }
   },
   "scripts": {
@@ -16,5 +20,6 @@
   },
   "dependencies": {
     "zod": "^4.0.0"
-  }
+  },
+  "sideEffects": false
 }

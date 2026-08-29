@@ -1,4 +1,4 @@
-import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared";
+import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared/constants";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api } from "../api.js";

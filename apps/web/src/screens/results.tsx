@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared";
+import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared/constants";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { useConfirm } from "../confirm.js";

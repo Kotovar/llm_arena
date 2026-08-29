@@ -1,4 +1,4 @@
-import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared";
+import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared/constants";
 import type { GalleryResult, Model, Runner, Task, TaskRun } from "./types.js";
 
 const statusLabels: Record<string, string> = {
