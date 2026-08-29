@@ -112,7 +112,7 @@ function contained(root: string, requested: string): string {
 type GallerySnapshot = {
   task?: { taskId?: string; name?: string; prompt?: string };
   fixture?: { preview?: unknown };
-  model?: { name?: string; modelRef?: string };
+  model?: { name?: string; kind?: "local-gguf" | "cloud"; modelRef?: string };
   reasoningEffort?: string | null;
   runner?: { kind?: string };
   profile?: { name?: string; parameters?: { context?: number | "auto" } };
@@ -468,7 +468,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           model: {
             id: run.model_id,
             name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),
-            kind: model?.kind,
+            kind: snapshot.model?.kind ?? model?.kind,
             modelRef: snapshot.model?.modelRef || run.model_ref || undefined,
           },
           reasoningEffort: snapshot.reasoningEffort ?? null,

@@ -3,7 +3,8 @@ import { useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { DecisionPoint, Task } from "../types.js";
-import { formatDuration, formatMetricValue, formatVram, plural } from "../ui.js";
+import { formatDuration, formatMetricValue, formatVram, modelKindFilters, plural } from "../ui.js";
+import type { ModelKindFilter } from "../ui.js";
 
 type Slice = { kind: "all" } | { kind: "untagged" } | { kind: "tag"; tag: string };
 
@@ -216,6 +217,9 @@ function viewsFor(tagged: boolean): Array<[View, string]> {
 
 export function AnalyticsPage() {
   const [slice, setSlice] = useState<Slice>({ kind: "all" });
+  // Локальные модели проигрывают подписочным по всем измерениям сразу, поэтому в общем
+  // коротком списке их просто не остаётся. Разделение возвращает им собственный зачёт.
+  const [modelKind, setModelKind] = useState<ModelKindFilter>("all");
   const [view, setView] = useState<View>("scatter");
   const tasks = useData<Task[]>("tasks", "/tasks");
   const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
@@ -230,9 +234,11 @@ export function AnalyticsPage() {
       queryFn: () => api<DecisionPoint[]>(`/analytics/decision-points${column.query}`),
     })),
   });
-  const heatmapSlices = heatmapColumns.map((column, index) => ({ label: column.label, points: sliceQueries[index]?.data ?? [] }));
-  const shortlist = paretoShortlist(points.data ?? []);
-  const color = colorByKey(points.data ?? []);
+  const inKind = (point: DecisionPoint) => modelKind === "all" || point.modelKind === modelKind;
+  const shown = (points.data ?? []).filter(inKind);
+  const heatmapSlices = heatmapColumns.map((column, index) => ({ label: column.label, points: (sliceQueries[index]?.data ?? []).filter(inKind) }));
+  const shortlist = paretoShortlist(shown);
+  const color = colorByKey(shown);
   const views = viewsFor(tags.length > 0);
   return <Page title="Аналитика решений" eyebrow="Аналитика" intro="Одна точка — модель с конкретным профилем на выбранном срезе нагрузки. Неизмеренное не рисуется нулём: такие связки видно только в таблице.">
     {points.error ? <p className="error">{points.error.message}</p> : null}
@@ -242,6 +248,7 @@ export function AnalyticsPage() {
         {views.map(([value, label]) => <button type="button" role="tab" key={value} aria-selected={view === value} className={view === value ? "active" : ""} onClick={() => setView(value)}>{label}</button>)}
       </div>
       <Panel title={views.find(([value]) => value === view)![1]} action={view === "scatter" ? <span className="mono">{`Pareto: ${shortlist.length} ${plural(shortlist.length, "связка", "связки", "связок")}`}</span> : undefined}>
+        <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{modelKindFilters.map(([value, label]) => <button type="button" key={value} className={modelKind === value ? "active" : ""} aria-pressed={modelKind === value} onClick={() => setModelKind(value)}>{label}</button>)}</div>
         {view === "slices" ? <Heatmap slices={heatmapSlices} /> : <>
           {tags.length ? <>
             <div className="leaderboard-filters" role="group" aria-label="Срез нагрузки">
@@ -252,7 +259,7 @@ export function AnalyticsPage() {
             <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, «Без тегов» — только по тем, которым тег не проставлен.</p>
           </> : null}
           {view === "scatter"
-            ? points.data.length ? <Scatter points={points.data} color={color} shortlist={shortlist} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
+            ? shown.length ? <Scatter points={shown} color={color} shortlist={shortlist} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
             : shortlist.length
               ? <ul className="pareto-list">{shortlist.map((point) => <li key={pointKey(point)}><strong>{pointLabel(point)}</strong><span className="mono">{point.qualityPercent}% · {speedLabel(point.medianTokensPerSecond!)}{point.peakVramMiB === null ? "" : ` · ${formatVram(point.peakVramMiB)}`}</span></li>)}</ul>
               : <Empty>Ни одной связки с оценкой и замером скорости в этом срезе.</Empty>}

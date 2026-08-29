@@ -199,3 +199,33 @@ describe("аналитика решений", () => {
     expect(screen.getByRole("tab", { name: "Короткий список" })).toBeTruthy();
   });
 });
+
+describe("разделение локальных и подписочных моделей", () => {
+  beforeEach(() => {
+    const all = [
+      point({ modelId: "local-1", modelName: "Локальная", modelKind: "local-gguf", qualityPercent: 60, medianTokensPerSecond: 40 }),
+      point({ modelId: "cloud-1", modelName: "Подписочная", modelKind: "cloud", profileId: null, profileName: null, qualityPercent: 90, medianTokensPerSecond: 80 }),
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const body = url.startsWith("/api/tasks") ? [] : all;
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+  });
+
+  it("оставляет на графике и в коротком списке только выбранный тип моделей", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("img", { name: "Качество и скорость" });
+
+    // Без фильтра локальная модель доминируется подписочной и вылетает из короткого списка.
+    expect(screen.getByText("Pareto: 1 связка")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Локальные" }));
+
+    await waitFor(() => expect([...document.querySelectorAll(".scatter-point-label")].map((label) => label.textContent)).toEqual(["Локальная · Скорость"]));
+    expect(screen.getByText("Pareto: 1 связка")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Короткий список" }));
+    expect(screen.getByText("Локальная · Скорость")).toBeTruthy();
+    expect(screen.queryByText("Подписочная")).toBeNull();
+  });
+});

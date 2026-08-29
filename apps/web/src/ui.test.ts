@@ -386,6 +386,63 @@ describe("Gallery", () => {
     expect(matrix.rows[0]!.cells[0]!.results.map((item) => item.taskRunId)).toEqual(["new", "first"]);
   });
 
+  it("отмечает лидера по промпту внутри своего типа моделей", () => {
+    const result = (taskRunId: string, kind: "cloud" | "local-gguf", reviewScore: number | null, reviewPossible = 40) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: "p1", name: "Prompt", prompt: "Text" },
+      model: { id: `m-${taskRunId}`, name: `Model ${taskRunId}`, kind },
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+      reviewScore,
+      reviewPossible,
+    });
+
+    const matrix = galleryMatrix([
+      result("cloud-weak", "cloud", 30),
+      result("cloud-best", "cloud", 36),
+      result("local-best", "local-gguf", 20),
+      result("local-weak", "local-gguf", 10),
+      result("unscored", "cloud", null),
+    ]);
+
+    // Локальная модель выигрывает свою группу, хотя по абсолютным баллам уступает облачным.
+    expect([...matrix.leaders].toSorted()).toEqual(["cloud-best", "local-best"]);
+    // Подписочные модели идут первыми строками.
+    expect(matrix.rows.map((row) => row.model.kind)).toEqual(["cloud", "cloud", "cloud", "local-gguf", "local-gguf"]);
+  });
+
+  it("не отмечает лидера, когда оценка в группе всего одна, и отмечает всех при ничьей", () => {
+    const result = (taskRunId: string, reviewScore: number | null) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: "p1", name: "Prompt", prompt: "Text" },
+      model: { id: `m-${taskRunId}`, name: `Model ${taskRunId}`, kind: "cloud" as const },
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+      reviewScore,
+      reviewPossible: 40,
+    });
+
+    expect(galleryMatrix([result("only", 30), result("none", null)]).leaders.size).toBe(0);
+    expect([...galleryMatrix([result("tie-a", 30), result("tie-b", 30)]).leaders].toSorted()).toEqual(["tie-a", "tie-b"]);
+  });
+
+  it("сравнивает лидеров по доле от максимума, а не по сырым баллам", () => {
+    const result = (taskRunId: string, reviewScore: number, reviewPossible: number) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: "p1", name: "Prompt", prompt: "Text" },
+      model: { id: `m-${taskRunId}`, name: `Model ${taskRunId}`, kind: "cloud" as const },
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+      reviewScore,
+      reviewPossible,
+    });
+
+    expect([...galleryMatrix([result("raw-high", 25, 40), result("share-high", 18, 20)]).leaders]).toEqual(["share-high"]);
+  });
+
   it("собирает подписи о варианте модели, мышлении и обвязке", () => {
     expect(galleryResultTags({ model: { name: "GPT-5.6 Codex", kind: "cloud", modelRef: "gpt-5.6-spark" }, reasoningEffort: "high" })).toEqual(["gpt-5.6-spark", "мышление: high"]);
     expect(galleryResultTags({ model: { name: "GPT-5.6 Codex", kind: "cloud", modelRef: "GPT-5.6 Codex" } })).toEqual([]);

@@ -2,18 +2,11 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { LeaderboardEntry, PairSummary } from "../types.js";
-import { formatCost, formatMetricValue, plural } from "../ui.js";
+import { formatCost, formatMetricValue, modelKindFilters, plural } from "../ui.js";
+import type { ModelKindFilter } from "../ui.js";
 
 // Ниже этого порога средняя ещё слишком шумная, чтобы читать её как результат модели.
 const CONFIDENT_SAMPLE = 3;
-
-const kindFilters = [
-  ["all", "Все модели"],
-  ["local-gguf", "Локальные"],
-  ["cloud", "По подписке"],
-] as const;
-
-type KindFilter = (typeof kindFilters)[number][0];
 
 const criteriaColumns = [
   ["correctness", "Корректность", "Насколько результат правильно решает задачу."],
@@ -59,7 +52,7 @@ export function LeaderboardPage() {
   const leaderboard = useData<LeaderboardEntry[]>("leaderboard", "/leaderboard");
   const pairs = useData<PairSummary[]>("pair-summary", "/reviews/pair/summary");
   const pairFor = (modelId: string) => pairs.data?.find((summary) => summary.modelId === modelId);
-  const [kind, setKind] = useState<KindFilter>("all");
+  const [kind, setKind] = useState<ModelKindFilter>("all");
   const [headToHead, setHeadToHead] = useState(false);
   // Места считаются внутри выбранной группы: локальная модель не должна выглядеть седьмой среди облачных.
   const shown = leaderboard.data?.filter((entry) => kind === "all" || entry.modelKind === kind) ?? [];
@@ -71,7 +64,7 @@ export function LeaderboardPage() {
     {leaderboard.error ? <p className="error">{leaderboard.error.message}</p> : null}
     {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length ? <Empty action={<Link to="/">Запустить проверку</Link>}>Пока нет ни одного запуска.</Empty> : null}
     {leaderboard.data?.length ? <Panel title={`Моделей: ${shown.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель оценена", "модели оценены", "моделей оценены")} меньше чем на {CONFIDENT_SAMPLE} промптах</span> : undefined}>
-      <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{kindFilters.map(([value, label]) => <button type="button" key={value} className={kind === value ? "active" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>)}</div>
+      <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{modelKindFilters.map(([value, label]) => <button type="button" key={value} className={kind === value ? "active" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>)}</div>
       {shown.length ? <div className="leaderboard-scroll"><table className="leaderboard-table"><thead><tr>
         <th scope="col">#</th>
         <th scope="col">Модель</th>

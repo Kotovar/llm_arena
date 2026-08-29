@@ -107,3 +107,62 @@ describe("preview в подробностях результата", () => {
     expect(screen.queryByTitle("Preview: Аквариум")).toBeNull();
   });
 });
+
+describe("лидеры и разделение по типу моделей", () => {
+  function scored(modelId: string, name: string, kind: "cloud" | "local-gguf", reviewScore: number): GalleryResult {
+    return {
+      ...result("p1", "Аквариум", ["код"]),
+      taskRunId: `run-${modelId}`,
+      model: { id: modelId, name, kind },
+      reviewScore,
+      reviewPossible: 40,
+    };
+  }
+
+  beforeEach(() => {
+    gallery = [
+      scored("local-1", "Gemma", "local-gguf", 20),
+      scored("cloud-1", "Claude", "cloud", 36),
+      scored("cloud-2", "Codex", "cloud", 30),
+    ];
+  });
+
+  it("разводит подписочные и локальные модели по группам, подписочные сверху", async () => {
+    await renderInApp(<GalleryPage />);
+    const table = await screen.findByRole("table");
+
+    const groups = within(table).getAllByRole("rowgroup").slice(1);
+    expect(groups.map((group) => group.querySelector(".gallery-group th")!.textContent)).toEqual(["По подписке", "Локальные"]);
+    const models = (group: HTMLElement) => [...group.querySelectorAll("th.gallery-model")].map((cell) => cell.textContent);
+    expect(models(groups[0]!)).toEqual(["Claude", "Codex"]);
+    expect(models(groups[1]!)).toEqual(["Gemma"]);
+  });
+
+  it("не рисует разделитель, когда тип моделей всего один", async () => {
+    gallery = [scored("cloud-1", "Claude", "cloud", 36), scored("cloud-2", "Codex", "cloud", 30)];
+    await renderInApp(<GalleryPage />);
+    const table = await screen.findByRole("table");
+
+    expect(table.querySelector(".gallery-group")).toBeNull();
+    expect(within(table).queryByText("По подписке")).toBeNull();
+  });
+
+  it("отмечает лидера промпта внутри своей группы", async () => {
+    await renderInApp(<GalleryPage />);
+    const table = await screen.findByRole("table");
+
+    const leaders = within(table).getAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа");
+    expect(leaders.length).toBe(1);
+    expect(leaders[0]!.closest("button")!.textContent).toContain("36/40");
+  });
+
+  it("называет лидерство в подробностях результата", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+
+    await user.click(screen.getAllByRole("button", { name: /Исходная версия/u })[0]!);
+
+    expect(screen.getByText("Лидер по промпту")).toBeTruthy();
+  });
+});

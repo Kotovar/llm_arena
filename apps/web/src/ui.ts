@@ -126,6 +126,46 @@ export function matchTaskRuns(left: TaskRun[], right: TaskRun[]) {
   return revisionIds.map((revisionId) => ({ revisionId, left: leftByRevision.get(revisionId), right: rightByRevision.get(revisionId) }));
 }
 
+/** Порядок и подписи групп моделей: подписочные заметно сильнее локальных, и мешать их в одном рейтинге нечестно. */
+export const modelKindOrder = ["cloud", "local-gguf"] as const;
+
+export const modelKindLabels: Record<Model["kind"], string> = { cloud: "По подписке", "local-gguf": "Локальные" };
+
+export const modelKindFilters = [["all", "Все модели"], ...modelKindOrder.map((kind) => [kind, modelKindLabels[kind]] as const)] as const;
+
+export type ModelKindFilter = "all" | Model["kind"];
+
+// Модель без явного kind считаем подписочной: локальную заводят только через путь к GGUF.
+function modelKindOf(model: { kind?: Model["kind"] }) {
+  return model.kind ?? "cloud";
+}
+
+/** Доля от максимума, а не сырые баллы: потолок за промпт зависит от типа задачи. */
+function scoreRatio(result: GalleryResult) {
+  return result.reviewScore == null ? null : result.reviewScore / (result.reviewPossible ?? 40);
+}
+
+/**
+ * Лидеры считаются внутри пары «промпт × тип модели» и только когда в группе есть с чем сравнивать.
+ * Общий значок на весь столбец всегда доставался бы подписочным моделям и ничего бы не сообщал.
+ */
+function galleryLeaders(results: GalleryResult[]) {
+  const groups = new Map<string, GalleryResult[]>();
+  for (const result of results) {
+    if (scoreRatio(result) === null) continue;
+    const key = `${result.prompt.id}\0${modelKindOf(result.model)}`;
+    groups.set(key, [...(groups.get(key) ?? []), result]);
+  }
+  const leaders = new Set<string>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const best = Math.max(...group.map((result) => scoreRatio(result)!));
+    // При ничьей значок получают все: скрытый тай-брейк читался бы как случайный выбор.
+    for (const result of group) if (scoreRatio(result) === best) leaders.add(result.taskRunId);
+  }
+  return leaders;
+}
+
 export function galleryMatrix(results: GalleryResult[]) {
   const prompts = new Map<string, GalleryResult["prompt"]>();
   const models = new Map<string, GalleryResult["model"]>();
@@ -140,10 +180,14 @@ export function galleryMatrix(results: GalleryResult[]) {
   const promptList = [...prompts.values()];
   return {
     prompts: promptList,
-    rows: [...models.values()].map((model) => ({
-      model,
-      cells: promptList.map((prompt) => ({ prompt, results: (cells.get(`${prompt.id}\0${model.id}`) ?? []).toSorted((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))) })),
-    })),
+    leaders: galleryLeaders(results),
+    rows: [...models.values()]
+      .toSorted((left, right) => modelKindOrder.indexOf(modelKindOf(left)) - modelKindOrder.indexOf(modelKindOf(right)))
+      .map((model) => ({
+        model,
+        kind: modelKindOf(model),
+        cells: promptList.map((prompt) => ({ prompt, results: (cells.get(`${prompt.id}\0${model.id}`) ?? []).toSorted((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))) })),
+      })),
   };
 }
 
