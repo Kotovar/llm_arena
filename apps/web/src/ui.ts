@@ -209,10 +209,13 @@ export function galleryResultTags(result: {
   return tags;
 }
 
+/** Имя профиля, который создаётся сам: в подписях его не показываем — оно ничего не уточняет. */
+export const DEFAULT_PROFILE_NAME = "Automatic";
+
 export function defaultLocalProfile(modelId: string) {
   return {
     modelId,
-    name: "Automatic",
+    name: DEFAULT_PROFILE_NAME,
     parameters: {
       context: "auto" as const,
       nGpuLayers: "auto" as const,

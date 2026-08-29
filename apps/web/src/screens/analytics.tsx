@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { DecisionPoint, Task } from "../types.js";
-import { formatDuration, formatMetricValue, formatVram, modelKindFilters, plural } from "../ui.js";
+import { DEFAULT_PROFILE_NAME, formatDuration, formatMetricValue, formatVram, modelKindFilters, plural } from "../ui.js";
 import type { ModelKindFilter } from "../ui.js";
 
 type Slice = { kind: "all" } | { kind: "untagged" } | { kind: "tag"; tag: string };
@@ -14,7 +14,20 @@ function sliceQuery(slice: Slice) {
 }
 
 function pointLabel(point: DecisionPoint) {
-  return point.profileName ? `${point.modelName} · ${point.profileName}` : point.modelName;
+  // Профиль по умолчанию в подписи не несёт информации и съедает место у имени модели.
+  return point.profileName && point.profileName !== DEFAULT_PROFILE_NAME ? `${point.modelName} · ${point.profileName}` : point.modelName;
+}
+
+// Подписи обрезаются, чтобы одно длинное имя не занимало половину графика.
+const LABEL_MAX_CHARS = 20;
+// Ширина символа на глаз: точную метрику текста в SVG не получить без выкладки, а промах в пару пикселей
+// раскладке не мешает — она и так раздвигает подписи с запасом по высоте строки.
+const LABEL_CHAR_WIDTH = 6;
+
+/** Подпись у точки: длинное имя обрезается, полное остаётся в подсказке, легенде и таблице. */
+function shortLabel(point: DecisionPoint) {
+  const label = pointLabel(point);
+  return label.length > LABEL_MAX_CHARS ? `${label.slice(0, LABEL_MAX_CHARS - 1)}…` : label;
 }
 
 function pointKey(point: DecisionPoint) {
@@ -22,19 +35,28 @@ function pointKey(point: DecisionPoint) {
 }
 
 /**
- * Три цвета — потолок палитры для диаграммы рассеяния: дальше пары оттенков уже не различить
- * ни при обычном зрении, ни при дальтонизме. Остальные связки идут «прочими» и опознаются подписью.
+ * Цвет связки. Оттенок вычисляется, а не берётся из готового списка: список рано или поздно
+ * кончается, и седьмая модель либо повторяет чужой цвет, либо остаётся безликой — оба варианта плохи.
+ * Шаг в золотой угол разводит соседние оттенки максимально далеко при любом числе связок.
+ * Светлота и цветность фиксированы, поэтому точки выглядят одной палитрой и держат контраст к фону.
  */
-const SERIES_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
+const SERIES_HUE_STEP = 137.508;
+// Начинаем с синего: с него палитра начиналась, и первая связка выглядит как раньше.
+const SERIES_HUE_START = 258;
+const SERIES_LIGHTNESS = 0.62;
+const SERIES_CHROMA = 0.17;
+
+export function seriesColor(index: number) {
+  // Округление здесь не косметика: без него в разметку уходит «88.03200000000004».
+  const hue = Number(((SERIES_HUE_START + index * SERIES_HUE_STEP) % 360).toFixed(1));
+  return `oklch(${SERIES_LIGHTNESS} ${SERIES_CHROMA} ${hue})`;
+}
 
 function colorByKey(points: DecisionPoint[]) {
   // Цвет закреплён за связкой в устойчивом порядке, а не за местом в рейтинге:
   // смена среза не должна перекрашивать выживших.
   const keys = [...new Set(points.map(pointKey))].sort();
-  return (point: DecisionPoint) => {
-    const index = keys.indexOf(pointKey(point));
-    return index < SERIES_COLORS.length ? SERIES_COLORS[index]! : null;
-  };
+  return (point: DecisionPoint) => seriesColor(keys.indexOf(pointKey(point)));
 }
 
 // Ненулевая доля не должна округляться в «0%»: именно так неудачи однажды и потерялись из виду.
@@ -79,25 +101,26 @@ export function paretoShortlist(points: DecisionPoint[]) {
  */
 const LABEL_TOP = 36;
 const LABEL_BOTTOM = 300;
-
 export function labelPlacer() {
-  const placed: Array<{ x: number; y: number }> = [];
-  const clashes = (x: number, offset: number) => placed.some((item) => Math.abs(item.y - offset) < 13 && Math.abs(item.x - x) < 150);
-  return (x: number, y: number) => {
+  const placed: Array<{ left: number; right: number; y: number }> = [];
+  // Пересечение считается по настоящим границам текста, а не по окну фиксированной ширины:
+  // иначе длинная подпись наезжала на соседа, формально стоящего далеко по x.
+  const clashes = (left: number, right: number, offset: number) => placed.some((item) => Math.abs(item.y - offset) < 13 && left < item.right && item.left < right);
+  return (left: number, right: number, y: number) => {
     let offset = y;
-    while (offset <= LABEL_BOTTOM && clashes(x, offset)) offset += 13;
+    while (offset <= LABEL_BOTTOM && clashes(left, right, offset)) offset += 13;
     // Внизу графика место кончается быстрее, чем подписи: упёрлись — идём вверх от собственной точки.
     if (offset > LABEL_BOTTOM) {
       offset = y;
-      while (offset >= LABEL_TOP && clashes(x, offset)) offset -= 13;
+      while (offset >= LABEL_TOP && clashes(left, right, offset)) offset -= 13;
     }
     const placedOffset = Math.min(Math.max(offset, LABEL_TOP), LABEL_BOTTOM);
-    placed.push({ x, y: placedOffset });
+    placed.push({ left, right, y: placedOffset });
     return placedOffset;
   };
 }
 
-function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color: (point: DecisionPoint) => string | null; shortlist: DecisionPoint[] }) {
+function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color: (point: DecisionPoint) => string; shortlist: DecisionPoint[] }) {
   const [hovered, setHovered] = useState<string>();
   // Точку без качества или скорости рисовать нечем, но из таблицы она не исчезает.
   const plotted = points.filter((point) => point.qualityPercent !== null && point.medianTokensPerSecond !== null);
@@ -134,13 +157,17 @@ function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color:
         const cx = x(point.medianTokensPerSecond!);
         const cy = y(point.qualityPercent!);
         const right = cx > 420;
+        const label = shortLabel(point);
+        const labelWidth = label.length * LABEL_CHAR_WIDTH;
+        const labelX = right ? cx - 13 : cx + 13;
+        const labelLeft = right ? labelX - labelWidth : labelX;
         const dimmed = best.size > 0 && !best.has(pointKey(point));
         return <g key={pointKey(point)} className={dimmed ? "scatter-point dimmed" : "scatter-point"} onMouseEnter={() => setHovered(pointKey(point))} onMouseLeave={() => setHovered(undefined)}>
           {/* Прозрачная мишень крупнее самой точки: попадать курсором в семь пикселей неудобно. */}
           <circle className="scatter-hit" cx={cx} cy={cy} r="16" fill="transparent" />
-          <circle className="scatter-dot" cx={cx} cy={cy} r={radius(point)} fill={color(point) ?? "none"} stroke={color(point) ?? "var(--line-strong)"} strokeWidth="2" />
+          <circle className="scatter-dot" cx={cx} cy={cy} r={radius(point)} fill={color(point)} stroke={color(point)} strokeWidth="2" />
           {/* Подпись у каждой точки: опознавать связку по одному цвету нельзя. */}
-          <text className="scatter-point-label" x={right ? cx - 13 : cx + 13} y={placeLabel(cx, cy + 4)} textAnchor={right ? "end" : "start"}>{pointLabel(point)}</text>
+          <text className="scatter-point-label" x={labelX} y={placeLabel(labelLeft, labelLeft + labelWidth, cy + 4)} textAnchor={right ? "end" : "start"}>{label}</text>
         </g>;
       })}
       {active ? (() => {
@@ -156,7 +183,7 @@ function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color:
         </g>;
       })() : null}
     </svg>
-    <ul className="scatter-legend">{points.map((point) => <li key={pointKey(point)}><span className="legend-mark" style={color(point) ? { background: color(point)!, borderColor: color(point)! } : undefined} />{pointLabel(point)}</li>)}</ul>
+    <ul className="scatter-legend">{points.map((point) => <li key={pointKey(point)}><span className="legend-mark" style={{ background: color(point), borderColor: color(point) }} />{pointLabel(point)}</li>)}</ul>
     <div className="analytics-scroll"><table className="analytics-table">
       <caption>Те же связки числами</caption>
       <thead><tr>

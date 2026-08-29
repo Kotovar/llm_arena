@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderInApp } from "../test-harness.js";
 import type { DecisionPoint } from "../types.js";
-import { AnalyticsPage, labelPlacer, paretoShortlist } from "./analytics.js";
+import { AnalyticsPage, labelPlacer, paretoShortlist, seriesColor } from "./analytics.js";
 
 function point(overrides: Partial<DecisionPoint> = {}): DecisionPoint {
   return {
@@ -53,10 +53,19 @@ describe("раскладка подписей", () => {
   it("не выпускает подпись за нижний край графика", () => {
     const place = labelPlacer();
     // Четыре точки у самого низа шкалы в одном окне по x: сдвигать все вниз некуда.
-    const offsets = [0, 1, 2, 3].map(() => place(200, 284));
+    const offsets = [0, 1, 2, 3].map(() => place(200, 320, 284));
     expect(Math.max(...offsets)).toBeLessThanOrEqual(300);
     expect(Math.min(...offsets)).toBeGreaterThanOrEqual(36);
     expect(new Set(offsets).size).toBe(4);
+  });
+
+  it("разводит подписи по их настоящей ширине, а не по окну фиксированного размера", () => {
+    const place = labelPlacer();
+    // Точки далеко друг от друга по x, но длинная подпись левой доезжает до правой.
+    expect(place(100, 380, 200)).toBe(200);
+    expect(place(300, 420, 200)).not.toBe(200);
+    // А вот эта уже не пересекается ни с одной: остаётся на своей высоте.
+    expect(place(500, 560, 200)).toBe(200);
   });
 });
 
@@ -197,6 +206,69 @@ describe("аналитика решений", () => {
     expect(screen.queryByRole("tab", { name: "Срезы нагрузки" })).toBeNull();
     expect(screen.queryByRole("group", { name: "Срез нагрузки" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Короткий список" })).toBeTruthy();
+  });
+});
+
+describe("различение связок", () => {
+  it("даёт свой цвет любому числу связок и не пускает их по кругу", () => {
+    // Двадцать связок — заведомо больше, чем помещалось в любой готовый список.
+    const colors = Array.from({ length: 20 }, (_, index) => seriesColor(index));
+    expect(new Set(colors).size).toBe(20);
+  });
+
+  it("красит каждую точку и повторяет цвет в легенде", async () => {
+    const all = ["a", "b", "c", "d", "e", "f", "g"].map((id, index) => point({ modelId: id, modelName: `Модель ${id}`, profileId: null, profileName: null, qualityPercent: 20 + index * 10, medianTokensPerSecond: 20 + index * 15 }));
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : all), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("img", { name: "Качество и скорость" });
+
+    const fills = [...document.querySelectorAll(".scatter .scatter-dot")].map((node) => node.getAttribute("fill"));
+    expect(new Set(fills).size).toBe(7);
+    expect(fills).not.toContain("none");
+    // Легенда идёт тем же порядком и теми же цветами: опознание не зависит от чтения графика.
+    expect([...document.querySelectorAll(".legend-mark")].map((node) => (node as HTMLElement).style.background)).toEqual(fills);
+  });
+});
+
+describe("подписи точек", () => {
+  it("убирает профиль по умолчанию и обрезает длинное имя", async () => {
+    const all = [point({ modelId: "long", modelName: "NVIDIA-Nemotron-3.5-Lightning-30B", profileName: "Automatic" })];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : all), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("img", { name: "Качество и скорость" });
+
+    expect([...document.querySelectorAll(".scatter-point-label")].map((label) => label.textContent)).toEqual(["NVIDIA-Nemotron-3.5…"]);
+    // Полное имя никуда не делось: легенда и таблица показывают его целиком.
+    expect(document.querySelector(".scatter-legend")!.textContent).toContain("NVIDIA-Nemotron-3.5-Lightning-30B");
+    expect(within(screen.getByRole("table", { name: "Те же связки числами" })).getByText("NVIDIA-Nemotron-3.5-Lightning-30B")).toBeTruthy();
+  });
+
+  it("не даёт подписям наезжать друг на друга на реальном наборе моделей", async () => {
+    const all = [
+      point({ modelId: "a", modelName: "Ornith-1.5-35B", qualityPercent: 78, medianTokensPerSecond: 70 }),
+      point({ modelId: "b", modelName: "hy3", qualityPercent: 68, medianTokensPerSecond: 63 }),
+      point({ modelId: "c", modelName: "gemma-4-26B", qualityPercent: 55, medianTokensPerSecond: 75 }),
+      point({ modelId: "d", modelName: "NVIDIA-Nemotron-3.5-Lightning-30B", qualityPercent: 26, medianTokensPerSecond: 67 }),
+      // Две длинные подписи на одной высоте: левая тянется вправо, правая — влево, точки при этом далеко друг от друга.
+      point({ modelId: "e", modelName: "Qwen3-Coder-30B-A3B", qualityPercent: 26, medianTokensPerSecond: 127 }),
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : all), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("img", { name: "Качество и скорость" });
+
+    // jsdom не считает метрики текста, поэтому границы оцениваем так же, как их оценивает раскладка.
+    const boxes = [...document.querySelectorAll(".scatter-point-label")].map((label) => {
+      const width = label.textContent!.length * 6;
+      const x = Number(label.getAttribute("x"));
+      const left = label.getAttribute("text-anchor") === "end" ? x - width : x;
+      return { left, right: left + width, y: Number(label.getAttribute("y")) };
+    });
+    expect(boxes).toHaveLength(5);
+    for (const [index, box] of boxes.entries()) {
+      for (const other of boxes.slice(index + 1)) {
+        expect(Math.abs(box.y - other.y) >= 13 || box.right <= other.left || other.right <= box.left).toBe(true);
+      }
+    }
   });
 });
 
