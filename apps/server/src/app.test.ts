@@ -237,6 +237,19 @@ describe("REST API", () => {
     const rerun = await app.inject({ method: "POST", url: "/api/runs", payload: { taskRevisionIds: [task.currentRevision.id], modelId, executionProfileId: null, runnerId: "llama-chat", resultMode: "text" } });
     expect(rerun.statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/models/${modelId}/test`, payload: { runnerId: "llama-chat" } })).statusCode).toBe(404);
+
+    // Отключённая модель видна отдельным списком и включается обратно, если файл никем не занят.
+    expect((await app.inject({ method: "GET", url: "/api/models/archived" })).json()).toMatchObject([{ id: modelId, name: "Local" }]);
+    const reconnected = await app.inject({ method: "POST", url: "/api/local-models", payload: { filename: "Local.gguf", name: "Local again", profileName: "Automatic", profile: { context: 100_000, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: "auto", cacheReuse: 256 } } });
+    expect(reconnected.statusCode).toBe(201);
+    expect((await app.inject({ method: "POST", url: `/api/models/${modelId}/restore` })).statusCode).toBe(400);
+    expect((await app.inject({ method: "DELETE", url: `/api/models/${reconnected.json().model.id}` })).statusCode).toBe(204);
+    // Файл могли удалить, пока модель лежала отключённой: включать в таком виде нечего.
+    rmSync(join(modelsRoot, "Local.gguf"));
+    expect((await app.inject({ method: "POST", url: `/api/models/${modelId}/restore` })).statusCode).toBe(400);
+    writeFileSync(join(modelsRoot, "Local.gguf"), "gguf");
+    expect((await app.inject({ method: "POST", url: `/api/models/${modelId}/restore` })).json()).toMatchObject({ id: modelId, name: "Local" });
+    expect((await app.inject({ method: "GET", url: "/api/models" })).json().map((model: { id: string }) => model.id)).toEqual([modelId]);
   });
 
   it("frees omp-local when its model is disconnected", async () => {
@@ -1036,6 +1049,20 @@ describe("REST API", () => {
     expect(promoted.json()).toMatchObject({ taskRunId: duplicateTaskRun.id });
     const featuredGallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
     expect(featuredGallery.find((item: { taskRunId: string }) => item.taskRunId === duplicateTaskRun.id)).toMatchObject({ featured: true });
+
+    // Нерабочий результат уходит из галереи и теряет звание главного, но остаётся в запуске.
+    const broken = await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/broken`, payload: { broken: true } });
+    expect(broken.statusCode).toBe(200);
+    expect(broken.json()).toMatchObject({ id: duplicateTaskRun.id, broken_at: expect.any(String) });
+    const brokenGallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
+    expect(brokenGallery).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskRunId: duplicateTaskRun.id })]));
+    expect((await app.inject({ method: "PUT", url: "/api/gallery/featured", payload: { taskRunId: duplicateTaskRun.id } })).statusCode).toBe(404);
+    expect((store.listLeaderboardTaskRuns()).some((row) => row.task_run_id === duplicateTaskRun.id)).toBe(false);
+
+    const restored = await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/broken`, payload: { broken: false } });
+    expect(restored.json()).toMatchObject({ broken_at: null });
+    const restoredGallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
+    expect(restoredGallery.find((item: { taskRunId: string }) => item.taskRunId === duplicateTaskRun.id)).toMatchObject({ featured: false });
     await app.close();
     store.close();
   });

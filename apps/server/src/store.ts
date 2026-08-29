@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
@@ -93,6 +93,7 @@ type TaskRunRow = {
   error: string | null;
   artifact_path: string;
   selected_followup_id: string | null;
+  broken_at: string | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -277,7 +278,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS run_tasks (run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(run_id, position));
     CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, broken_at TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_attempts (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, attempt INTEGER NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, attempt));
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -355,6 +356,11 @@ function migrate(sqlite: DatabaseSync): void {
   const taskRunColumns = sqlite.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>;
   if (!taskRunColumns.some((column) => column.name === "selected_followup_id")) {
     sqlite.exec("ALTER TABLE task_runs ADD COLUMN selected_followup_id TEXT");
+  }
+  // «Формально готово, а на деле не работает» — это не оценка в баллах, а пометка: такой результат
+  // выбывает из галереи и любых сводок, но остаётся в запуске вместе с логами и файлами.
+  if (!taskRunColumns.some((column) => column.name === "broken_at")) {
+    sqlite.exec("ALTER TABLE task_runs ADD COLUMN broken_at TEXT");
   }
   const taskRevisionColumns = sqlite.prepare("PRAGMA table_info(task_revisions)").all() as Array<{ name: string }>;
   if (!taskRevisionColumns.some((column) => column.name === "images_json")) {
@@ -641,6 +647,23 @@ export function createStore(filename: string) {
       sqlite.prepare("UPDATE models SET economics_json = ?, updated_at = ? WHERE id = ?").run(economicsJson, updatedAt, id);
       return mapModel({ ...row, economics_json: economicsJson, updated_at: updatedAt });
     },
+    listArchivedModels() {
+      return all<ModelRow>("SELECT * FROM models WHERE archived_at IS NOT NULL ORDER BY position, created_at").map(mapModel);
+    },
+    restoreModel(id: string) {
+      const row = one<ModelRow>("SELECT * FROM models WHERE id = ? AND archived_at IS NOT NULL", id);
+      if (!row) throw new Error("Model not found");
+      if (row.path && one<{ id: string }>("SELECT id FROM models WHERE path = ? AND archived_at IS NULL", row.path)) {
+        throw new Error("Model file is already connected");
+      }
+      // Файл могли удалить, пока модель была отключена: без него включать нечего.
+      if (row.path && !existsSync(row.path)) throw new Error("Model file no longer exists");
+      const updatedAt = now();
+      // Позиция за время отключения протухла: порядок активных моделей переписывался без неё.
+      const position = (one<{ last: number | null }>("SELECT MAX(position) AS last FROM models WHERE archived_at IS NULL")?.last ?? -1) + 1;
+      sqlite.prepare("UPDATE models SET archived_at = NULL, position = ?, updated_at = ? WHERE id = ?").run(position, updatedAt, id);
+      return mapModel({ ...row, archived_at: null, position, updated_at: updatedAt });
+    },
     archiveModel(id: string) {
       const timestamp = now();
       sqlite.prepare("UPDATE models SET archived_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, id);
@@ -782,7 +805,7 @@ export function createStore(filename: string) {
                COUNT(task_runs.id) AS task_count
         FROM benchmark_runs
         LEFT JOIN task_runs ON task_runs.benchmark_run_id = benchmark_runs.id
-        LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
+        LEFT JOIN reviews ON reviews.task_run_id = task_runs.id AND task_runs.broken_at IS NULL
         GROUP BY benchmark_runs.sequence
         ORDER BY benchmark_runs.sequence
       `);
@@ -802,6 +825,7 @@ export function createStore(filename: string) {
         LEFT JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
         LEFT JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
+        WHERE task_runs.id IS NULL OR task_runs.broken_at IS NULL
         ORDER BY benchmark_runs.sequence
       `);
     },
@@ -881,7 +905,7 @@ export function createStore(filename: string) {
         FROM task_runs
         JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
         JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
-        WHERE task_runs.status = 'completed'
+        WHERE task_runs.status = 'completed' AND task_runs.broken_at IS NULL
         ORDER BY task_runs.created_at
       `);
     },
@@ -897,7 +921,7 @@ export function createStore(filename: string) {
         JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
         JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
-        WHERE task_runs.status IN ('completed', 'failed')
+        WHERE task_runs.status IN ('completed', 'failed') AND task_runs.broken_at IS NULL
         ORDER BY task_runs.created_at
       `);
     },
@@ -916,6 +940,7 @@ export function createStore(filename: string) {
         JOIN benchmark_runs AS second_run ON second_run.id = second_task.benchmark_run_id
         JOIN task_revisions ON task_revisions.id = first_task.task_revision_id
         JOIN tasks ON tasks.id = task_revisions.task_id
+        WHERE first_task.broken_at IS NULL AND second_task.broken_at IS NULL
         ORDER BY pair_reviews.updated_at
       `).map((row) => ({ ...row, winnerModelId: row.winner_task_run_id === null ? null : row.winner_task_run_id === row.first_task_run_id ? row.first_model_id : row.second_model_id }));
     },
@@ -993,6 +1018,12 @@ export function createStore(filename: string) {
       }
       sqlite.prepare("UPDATE task_runs SET selected_followup_id = ? WHERE id = ?").run(followupId, taskRunId);
       return this.getTaskRun(taskRunId)!;
+    },
+    setTaskRunBroken(taskRunId: string, broken: boolean) {
+      sqlite.prepare("UPDATE task_runs SET broken_at = ? WHERE id = ?").run(broken ? now() : null, taskRunId);
+      // Нерабочий результат не может быть лицом модели в галерее.
+      if (broken) sqlite.prepare("DELETE FROM gallery_featured WHERE task_run_id = ?").run(taskRunId);
+      return this.getTaskRun(taskRunId);
     },
     saveReview(taskRunId: string, review: Review) {
       sqlite

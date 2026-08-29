@@ -67,6 +67,7 @@ const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict(
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
 const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
+const brokenResultSchema = z.object({ broken: z.boolean() }).strict();
 const updateModelEconomicsSchema = z.object({ economics: modelEconomicsSchema.nullable() }).strict();
 const pairReviewSchema = z.object({
   leftTaskRunId: z.string().uuid(),
@@ -364,6 +365,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       return model;
     }
   }));
+  app.get("/api/models/archived", async () => store.listArchivedModels());
+  app.post<{ Params: { id: string } }>("/api/models/:id/restore", async (request) => store.restoreModel(request.params.id));
   app.get("/api/model-catalog", async () => loadModelCatalog());
   app.post("/api/models", async (request, reply) => reply.code(201).send(store.createModel(parse(createModelSchema, request.body))));
   app.patch<{ Params: { id: string } }>("/api/models/:id", async (request) => {
@@ -442,7 +445,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return store.listRuns().flatMap((run) => {
       if (run.result_mode !== "web") return [];
       return store.listTaskRuns(run.id).flatMap((taskRun) => {
-        if (taskRun.status !== "completed" || !checksPassed(taskRun.result_json)) return [];
+        if (taskRun.status !== "completed" || taskRun.broken_at !== null || !checksPassed(taskRun.result_json)) return [];
         const selected = selectedResultVersionRecord(taskRun);
         const snapshot = parseGallerySnapshot(taskRun.snapshot_json);
         if (!selected || !snapshot?.fixture?.preview || !checksPassed(selected.resultJson)) return [];
@@ -488,7 +491,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.put("/api/gallery/featured", async (request) => {
     const { taskRunId } = parse(galleryFeaturedSchema, request.body);
     const taskRun = store.getTaskRun(taskRunId);
-    if (!taskRun || taskRun.status !== "completed" || !checksPassed(taskRun.result_json)) throw new Error("Completed working task run not found");
+    if (!taskRun || taskRun.status !== "completed" || taskRun.broken_at !== null || !checksPassed(taskRun.result_json)) throw new Error("Completed working task run not found");
     const run = store.getRun(taskRun.benchmark_run_id);
     const selected = selectedResultVersionRecord(taskRun);
     if (!run || run.result_mode !== "web" || !selected || !checksPassed(selected.resultJson)) throw new Error("Completed working web result not found");
@@ -840,6 +843,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!left || !right) throw new Error("Task run not found");
     if (left.task_revision_id !== right.task_revision_id) throw new Error("Pair review requires the same prompt revision");
     if (left.status !== "completed" || right.status !== "completed") throw new Error("Pair review needs two completed results");
+    if (left.broken_at !== null || right.broken_at !== null) throw new Error("Pair review needs two working results");
     const winnerTaskRunId = input.winner === "tie" ? null : input.winner === "left" ? left.id : right.id;
     const saved = store.savePairReview([left.id, right.id], winnerTaskRunId, input.comment);
     const modelName = (taskRunId: string) => {
@@ -857,6 +861,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     });
   });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => store.saveReview(request.params.id, parse(reviewSchema, request.body)));
+  // Пометка «результат нерабочий»: формально завершённый прогон, который на деле не работает.
+  app.put<{ Params: { id: string } }>("/api/task-runs/:id/broken", async (request) => {
+    const { broken } = parse(brokenResultSchema, request.body);
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) throw new Error("Task run not found");
+    return withSelectedVersion(store.setTaskRunBroken(taskRun.id, broken)!);
+  });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/selected-version", async (request) => {
     const { resultSha } = parse(selectResultVersionSchema, request.body);
     const taskRun = store.getTaskRun(request.params.id);

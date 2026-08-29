@@ -248,6 +248,34 @@ describe("run queue", () => {
     store.close();
   });
 
+  it("adds the broken-result column to an existing task_runs table", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-broken-column-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const sqlite = new DatabaseSync(filename);
+    sqlite.exec(`
+      CREATE TABLE task_runs (
+        id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL,
+        status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL,
+        started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL
+      );
+      INSERT INTO task_runs (id, benchmark_run_id, task_revision_id, position, status, snapshot_json, artifact_path, created_at)
+      VALUES ('run-a', 'bench-a', 'task-a', 0, 'completed', '{}', '/tmp/a', '2026-01-01T00:00:00.000Z');
+    `);
+    sqlite.close();
+
+    const store = createStore(filename);
+    const inspect = new DatabaseSync(filename, { readOnly: true });
+    const columns = (inspect.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>).map((column) => column.name);
+    const row = inspect.prepare("SELECT broken_at FROM task_runs WHERE id = 'run-a'").get() as { broken_at: string | null };
+
+    expect(columns).toContain("broken_at");
+    // Старые результаты нерабочими не становятся: пометка ставится только вручную.
+    expect(row.broken_at).toBeNull();
+    inspect.close();
+    store.close();
+  });
+
   it("migrates legacy text runs to their normal OMP environment", () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-legacy-"));
     directories.push(directory);

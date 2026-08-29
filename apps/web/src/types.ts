@@ -186,6 +186,8 @@ export type TaskRun = {
   error: string | null;
   errorDetails?: GenerationErrorDetails | null;
   selectedVersion?: ResultVersion | null;
+  /** Отметка «результат нерабочий»: он не попадает ни в галерею, ни в сводки. */
+  broken_at?: string | null;
   review?: {
     correctness: number;
     code_quality: number;

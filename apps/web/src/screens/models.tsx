@@ -113,6 +113,7 @@ export function ModelsPage() {
   const catalog = useData<ModelCatalog>("model-catalog", "/model-catalog");
   const files = useData<LocalModelFile[]>("local-model-files", "/local-model-files");
   const settings = useData<AppSettings>("settings", "/settings");
+  const archivedModels = useData<Model[]>("archived-models", "/models/archived");
   const [kind, setKind] = useState<"cloud" | "local-gguf">("local-gguf");
   const [profileMode, setProfileMode] = useState<"auto" | "manual">("auto");
   const [filename, setFilename] = useState("");
@@ -135,6 +136,7 @@ export function ModelsPage() {
       client.invalidateQueries({ queryKey: ["models"] }),
       client.invalidateQueries({ queryKey: ["profiles"] }),
       client.invalidateQueries({ queryKey: ["local-model-files"] }),
+      client.invalidateQueries({ queryKey: ["archived-models"] }),
     ]);
   };
   const createLocal = useMutation({
@@ -167,6 +169,10 @@ export function ModelsPage() {
   const disconnect = useMutation({
     mutationFn: (modelId: string) => api(`/models/${modelId}`, { method: "DELETE" }),
     onSuccess: async () => { await invalidateModels(); await client.invalidateQueries({ queryKey: ["settings"] }); },
+  });
+  const restore = useMutation({
+    mutationFn: (modelId: string) => api(`/models/${modelId}/restore`, { method: "POST" }),
+    onSuccess: invalidateModels,
   });
   const rename = useMutation({
     mutationFn: ({ modelId, name }: { modelId: string; name: string }) => api(`/models/${modelId}`, { method: "PATCH", body: JSON.stringify({ name }) }),
@@ -326,12 +332,23 @@ export function ModelsPage() {
             <div className="model-toolbar"><button onClick={() => calibrate.mutate(profile.id)} disabled={calibrate.isPending && calibrate.variables === profile.id}>{calibrate.isPending && calibrate.variables === profile.id ? "Запускаем и проверяем…" : profile.parameters.fit ? "Проверить автоконфигурацию" : "Проверить профиль"}</button><button className="primary" onClick={() => activate.mutate({ modelId: model.id, profileName: profile.name })} disabled={activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name}>{activate.isPending && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? "Настраиваем omp-local…" : "Использовать с omp-local"}</button><button className="danger" aria-label={`Удалить профиль «${profile.name}»`} disabled={modelProfiles.length <= 1 || (deleteProfile.isPending && deleteProfile.variables?.id === profile.id)} onClick={() => confirm({ title: "Удалить профиль?", body: `Профиль «${profile.name}» и его ревизии будут удалены. Результаты прошлых запусков останутся.`, action: "Удалить", onConfirm: () => deleteProfile.mutate(profile) })}>{deleteProfile.isPending && deleteProfile.variables?.id === profile.id ? "Удаляем…" : "Удалить"}</button></div>
             {deleteProfile.error && deleteProfile.variables?.id === profile.id ? <p className="error">{deleteProfile.error.message}</p> : null}
           </section>; })}</div></details> : null}
-          <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button>{checking ? <span className="check-badge"><span className="spinner" />Ждём ответ модели…</span> : diagnostics[model.id] ? <span className={diagnostics[model.id]?.ok ? "check-badge check-pass" : "check-badge check-fail"}>{diagnostics[model.id]?.ok ? <CheckIcon /> : <CloseIcon />} {diagnostics[model.id]?.title}</span> : <small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small>}<button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { confirm({ title: "Отключить модель?", body: `«${model.name}» пропадёт из списка. Результаты прошлых запусков останутся, файл модели не удаляется.`, action: "Отключить", onConfirm: () => disconnect.mutate(model.id) }); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
+          <div className="model-toolbar"><button onClick={() => runner && testModel.mutate({ modelId: model.id, runnerId: runner.id })} disabled={!runner || checking}>{checking ? "Проверяем ответ…" : "Проверить модель"}</button>{checking ? <span className="check-badge"><span className="spinner" />Ждём ответ модели…</span> : diagnostics[model.id] ? <span className={diagnostics[model.id]?.ok ? "check-badge check-pass" : "check-badge check-fail"}>{diagnostics[model.id]?.ok ? <CheckIcon /> : <CloseIcon />} {diagnostics[model.id]?.title}</span> : <small>{runner ? `через ${runner.name}` : "Нет подходящего runner"}</small>}<button className="danger model-disconnect" disabled={disconnect.isPending && disconnect.variables === model.id} onClick={() => { confirm({ title: "Отключить модель?", body: `«${model.name}» уедет в «Отключённые»: её нельзя будет выбрать для запуска. Прошлые результаты, галерея и лидерборд останутся, файл GGUF не удаляется — его можно убрать вручную.`, action: "Отключить", onConfirm: () => disconnect.mutate(model.id) }); }}>{disconnect.isPending && disconnect.variables === model.id ? "Отключаем…" : "Отключить модель"}</button></div>
           {diagnostics[model.id]?.detail ? <p className="model-check-detail">{diagnostics[model.id]?.detail}</p> : null}
           {disconnect.error && disconnect.variables === model.id ? <p className="error">{disconnect.error.message}</p> : null}
         </div></details>;
       })}{!models.data?.length ? <Empty>Пока нет подключённых моделей.</Empty> : null}</div></Panel>
     </div>
+    {archivedModels.data?.length ? <details className="archived-models">
+      <summary><span>Отключённые модели</span><span>{archivedModels.data.length}</span></summary>
+      <div className="archived-models-content">
+        <p className="type-hint">Отключённую модель нельзя выбрать для запуска, но её прошлые результаты остаются в галерее, лидерборде и аналитике. Файл GGUF можно удалить вручную — модель это переживёт.</p>
+        {archivedModels.data.map((model) => <div className="archived-model" key={model.id}>
+          <span className="model-card-copy"><span className="mono">{model.kind === "local-gguf" ? "Локальная GGUF" : "Облачная CLI"} · {model.provider}</span><strong>{model.name}</strong><span>{model.kind === "local-gguf" ? model.path?.split("/").at(-1) : model.modelRef}</span></span>
+          <button disabled={restore.isPending && restore.variables === model.id} onClick={() => restore.mutate(model.id)}>{restore.isPending && restore.variables === model.id ? "Включаем…" : "Включить обратно"}</button>
+        </div>)}
+        {restore.error ? <p className="error">{restore.error.message}</p> : null}
+      </div>
+    </details> : null}
   {confirmView}
   </Page>;
 }
