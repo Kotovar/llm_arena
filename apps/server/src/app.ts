@@ -356,8 +356,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/models", async () => store.listModels().map((model) => {
     if (model.kind !== "local-gguf" || !model.path) return model;
     try {
-      const { sizeBytes, expertCount } = readGgufFacts(model.path);
-      return { ...model, sizeBytes, expertCount };
+      const { sizeBytes, expertCount, layerCount } = readGgufFacts(model.path);
+      return { ...model, sizeBytes, expertCount, layerCount };
     } catch {
       return model;
     }

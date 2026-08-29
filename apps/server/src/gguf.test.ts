@@ -23,12 +23,14 @@ function u64(value: number): Buffer {
   return buffer;
 }
 
-/** Шапка GGUF: строковый ключ, массив строк (его надо перешагнуть) и опциональный expert_count. */
-function ggufHeader(expertCount?: number): Buffer {
+/** Шапка GGUF: строковый ключ, массив строк (его надо перешагнуть) и опциональные block_count/expert_count. */
+function ggufHeader(expertCount?: number, layerCount?: number, expertsFirst = false): Buffer {
+  const experts = expertCount === undefined ? [] : [Buffer.concat([string("gemma3.expert_count"), u32(4), u32(expertCount)])];
+  const blocks = layerCount === undefined ? [] : [Buffer.concat([string("gemma3.block_count"), u32(4), u32(layerCount)])];
   const pairs = [
     Buffer.concat([string("general.architecture"), u32(8), string("gemma3")]),
     Buffer.concat([string("tokenizer.ggml.tokens"), u32(9), u32(8), u64(2), string("a"), string("bb")]),
-    ...(expertCount === undefined ? [] : [Buffer.concat([string("gemma3.expert_count"), u32(4), u32(expertCount)])]),
+    ...(expertsFirst ? [...experts, ...blocks] : [...blocks, ...experts]),
   ];
   return Buffer.concat([Buffer.from("GGUF", "latin1"), u32(3), u64(0), u64(pairs.length), ...pairs]);
 }
@@ -40,17 +42,27 @@ function write(name: string, body: Buffer): string {
 }
 
 describe("readGgufFacts", () => {
-  it("reads the expert count past other metadata", () => {
-    const path = write("moe.gguf", ggufHeader(128));
-    expect(readGgufFacts(path)).toEqual({ sizeBytes: ggufHeader(128).length, expertCount: 128 });
+  it("reads the expert and block counts past other metadata", () => {
+    const body = ggufHeader(128, 48);
+    expect(readGgufFacts(write("moe.gguf", body))).toEqual({ sizeBytes: body.length, expertCount: 128, layerCount: 48 });
   });
 
   it("reports a dense model when the key is absent", () => {
-    expect(readGgufFacts(write("dense.gguf", ggufHeader())).expertCount).toBe(0);
+    const facts = readGgufFacts(write("dense.gguf", ggufHeader(undefined, 32)));
+    expect(facts).toMatchObject({ expertCount: 0, layerCount: 32 });
+  });
+
+  it("reads both counts in either key order", () => {
+    const body = ggufHeader(8, 24, true);
+    expect(readGgufFacts(write("reversed.gguf", body))).toEqual({ sizeBytes: body.length, expertCount: 8, layerCount: 24 });
+  });
+
+  it("reports zero layers when block_count is absent", () => {
+    expect(readGgufFacts(write("no-layers.gguf", ggufHeader(8))).layerCount).toBe(0);
   });
 
   it("falls back to dense on unreadable files", () => {
     const body = Buffer.from("not a gguf file at all");
-    expect(readGgufFacts(write("broken.gguf", body))).toEqual({ sizeBytes: body.length, expertCount: 0 });
+    expect(readGgufFacts(write("broken.gguf", body))).toEqual({ sizeBytes: body.length, expertCount: 0, layerCount: 0 });
   });
 });

@@ -7,7 +7,7 @@ import { CheckIcon, CloseIcon } from "../icons.js";
 import { Empty, NumberField, Page, Panel, useData } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { AppSettings, CalibrationResult, ExternalLauncher, LlamaParameters, LocalModelFile, Model, ModelCatalog, Profile, Runner } from "../types.js";
-import { chooseRunner, defaultLocalProfile, formatCost, formatDuration, latestProfiles, visionProjectorFiles } from "../ui.js";
+import { chooseRunner, defaultLocalProfile, formatCost, formatDuration, gpuLayerSplit, latestProfiles, visionProjectorFiles } from "../ui.js";
 
 type Capabilities = Model["capabilities"];
 
@@ -55,8 +55,9 @@ function ModelCapabilitiesForm({ model, files, pending, save }: { model: Model; 
   </form>;
 }
 
-function NewProfileForm({ modelId, source, pending, create }: { modelId: string; source: Profile; pending: boolean; create: (input: { modelId: string; name: string; parameters: LlamaParameters }) => Promise<Profile> }) {
+function NewProfileForm({ modelId, source, layerCount, pending, create }: { modelId: string; source: Profile; layerCount: number | undefined; pending: boolean; create: (input: { modelId: string; name: string; parameters: LlamaParameters }) => Promise<Profile> }) {
   const [open, setOpen] = useState(false);
+  const [gpuLayers, setGpuLayers] = useState(String(source.parameters.nGpuLayers));
   return <details className="manual-profile" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Добавить профиль</summary><form className="form-grid" onSubmit={(event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -81,11 +82,11 @@ function NewProfileForm({ modelId, source, pending, create }: { modelId: string;
       temperature: Number(data.get("temperature")),
       // Пустой seed — это «пусть llama.cpp выберет сам», а не ноль.
       ...(String(data.get("seed") ?? "").trim() ? { seed: Number(data.get("seed")) } : {}),
-    } }).then(() => { form.reset(); setOpen(false); }).catch(() => undefined);
+    } }).then(() => { form.reset(); setGpuLayers(String(source.parameters.nGpuLayers)); setOpen(false); }).catch(() => undefined);
   }}>
     <label className="span-2">Название профиля<input name="profileName" placeholder="Например, Скорость 32k" required /><small>Отдельное имя создаёт вариант для выбора при запуске; изменение существующего имени создаёт новую ревизию.</small></label>
     <label>Контекст, токенов<input name="context" defaultValue={source.parameters.context} pattern="auto|[0-9]+" required /></label>
-    <label>GPU-слои<input name="nGpuLayers" defaultValue={source.parameters.nGpuLayers} pattern="auto|all|[0-9]+" required /></label>
+    <label>GPU-слои<input name="nGpuLayers" value={gpuLayers} onChange={(event) => setGpuLayers(event.currentTarget.value)} pattern="auto|all|[0-9]+" required />{gpuLayerSplit(gpuLayers, layerCount) ? <small>{gpuLayerSplit(gpuLayers, layerCount)}</small> : null}</label>
     <label>Точность K-кеша<select name="cacheTypeK" defaultValue={source.parameters.cacheTypeK}><option>q8_0</option><option>q4_0</option><option>f16</option></select></label>
     <label>Точность V-кеша<select name="cacheTypeV" defaultValue={source.parameters.cacheTypeV}><option>q8_0</option><option>q4_0</option><option>f16</option></select></label>
     <label>Batch<NumberField name="batchSize" min="1" defaultValue={source.parameters.batchSize} required /></label>
@@ -121,6 +122,7 @@ export function ModelsPage() {
   const [cloudModelRef, setCloudModelRef] = useState("");
   const [localCapabilities, setLocalCapabilities] = useState<Capabilities>({ toolUse: false, vision: false, reasoning: false });
   const [localMmprojFilename, setLocalMmprojFilename] = useState("");
+  const [localGpuLayers, setLocalGpuLayers] = useState("all");
   const [diagnostics, setDiagnostics] = useState<Record<string, { ok: boolean; title: string; detail: string }>>({});
   const [hardware, setHardware] = useState<Record<string, CalibrationResult>>( {});
   const [draggedModelId, setDraggedModelId] = useState<string | null>(null);
@@ -240,6 +242,7 @@ export function ModelsPage() {
     rename.mutate({ modelId, name: String(new FormData(event.currentTarget).get("name") ?? "") });
   }
 
+  const selectedFile = files.data?.find((file) => file.filename === filename);
   const cloudOptions = cloudProvider === "anthropic" ? catalog.data?.claude.models ?? [] : cloudProvider === "openai" ? catalog.data?.codex.models ?? [] : [];
   const visibleProfiles = latestProfiles(profiles.data ?? []);
   return <Page title="Подключённые модели" eyebrow="Модели" intro="Локальные GGUF берутся из доверенной папки. Автопрофиль сам подбирает загрузку под вашу GPU.">
@@ -280,7 +283,7 @@ export function ModelsPage() {
             <p className="type-hint">Не хватает VRAM? Понижайте по порядку: точность KV-кеша до <code>q4_0</code>, затем micro-batch, затем контекст. Слои на CPU трогайте последними — они сильнее всего бьют по скорости.</p>
             <div className="form-grid">
             <label>Контекст, токенов<NumberField name="context" min="4096" step={1024} defaultValue="100000" required /><small>Сколько текста модель удерживает за один запуск. Больше контекст — больше VRAM под кеш, и на MoE-модели больше экспертов уезжает в оперативную память. Контекст ниже примерно 32k заметно ускоряет генерацию.</small></label>
-            <label>Слои на видеокарте<input name="nGpuLayers" defaultValue="all" pattern="all|[0-9]+" required /><small><code>all</code> — вся модель в VRAM, самый быстрый вариант. Число — столько слоёв на GPU, остальное считает процессор: влезет в память, но медленнее.</small></label>
+            <label>Слои на видеокарте<input name="nGpuLayers" value={localGpuLayers} onChange={(event) => setLocalGpuLayers(event.currentTarget.value)} pattern="all|[0-9]+" required /><small><code>all</code> — вся модель в VRAM, самый быстрый вариант. Число — столько слоёв на GPU, остальное считает процессор: влезет в память, но медленнее.{gpuLayerSplit(localGpuLayers, selectedFile?.layerCount) ? ` ${gpuLayerSplit(localGpuLayers, selectedFile?.layerCount)}` : ""}</small></label>
             <label>Точность K-кеша<select name="cacheTypeK" defaultValue="q8_0"><option>q8_0</option><option>q4_0</option><option>f16</option></select><small>KV-кеш — это память внимания, после весов он главный потребитель VRAM. <code>q8_0</code> — вдвое меньше <code>f16</code> почти без потерь, обычно лучший выбор: на MoE освободившаяся VRAM уходит под эксперты и ускоряет генерацию.</small></label>
             <label>Точность V-кеша<select name="cacheTypeV" defaultValue="q8_0"><option>q8_0</option><option>q4_0</option><option>f16</option></select><small>Вторая половина того же кеша. Держите наравне с K; <code>q4_0</code> экономит ещё вдвое, но на длинном контексте ответы могут поплыть.</small></label>
             <label>Micro-batch<NumberField name="ubatchSize" min="1" defaultValue="512" required /><small>Сколько токенов промпта считается за один физический проход. Это пиковый расход VRAM при чтении промпта — уменьшайте первым при нехватке памяти.</small></label>
@@ -312,7 +315,7 @@ export function ModelsPage() {
           {model.kind === "local-gguf" ? <ModelCapabilitiesForm key={`${model.id}:${model.mmprojPath}:${JSON.stringify(model.capabilities)}`} model={model} files={files.data ?? []} pending={saveCapabilities.isPending && saveCapabilities.variables?.modelId === model.id} save={saveCapabilities.mutate} /> : null}
           {saveCapabilities.error && saveCapabilities.variables?.modelId === model.id ? <p className="error">{saveCapabilities.error.message}</p> : null}
           {model.kind === "local-gguf" && modelProfiles[0] ? <details className="profile-group" open><summary><span>Профили запуска</span><span>{modelProfiles.length}</span></summary><div className="profile-group-content">
-          <NewProfileForm modelId={model.id} source={modelProfiles[0]} pending={createProfile.isPending} create={createProfile.mutateAsync} />
+          <NewProfileForm modelId={model.id} source={modelProfiles[0]} layerCount={model.layerCount} pending={createProfile.isPending} create={createProfile.mutateAsync} />
           {createProfile.error ? <p className="error">{createProfile.error.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для omp-local</span> : null}</div>

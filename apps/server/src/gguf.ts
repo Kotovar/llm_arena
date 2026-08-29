@@ -1,6 +1,6 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 
-export type GgufFacts = { sizeBytes: number; expertCount: number };
+export type GgufFacts = { sizeBytes: number; expertCount: number; layerCount: number };
 
 const SCALAR_SIZES: Record<number, number> = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8 };
 const STRING = 8;
@@ -71,7 +71,7 @@ function scalarSize(type: number): number {
   return size;
 }
 
-function readExpertCount(path: string): number {
+function readCounts(path: string): { expertCount: number; layerCount: number } {
   const fd = openSync(path, "r");
   try {
     const reader = new HeaderReader(fd);
@@ -79,13 +79,23 @@ function readExpertCount(path: string): number {
     reader.u32();
     reader.u64();
     const pairs = reader.u64();
+    const counts = { expertCount: 0, layerCount: 0 };
+    let found = 0;
     for (let index = 0; index < pairs; index += 1) {
       const key = reader.text();
       const type = reader.u32();
-      if (key.endsWith(".expert_count")) return type === ARRAY ? 0 : Number(reader.take(scalarSize(type)).readUIntLE(0, Math.min(scalarSize(type), 6)));
+      const field = key.endsWith(".expert_count") ? "expertCount" : key.endsWith(".block_count") ? "layerCount" : null;
+      if (field && type !== ARRAY) {
+        const size = scalarSize(type);
+        counts[field] = Number(reader.take(size).readUIntLE(0, Math.min(size, 6)));
+        // Оба ключа лежат в начале шапки — дальше только словарь токенизатора, читать его незачем.
+        found += 1;
+        if (found === 2) return counts;
+        continue;
+      }
       reader.skipValue(type);
     }
-    return 0;
+    return counts;
   } finally {
     closeSync(fd);
   }
@@ -93,18 +103,18 @@ function readExpertCount(path: string): number {
 
 const cache = new Map<string, GgufFacts & { mtimeMs: number }>();
 
-/** Размер файла и число экспертов (0 — dense). Ошибки чтения не фатальны: считаем модель dense. */
+/** Размер файла, число экспертов (0 — dense) и число слоёв. Ошибки чтения не фатальны: считаем модель dense без известных слоёв. */
 export function readGgufFacts(path: string): GgufFacts {
   const stats = statSync(path);
   const cached = cache.get(path);
   if (cached && cached.mtimeMs === stats.mtimeMs && cached.sizeBytes === stats.size) return cached;
-  let expertCount = 0;
+  let counts = { expertCount: 0, layerCount: 0 };
   try {
-    expertCount = readExpertCount(path);
+    counts = readCounts(path);
   } catch {
-    expertCount = 0;
+    counts = { expertCount: 0, layerCount: 0 };
   }
-  const facts = { sizeBytes: stats.size, expertCount };
+  const facts = { sizeBytes: stats.size, ...counts };
   cache.set(path, { ...facts, mtimeMs: stats.mtimeMs });
   return facts;
 }

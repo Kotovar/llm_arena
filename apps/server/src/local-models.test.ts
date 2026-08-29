@@ -22,8 +22,8 @@ describe("local GGUF discovery", () => {
     writeFileSync(join(root, "nested", "hidden.gguf"), "x");
 
     expect(listLocalModelFiles(root, new Map())).toEqual([
-      { filename: "A.GGUF", sizeBytes: 1, expertCount: 0, connectedModelId: null },
-      { filename: "b.gguf", sizeBytes: 1, expertCount: 0, connectedModelId: null },
+      { filename: "A.GGUF", sizeBytes: 1, expertCount: 0, layerCount: 0, connectedModelId: null },
+      { filename: "b.gguf", sizeBytes: 1, expertCount: 0, layerCount: 0, connectedModelId: null },
     ]);
   });
 
@@ -35,7 +35,7 @@ describe("local GGUF discovery", () => {
     symlinkSync(target, join(root, "linked.gguf"));
 
     expect(listLocalModelFiles(root, new Map())).toEqual([
-      { filename: "target.gguf", sizeBytes: 5, expertCount: 0, connectedModelId: null },
+      { filename: "target.gguf", sizeBytes: 5, expertCount: 0, layerCount: 0, connectedModelId: null },
     ]);
     expect(() => resolveLocalModelFile(root, "linked.gguf")).toThrow("regular GGUF file");
     expect(() => resolveLocalModelFile(root, "../secret.gguf")).toThrow("Invalid model filename");

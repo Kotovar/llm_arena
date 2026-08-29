@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -453,5 +453,25 @@ describe("пик VRAM", () => {
   it("переводит мегабайты в гигабайты и не тянет длинный хвост", () => {
     expect(formatVram(15846)).toBe("15,5 ГиБ");
     expect(formatVram(512)).toBe("512 МиБ");
+  });
+});
+
+describe("раскладка слоёв", () => {
+  it("делит слои между GPU и CPU с учётом выходного слоя", () => {
+    expect(gpuLayerSplit(40, 48)).toBe("Всего слоёв: 49 — 40 на GPU, 9 на CPU.");
+    expect(gpuLayerSplit("all", 48)).toBe("Всего слоёв: 49 — 49 на GPU, 0 на CPU.");
+    expect(gpuLayerSplit(0, 48)).toBe("Всего слоёв: 49 — 0 на GPU, 49 на CPU.");
+  });
+
+  it("не уводит остаток в минус при значении больше числа слоёв", () => {
+    expect(gpuLayerSplit(999, 48)).toBe("Всего слоёв: 49 — 49 на GPU, 0 на CPU.");
+  });
+
+  it("молчит без block_count и на нечисловом значении", () => {
+    expect(gpuLayerSplit(40, 0)).toBeNull();
+    expect(gpuLayerSplit(40, undefined)).toBeNull();
+    expect(gpuLayerSplit("auto", 48)).toBeNull();
+    expect(gpuLayerSplit("", 48)).toBeNull();
+    expect(gpuLayerSplit("1.5", 48)).toBeNull();
   });
 });

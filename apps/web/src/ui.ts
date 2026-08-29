@@ -445,3 +445,18 @@ export function runListMeta(run: { runner_id: string; result_mode: "text" | "web
     ompMode,
   ].filter(Boolean).join(" · ");
 }
+
+/**
+ * Подпись «сколько слоёв уедет на GPU, сколько на CPU» для ручного профиля.
+ * llama.cpp считает `-ngl` по `block_count + 1`: последний «слой» — выход модели.
+ * Null — считать не из чего (нет block_count) или значение ещё не число.
+ */
+export function gpuLayerSplit(nGpuLayers: string | number, layerCount: number | undefined): string | null {
+  if (!layerCount) return null;
+  const total = layerCount + 1;
+  const raw = String(nGpuLayers).trim();
+  const onGpu = raw === "all" ? total : Number(raw);
+  if (raw === "" || raw === "auto" || !Number.isInteger(onGpu) || onGpu < 0) return null;
+  const gpu = Math.min(onGpu, total);
+  return `Всего слоёв: ${total} — ${gpu} на GPU, ${total - gpu} на CPU.`;
+}

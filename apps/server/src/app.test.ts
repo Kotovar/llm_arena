@@ -421,7 +421,7 @@ describe("REST API", () => {
 
     expect(defaults.json()).toMatchObject({ modelDirectory: config.modelDirectory, externalModelId: null });
     expect(updated.json()).toEqual({ modelDirectory: modelsRoot });
-    expect(listed.json()).toEqual([{ filename: "My Model.gguf", sizeBytes: 4, expertCount: 0, connectedModelId: null }]);
+    expect(listed.json()).toEqual([{ filename: "My Model.gguf", sizeBytes: 4, expertCount: 0, layerCount: 0, connectedModelId: null }]);
     expect(connected.statusCode).toBe(201);
     expect(connected.json().model).toMatchObject({ path: join(modelsRoot, "My Model.gguf"), alias: "my-model", modelRef: "my-model" });
     expect(connected.json().profile).toMatchObject({ name: "Manual", parameters });

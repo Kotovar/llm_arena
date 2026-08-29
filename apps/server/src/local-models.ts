@@ -6,6 +6,7 @@ export type LocalModelFile = {
   filename: string;
   sizeBytes: number;
   expertCount: number;
+  layerCount: number;
   connectedModelId: string | null;
 };
 
@@ -23,7 +24,7 @@ export function listLocalModelFiles(directory: string, connectedModels: Readonly
     .map((entry) => {
       const path = resolveLocalModelFile(directory, entry.name);
       const facts = readGgufFacts(path);
-      return { filename: entry.name, sizeBytes: facts.sizeBytes, expertCount: facts.expertCount, connectedModelId: connectedModels.get(path) ?? null };
+      return { filename: entry.name, sizeBytes: facts.sizeBytes, expertCount: facts.expertCount, layerCount: facts.layerCount, connectedModelId: connectedModels.get(path) ?? null };
     })
     .sort((left, right) => left.filename.localeCompare(right.filename, undefined, { sensitivity: "base" }));
 }

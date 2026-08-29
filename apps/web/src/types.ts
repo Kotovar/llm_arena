@@ -40,6 +40,8 @@ export type Model = {
   mmprojPath: string | null;
   sizeBytes?: number;
   expertCount?: number;
+  /** Число блоков модели из GGUF. 0 — прочитать не удалось. */
+  layerCount?: number;
 };
 
 export type LlamaParameters = {
@@ -68,7 +70,7 @@ export type Profile = {
   parameters: LlamaParameters;
 };
 
-export type LocalModelFile = { filename: string; sizeBytes: number; expertCount: number; connectedModelId: string | null };
+export type LocalModelFile = { filename: string; sizeBytes: number; expertCount: number; layerCount: number; connectedModelId: string | null };
 export type AppSettings = {
   modelDirectory: string;
   externalModelId: string | null;
