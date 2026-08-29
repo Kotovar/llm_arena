@@ -164,6 +164,7 @@ describe("интерфейс запуска", () => {
 
   it("считает понятный прогресс набора промптов", () => {
     expect(runProgress(10, ["completed", "completed", "running"])).toEqual({ current: 3, completed: 2, percent: 20 });
+    expect(runProgress(10, ["failed", "failed", "running"])).toEqual({ current: 3, completed: 0, percent: 0 });
     expect(runProgress(1, ["completed"])).toEqual({ current: 1, completed: 1, percent: 100 });
   });
 

@@ -237,8 +237,9 @@ export function runTabTitle(active: boolean, current: number, total: number, tas
 
 export function runProgress(total: number, statuses: string[]) {
   const completed = statuses.filter((status) => status === "completed").length;
+  const finished = statuses.filter((status) => status !== "pending" && status !== "running").length;
   return {
-    current: Math.min(total, completed + (completed < total ? 1 : 0)),
+    current: Math.min(total, finished + (finished < total ? 1 : 0)),
     completed,
     percent: total ? Math.round((completed / total) * 100) : 0,
   };
