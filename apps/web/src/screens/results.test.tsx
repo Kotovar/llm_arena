@@ -144,6 +144,7 @@ describe("журнал", () => {
     const user = userEvent.setup();
     await renderResult();
 
+    await user.click(screen.getByRole("button", { name: "Логи" }));
     await user.click(screen.getByRole("button", { name: "Ошибки" }));
 
     expect(await screen.findByText("Пусто — в этот поток ничего не записано.")).toBeDefined();
@@ -158,12 +159,12 @@ describe("журнал: кэш", () => {
     fetchMock.mockImplementation(async () => new Response(body, { status: 200 }));
     await renderResult();
 
-    await user.click(screen.getByRole("button", { name: "Сырые логи" }));
+    await user.click(screen.getByRole("button", { name: "Логи" }));
     expect(await screen.findByText("первый хвост")).toBeDefined();
     await user.click(screen.getByRole("button", { name: "Закрыть журнал" }));
 
     body = "второй хвост";
-    await user.click(screen.getByRole("button", { name: "Сырые логи" }));
+    await user.click(screen.getByRole("button", { name: "Логи" }));
 
     expect(await screen.findByText("второй хвост")).toBeDefined();
   });
