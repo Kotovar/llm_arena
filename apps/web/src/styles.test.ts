@@ -53,6 +53,12 @@ describe("цветовая доступность", () => {
     expect(files.every((file) => /-(latin|cyrillic)-wght-normal$/u.test(file))).toBe(true);
   });
 
+  // :has(.icon) весит больше класса кнопки: без :where() общее правило перебивало раскладку .dialog-close.
+  it("не даёт общему правилу иконок перебить раскладку конкретной кнопки", () => {
+    expect(css).toMatch(/button:where\(:has\(\.icon\)\), a:where\(:has\(\.icon\)\)/);
+    expect(css).not.toMatch(/button:has\(\.icon\), a:has\(\.icon\) \{/);
+  });
+
   it("держит иконки одного размера", () => {
     expect(css).toMatch(/\.icon \{[^}]*width: 16px;[^}]*height: 16px/);
   });

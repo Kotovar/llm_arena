@@ -76,3 +76,34 @@ describe("галерея по тегам", () => {
     expect(within(screen.getByRole("table")).getByText("Без тега")).toBeTruthy();
   });
 });
+
+describe("preview в подробностях результата", () => {
+  beforeEach(() => {
+    gallery = [{ ...result("p1", "Аквариум", ["код"]), screenshotUrl: "/api/shot.png" }];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return new Response(JSON.stringify({ taskRunId: "run-p1", resultSha: "a".repeat(40), url: "http://localhost:4321/" }), { status: 200, headers: { "content-type": "application/json" } });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return new Response(JSON.stringify(gallery), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+  });
+
+  // Живой preview занимает место снимка: две копии одной версии рядом сбивают с толку.
+  it("подменяет снимок живым preview и возвращает его обратно", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+
+    await user.click(screen.getByRole("button", { name: /Аквариум/u }));
+    expect(document.querySelector("img.gallery-detail-shot")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /Запустить preview/u }));
+
+    expect(await screen.findByTitle("Preview: Аквариум")).toBeTruthy();
+    expect(document.querySelector("img.gallery-detail-shot")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Остановить preview" }));
+
+    await waitFor(() => expect(document.querySelector("img.gallery-detail-shot")).toBeTruthy());
+    expect(screen.queryByTitle("Preview: Аквариум")).toBeNull();
+  });
+});
