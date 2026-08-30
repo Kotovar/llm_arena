@@ -52,6 +52,56 @@ export function NumberField({ step: stepSize, ...props }: Omit<ComponentProps<"i
  * Сочетание описывается строкой («ctrl+Enter», «/», «ArrowLeft»), а не колбэком-матчером:
  * стабильная строка в зависимостях избавляет от переподписки на каждый рендер.
  */
+export type SelectOption = { value: string; label: string; disabled?: boolean };
+
+/**
+ * Замена нативному <select>: его выпадающий список рисует ОС, и в ней выбор идёт зажатой кнопкой
+ * мыши, а не привычным «кликнул — открылось, кликнул — выбралось». Открытость держит сам <details>.
+ * Управляемый режим — value + onSelect, форма с FormData — name + defaultValue через скрытое поле.
+ */
+export function SelectMenu({ label, options, value, onSelect, name, defaultValue = "", placeholder, disabled }: {
+  label: string;
+  options: readonly SelectOption[];
+  value?: string;
+  onSelect?: (value: string) => void;
+  name?: string;
+  defaultValue?: string;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [own, setOwn] = useState(defaultValue);
+  const field = useRef<HTMLInputElement>(null);
+  const current = value ?? own;
+  const currentLabel = options.find((option) => option.value === current)?.label ?? placeholder ?? "Выберите";
+  // form.reset() откатывает только настоящие поля формы, поэтому своё значение возвращаем сами.
+  useEffect(() => {
+    const form = field.current?.form;
+    if (!form) return;
+    const reset = () => setOwn(defaultValue);
+    form.addEventListener("reset", reset);
+    return () => form.removeEventListener("reset", reset);
+  }, [defaultValue]);
+  return <>
+    <details className="select-menu" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }} onKeyDown={(event) => { if (event.key === "Escape") event.currentTarget.open = false; }}>
+      <summary aria-label={label} aria-disabled={disabled} tabIndex={disabled ? -1 : undefined} onClick={(event) => { if (disabled) event.preventDefault(); }}>{currentLabel}</summary>
+      <div role="group" aria-label={label}>{options.map((option) => <button
+        type="button"
+        key={option.value}
+        className={option.value === current ? "active" : ""}
+        aria-pressed={option.value === current}
+        disabled={option.disabled}
+        onClick={(event) => {
+          setOwn(option.value);
+          onSelect?.(option.value);
+          const menu = event.currentTarget.closest("details");
+          if (menu) menu.open = false;
+        }}
+      >{option.label}</button>)}</div>
+    </details>
+    {name ? <input type="hidden" ref={field} name={name} value={current} /> : null}
+  </>;
+}
+
 export function useHotkey(combo: string, run: (() => void) | undefined) {
   const handler = useRef(run);
   useEffect(() => { handler.current = run; });

@@ -39,6 +39,12 @@ afterEach(() => {
 
 const checkbox = (name: string) => screen.findByRole<HTMLInputElement>("checkbox", { name: new RegExp(name, "u") });
 
+// Выбор в SelectMenu — это два клика: по кнопке списка и по нужному пункту.
+async function pick(user: ReturnType<typeof userEvent.setup>, label: string | RegExp, option: string | RegExp) {
+  await user.click(await screen.findByLabelText(label, { selector: "summary" }));
+  await user.click(await screen.findByRole("button", { name: option }));
+}
+
 describe("отметки о готовых результатах", () => {
   it("показывает, что по промпту уже есть результат выбранной модели", async () => {
     const user = userEvent.setup();
@@ -59,7 +65,7 @@ describe("отметки о готовых результатах", () => {
     // По умолчанию выбрана первая модель, у неё результат уже есть.
     expect(await screen.findByText("уже есть у этой модели")).toBeDefined();
 
-    await user.selectOptions(screen.getByLabelText("Подключение"), "model-2");
+    await pick(user, "Подключение", /Вторая/u);
 
     expect(await screen.findByText("есть у 1 модели")).toBeDefined();
   });
@@ -102,7 +108,7 @@ describe("профиль локальной модели", () => {
 
     await renderInApp(<Launcher />, "/");
 
-    await user.selectOptions(await screen.findByLabelText("Профиль запуска"), "quality");
+    await pick(user, "Профиль запуска", /Качество/u);
     await user.click(await screen.findByRole("button", { name: /Запустить/u }));
 
     await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ executionProfileId: "quality" })]));
@@ -113,7 +119,7 @@ describe("профиль локальной модели", () => {
     await renderInApp(<Launcher />, "/");
     await user.click(await screen.findByText("Дополнительные настройки"));
 
-    await user.selectOptions(await screen.findByLabelText(/Повторов каждого промпта/u), "3");
+    await pick(user, "Повторов каждого промпта", "3");
     await user.click(await checkbox("Прогревочный прогон"));
     await user.click(await screen.findByRole("button", { name: /Запустить/u }));
 
@@ -147,7 +153,7 @@ describe("профиль локальной модели", () => {
 
     expect(await screen.findByText("Модель того запуска больше не подключена — промпты перенесены, а модель и её параметры выберите заново.")).toBeDefined();
     // Несуществующий id не застревает в выборе: подставлена доступная модель, запуск возможен.
-    expect(screen.getByRole<HTMLSelectElement>("combobox", { name: "Подключение" }).value).toBe("model-1");
+    expect(screen.getByLabelText("Подключение", { selector: "summary" }).textContent).toBe("Модель · openai");
     expect(screen.getByRole<HTMLButtonElement>("button", { name: /Запустить/u }).disabled).toBe(false);
   });
 

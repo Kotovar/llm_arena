@@ -3,7 +3,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { ExternalIcon } from "../icons.js";
-import { Empty, Page, Status, useData } from "../shell.js";
+import { Empty, Page, SelectMenu, Status, useData } from "../shell.js";
 import type { Model, PairReview, Run, Runner, Task, TaskRun } from "../types.js";
 import { betterResult, formatRelativeTime, formatReviewSummary, matchTaskRuns, reviewPossible, reviewSummary, reviewTotal, runModelName } from "../ui.js";
 import { metric, ResultPreview, stopPreviewTarget, usePreviewHeartbeat, useStopPreviewOnUnmount } from "./results.js";
@@ -169,7 +169,7 @@ export function ComparePage() {
     </div>
     <div hidden={tab !== "blind"}><BlindQueue /></div>
     <div hidden={tab !== "manual"}>
-    <div className="compare-pickers"><select value={left} onChange={(event) => select("left")(event.currentTarget.value)} aria-label="Первый запуск"><option value="">Первый запуск</option>{completed.map((run) => <option key={run.id} value={run.id} disabled={run.id === right}>{label(run)}</option>)}</select><span>и</span><select value={right} onChange={(event) => select("right")(event.currentTarget.value)} aria-label="Второй запуск"><option value="">Второй запуск</option>{completed.map((run) => <option key={run.id} value={run.id} disabled={run.id === left}>{label(run)}</option>)}</select></div>
+    <div className="compare-pickers"><SelectMenu label="Первый запуск" value={left} onSelect={select("left")} options={[{ value: "", label: "Первый запуск" }, ...completed.map((run) => ({ value: run.id, label: label(run), disabled: run.id === right }))]} /><span>и</span><SelectMenu label="Второй запуск" value={right} onSelect={select("right")} options={[{ value: "", label: "Второй запуск" }, ...completed.map((run) => ({ value: run.id, label: label(run), disabled: run.id === left }))]} /></div>
     {rows.length ? <div className="compare-table"><header><strong>Промпт</strong><div><strong>{leftRun.data ? label(leftRun.data) : "Первый"}</strong><span>{runScore(leftRun.data)}</span></div><div><strong>{rightRun.data ? label(rightRun.data) : "Второй"}</strong><span>{runScore(rightRun.data)}</span></div></header>{rows.map((row, index) => {
       const [first, second] = [row.left, row.right];
       const winner = betterResult(first, second);

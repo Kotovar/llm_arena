@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { api } from "../api.js";
 import { useConfirm } from "../confirm.js";
 import { CheckIcon, CloseIcon } from "../icons.js";
-import { Empty, NumberField, Page, Panel, useData } from "../shell.js";
+import { Empty, NumberField, Page, Panel, SelectMenu, useData } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { AppSettings, CalibrationResult, ExternalLauncher, LlamaParameters, LocalModelFile, Model, ModelCatalog, Profile, Runner } from "../types.js";
 import { chooseRunner, defaultLocalProfile, formatCost, formatDuration, gpuLayerSplit, latestProfiles, visionProjectorFiles } from "../ui.js";
@@ -44,10 +44,7 @@ function ModelCapabilitiesForm({ model, files, pending, save }: { model: Model; 
     <fieldset className="capability-fieldset"><legend>Возможности модели</legend>
       <CapabilityCheckboxes value={capabilities} onChange={setCapabilities} />
       {model.kind === "local-gguf" && capabilities.vision ? <label>Vision-проектор <code>mmproj</code>
-        <select value={mmprojFilename} onChange={(event) => setMmprojFilename(event.currentTarget.value)} required>
-          <option value="">Выберите отдельный файл mmproj</option>
-          {visionProjectorFiles(files).map((file) => <option key={file.filename} value={file.filename}>{file.filename}</option>)}
-        </select>
+        <SelectMenu label="Vision-проектор mmproj" value={mmprojFilename} onSelect={setMmprojFilename} options={[{ value: "", label: "Выберите отдельный файл mmproj" }, ...visionProjectorFiles(files).map((file) => ({ value: file.filename, label: file.filename }))]} />
         <small>Это отдельный GGUF-файл для обработки изображений, не основная модель. llama.cpp получит его через <code>--mmproj</code>.</small>
       </label> : null}
     </fieldset>
@@ -87,11 +84,11 @@ function NewProfileForm({ modelId, source, layerCount, pending, create }: { mode
     <label className="span-2">Название профиля<input name="profileName" placeholder="Например, Скорость 32k" required /><small>Отдельное имя создаёт вариант для выбора при запуске; изменение существующего имени создаёт новую ревизию.</small></label>
     <label>Контекст, токенов<input name="context" defaultValue={source.parameters.context} pattern="auto|[0-9]+" required /></label>
     <label>GPU-слои<input name="nGpuLayers" value={gpuLayers} onChange={(event) => setGpuLayers(event.currentTarget.value)} pattern="auto|all|[0-9]+" required />{gpuLayerSplit(gpuLayers, layerCount) ? <small>{gpuLayerSplit(gpuLayers, layerCount)}</small> : null}</label>
-    <label>Точность K-кеша<select name="cacheTypeK" defaultValue={source.parameters.cacheTypeK}><option>q8_0</option><option>q4_0</option><option>f16</option></select></label>
-    <label>Точность V-кеша<select name="cacheTypeV" defaultValue={source.parameters.cacheTypeV}><option>q8_0</option><option>q4_0</option><option>f16</option></select></label>
+    <label>Точность K-кеша<SelectMenu label="Точность K-кеша" name="cacheTypeK" defaultValue={source.parameters.cacheTypeK} options={[{ value: "q8_0", label: "q8_0" }, { value: "q4_0", label: "q4_0" }, { value: "f16", label: "f16" }]} /></label>
+    <label>Точность V-кеша<SelectMenu label="Точность V-кеша" name="cacheTypeV" defaultValue={source.parameters.cacheTypeV} options={[{ value: "q8_0", label: "q8_0" }, { value: "q4_0", label: "q4_0" }, { value: "f16", label: "f16" }]} /></label>
     <label>Batch<NumberField name="batchSize" min="1" defaultValue={source.parameters.batchSize} required /></label>
     <label>Micro-batch<NumberField name="ubatchSize" min="1" defaultValue={source.parameters.ubatchSize} required /></label>
-    <label>Flash Attention<select name="flashAttention" defaultValue={source.parameters.flashAttention === "auto" ? "auto" : source.parameters.flashAttention ? "on" : "off"}><option value="auto">Автоматически</option><option value="on">Включить</option><option value="off">Выключить</option></select></label>
+    <label>Flash Attention<SelectMenu label="Flash Attention" name="flashAttention" defaultValue={source.parameters.flashAttention === "auto" ? "auto" : source.parameters.flashAttention ? "on" : "off"} options={[{ value: "auto", label: "Автоматически" }, { value: "on", label: "Включить" }, { value: "off", label: "Выключить" }]} /></label>
     <label>Переиспользование KV<NumberField name="cacheReuse" min="0" defaultValue={source.parameters.cacheReuse} required /></label>
     <label>Эксперты на CPU<NumberField name="nCpuMoe" min="0" defaultValue={source.parameters.nCpuMoe ?? ""} placeholder="не переносить" /></label>
     <label><input name="fit" type="checkbox" defaultChecked={source.parameters.fit} />Автоподбор загрузки</label>
@@ -260,20 +257,14 @@ export function ModelsPage() {
       <Panel title={kind === "local-gguf" ? "Добавить локальную модель" : "Добавить облачную модель"}>
         {kind === "local-gguf" ? <form onSubmit={submitLocal} className="form-grid">
           <label className="span-2">GGUF-файл
-            <select value={filename} onChange={(event) => { const next = event.currentTarget.value; setFilename(next); if (!nameTouched) setLocalName(next.replace(/\.gguf$/iu, "")); }} required>
-              <option value="">Выберите файл из {settings.data?.modelDirectory ?? "каталога моделей"}</option>
-              {files.data?.map((file) => <option key={file.filename} value={file.filename} disabled={Boolean(file.connectedModelId)}>{file.filename} · {ggufSummary(file.sizeBytes, file.expertCount)}{file.connectedModelId ? " · уже подключена" : ""}</option>)}
-            </select>
+            <SelectMenu label="GGUF-файл" value={filename} onSelect={(next) => { setFilename(next); if (!nameTouched) setLocalName(next.replace(/\.gguf$/iu, "")); }} options={[{ value: "", label: `Выберите файл из ${settings.data?.modelDirectory ?? "каталога моделей"}` }, ...(files.data ?? []).map((file) => ({ value: file.filename, label: `${file.filename} · ${ggufSummary(file.sizeBytes, file.expertCount)}${file.connectedModelId ? " · уже подключена" : ""}`, disabled: Boolean(file.connectedModelId) }))]} />
             <small>Путь не вводится вручную: сервер проверяет файл и не разрешает выход из настроенной папки.</small>
           </label>
           <label className="span-2">Название в результатах<input value={localName} onChange={(event) => { setLocalName(event.currentTarget.value); setNameTouched(true); }} placeholder="Например, Gemma 4 E4B" required /></label>
           <fieldset className="capability-fieldset span-2"><legend>Возможности модели</legend>
             <CapabilityCheckboxes value={localCapabilities} onChange={setLocalCapabilities} />
             {localCapabilities.vision ? <label>Vision-проектор <code>mmproj</code>
-              <select value={localMmprojFilename} onChange={(event) => setLocalMmprojFilename(event.currentTarget.value)} required>
-                <option value="">Выберите отдельный файл mmproj</option>
-                {visionProjectorFiles(files.data ?? []).map((file) => <option key={file.filename} value={file.filename}>{file.filename}</option>)}
-              </select>
+              <SelectMenu label="Vision-проектор mmproj" value={localMmprojFilename} onSelect={setLocalMmprojFilename} options={[{ value: "", label: "Выберите отдельный файл mmproj" }, ...visionProjectorFiles(files.data ?? []).map((file) => ({ value: file.filename, label: file.filename }))]} />
               <small>Это отдельный GGUF-файл для обработки изображений, не повторный выбор основной модели.</small>
             </label> : null}
           </fieldset>
@@ -290,11 +281,11 @@ export function ModelsPage() {
             <div className="form-grid">
             <label>Контекст, токенов<NumberField name="context" min="4096" step={1024} defaultValue="100000" required /><small>Сколько текста модель удерживает за один запуск. Больше контекст — больше VRAM под кеш, и на MoE-модели больше экспертов уезжает в оперативную память. Контекст ниже примерно 32k заметно ускоряет генерацию.</small></label>
             <label>Слои на видеокарте<input name="nGpuLayers" value={localGpuLayers} onChange={(event) => setLocalGpuLayers(event.currentTarget.value)} pattern="all|[0-9]+" required /><small><code>all</code> — вся модель в VRAM, самый быстрый вариант. Число — столько слоёв на GPU, остальное считает процессор: влезет в память, но медленнее.{gpuLayerSplit(localGpuLayers, selectedFile?.layerCount) ? ` ${gpuLayerSplit(localGpuLayers, selectedFile?.layerCount)}` : ""}</small></label>
-            <label>Точность K-кеша<select name="cacheTypeK" defaultValue="q8_0"><option>q8_0</option><option>q4_0</option><option>f16</option></select><small>KV-кеш — это память внимания, после весов он главный потребитель VRAM. <code>q8_0</code> — вдвое меньше <code>f16</code> почти без потерь, обычно лучший выбор: на MoE освободившаяся VRAM уходит под эксперты и ускоряет генерацию.</small></label>
-            <label>Точность V-кеша<select name="cacheTypeV" defaultValue="q8_0"><option>q8_0</option><option>q4_0</option><option>f16</option></select><small>Вторая половина того же кеша. Держите наравне с K; <code>q4_0</code> экономит ещё вдвое, но на длинном контексте ответы могут поплыть.</small></label>
+            <label>Точность K-кеша<SelectMenu label="Точность K-кеша" name="cacheTypeK" defaultValue="q8_0" options={[{ value: "q8_0", label: "q8_0" }, { value: "q4_0", label: "q4_0" }, { value: "f16", label: "f16" }]} /><small>KV-кеш — это память внимания, после весов он главный потребитель VRAM. <code>q8_0</code> — вдвое меньше <code>f16</code> почти без потерь, обычно лучший выбор: на MoE освободившаяся VRAM уходит под эксперты и ускоряет генерацию.</small></label>
+            <label>Точность V-кеша<SelectMenu label="Точность V-кеша" name="cacheTypeV" defaultValue="q8_0" options={[{ value: "q8_0", label: "q8_0" }, { value: "q4_0", label: "q4_0" }, { value: "f16", label: "f16" }]} /><small>Вторая половина того же кеша. Держите наравне с K; <code>q4_0</code> экономит ещё вдвое, но на длинном контексте ответы могут поплыть.</small></label>
             <label>Micro-batch<NumberField name="ubatchSize" min="1" defaultValue="512" required /><small>Сколько токенов промпта считается за один физический проход. Это пиковый расход VRAM при чтении промпта — уменьшайте первым при нехватке памяти.</small></label>
             <label>Batch<NumberField name="batchSize" min="1" defaultValue="1024" required /><small>Логический размер порции промпта, кратный micro-batch. На память влияет слабо, на скорость чтения — заметно.</small></label>
-            <label>Flash Attention<select name="flashAttention" defaultValue="auto"><option value="auto">Автоматически</option><option value="on">Включить</option><option value="off">Выключить</option></select><small>Экономный алгоритм внимания: быстрее и меньше памяти на длинном контексте. «Автоматически» — решает llama.cpp по вашей видеокарте.</small></label>
+            <label>Flash Attention<SelectMenu label="Flash Attention" name="flashAttention" defaultValue="auto" options={[{ value: "auto", label: "Автоматически" }, { value: "on", label: "Включить" }, { value: "off", label: "Выключить" }]} /><small>Экономный алгоритм внимания: быстрее и меньше памяти на длинном контексте. «Автоматически» — решает llama.cpp по вашей видеокарте.</small></label>
             <label>Переиспользование KV, токенов<NumberField name="cacheReuse" min="0" defaultValue="256" required /><small>Сколько токенов из прошлого запроса брать из кеша вместо повторного расчёта. Ускоряет уточнения, <code>0</code> — считать каждый раз заново.</small></label>
             <label>Экспертные слои на CPU<NumberField name="nCpuMoe" min="0" placeholder="не переносить" /><small>Только для MoE-моделей. Переносит часть экспертов в оперативную память: освобождает VRAM ценой скорости. Пусто — всё на видеокарте.</small></label>
           </div></details> : null}
@@ -304,7 +295,7 @@ export function ModelsPage() {
           {createLocal.error ? <p className="error span-2">{createLocal.error.message}</p> : null}
         </form> : <form onSubmit={submitCloud} className="form-grid">
           <label>Название<input name="name" required /></label>
-          <label>Провайдер<select value={cloudProvider} onChange={(event) => { setCloudProvider(event.target.value as typeof cloudProvider); setCloudModelRef(""); }}><option value="anthropic">Claude Code</option><option value="openai">Codex CLI</option><option value="opencode">OpenCode</option></select></label>
+          <label>Провайдер<SelectMenu label="Провайдер" value={cloudProvider} onSelect={(value) => { setCloudProvider(value as typeof cloudProvider); setCloudModelRef(""); }} options={[{ value: "anthropic", label: "Claude Code" }, { value: "openai", label: "Codex CLI" }, { value: "opencode", label: "OpenCode" }]} /></label>
           <label className="span-2">Модель<input list="cloud-models" value={cloudModelRef} onChange={(event) => setCloudModelRef(event.target.value)} placeholder={cloudProvider === "opencode" ? "opencode/nemotron-3-ultra-free" : undefined} required /><datalist id="cloud-models">{cloudOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</datalist><small>{cloudProvider === "opencode" ? <>Введите ID из <code>opencode models</code>, например <code>opencode/nemotron-3-ultra-free</code>.</> : "Можно выбрать найденную модель или ввести полный ID."}</small></label>
           <small className="span-2">Tools, Vision и Reasoning для облачных моделей включаются автоматически.</small>
           <button className="primary" disabled={createCloud.isPending}>{createCloud.isPending ? "Подключаем…" : "Подключить"}</button>{createCloud.error ? <p className="error">{createCloud.error.message}</p> : null}

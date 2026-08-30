@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDialogSupport, renderInApp } from "../test-harness.js";
 import type { TaskRun } from "../types.js";
-import { criteriaForKind, RunDetail, TaskResult } from "./results.js";
+import { criteriaForKind, RunDetail, RunsPage, TaskResult } from "./results.js";
 
 installDialogSupport();
 
@@ -48,6 +48,42 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+describe("фильтры списка запусков", () => {
+  const run = (id: string, modelId: string, name: string) => ({ id, model_id: modelId, runner_id: "runner-1", status: "completed", created_at: "2026-01-01T00:00:00.000Z", snapshot_json: JSON.stringify({ model: { name } }), use_omp_agent: 0 });
+
+  beforeEach(() => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url).includes("/runs") ? [run("run-a", "model-1", "hy3"), run("run-b", "model-2", "Claude")] : [];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+  });
+
+  // Нативный select открывает попап ОС: выбор в нём идёт зажатой кнопкой мыши, а не кликом.
+  it("выбирает модель кликом по пункту и закрывает список", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<RunsPage />, "/runs");
+    await screen.findByText("Запусков: 2 из 2");
+
+    await user.click(screen.getByLabelText("Фильтр по модели", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: "Claude" }));
+
+    await waitFor(() => expect(screen.getByText("Запусков: 1 из 2")).toBeTruthy());
+    expect(document.querySelector(".select-menu")!.hasAttribute("open")).toBe(false);
+    expect(screen.getByLabelText("Фильтр по модели", { selector: "summary" }).textContent).toBe("Claude");
+  });
+
+  it("сбрасывает фильтр пунктом «Все модели»", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<RunsPage />, "/runs?model=model-2");
+    await screen.findByText("Запусков: 1 из 2");
+
+    await user.click(screen.getByLabelText("Фильтр по модели", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: "Все модели" }));
+
+    await waitFor(() => expect(screen.getByText("Запусков: 2 из 2")).toBeTruthy());
+  });
 });
 
 describe("критерии оценки", () => {
@@ -132,6 +168,18 @@ describe("шкала оценки", () => {
 
     await user.unhover(cells[2]!);
     expect(filled("on")).toHaveLength(8);
+  });
+
+  // Мышь на узких делениях сползает между нажатием и отпусканием, поэтому ждать полного клика нельзя.
+  it("ставит оценку уже по нажатию мыши, без отпускания", async () => {
+    const user = userEvent.setup();
+    await renderResult();
+    const scale = screen.getAllByTitle(/^\d+ из 10$/u).slice(0, 10)[0]!.parentElement!;
+    const cells = within(scale).getAllByTitle(/^\d+ из 10$/u);
+
+    await user.pointer({ target: cells[4]!, keys: "[MouseLeft>]" });
+
+    expect(within(scale).getAllByText(/^\d+$/u).filter((cell) => cell.className.includes("on"))).toHaveLength(5);
   });
 });
 
@@ -450,6 +498,34 @@ describe("теги промпта в результате", () => {
 });
 
 describe("остановка preview", () => {
+  it("гасит preview промпта при переходе к соседнему", async () => {
+    const user = userEvent.setup();
+    const run = {
+      id: "run-1",
+      status: "completed",
+      snapshot_json: JSON.stringify({ tasks: [{}, {}], model: { name: "Модель" } }),
+      runner_id: "codex",
+      result_mode: "web",
+      use_omp_agent: 0,
+      error: null,
+      taskRuns: [taskRunAt(0, "Аквариум"), taskRunAt(1, "Часы")].map((item) => ({ ...item, snapshot_json: JSON.stringify({ ...JSON.parse(item.snapshot_json), fixture: { id: "web-app", name: "Web", preview: { readyPath: "/" } } }) })),
+    };
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return new Response(JSON.stringify({ taskRunId: run.taskRuns[0]!.id, resultSha: "a".repeat(40), url: "http://127.0.0.1:4321/" }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify(String(url).startsWith("/api/runs/") ? run : []), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    await user.click(await screen.findByRole("button", { name: /Запустить preview/u }));
+    await screen.findByRole("button", { name: "Остановить preview" });
+    await user.click(screen.getByRole("button", { name: /Часы/u }));
+
+    // Сборка соседнего промпта не должна продолжать висеть после ухода с него.
+    const stop = fetchMock.mock.calls.find(([url, init]) => url === "/api/preview" && (init as RequestInit | undefined)?.method === "DELETE");
+    expect(JSON.parse(String((stop![1] as RequestInit).body))).toMatchObject({ taskRunId: run.taskRuns[0]!.id });
+  });
+
   it("гасит именно свой preview, а не все запущенные", async () => {
     const user = userEvent.setup();
     const preview = { taskRunId: "run-task-1", resultSha: "a".repeat(40), url: "http://127.0.0.1:4321/" };

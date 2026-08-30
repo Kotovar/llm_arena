@@ -56,6 +56,41 @@ describe("профили локальной модели", () => {
     });
   });
 
+  // Списки формы отдают значение скрытым полем: без него FormData потеряла бы параметр.
+  it("кладёт выбранную точность кеша в создаваемый профиль", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<ModelsPage />);
+    const form = (await screen.findByText("Добавить профиль")).closest("details")!;
+    await user.click(await screen.findByText("Добавить профиль"));
+
+    await user.type(within(form).getByLabelText(/Название профиля/u), "Экономный");
+    const cacheK = within(form).getByLabelText("Точность K-кеша", { selector: "summary" });
+    await user.click(cacheK);
+    await user.click(within(cacheK.closest("details")!).getByRole("button", { name: "q4_0" }));
+    await user.click(await screen.findByRole("button", { name: "Создать профиль" }));
+
+    await waitFor(() => expect(profileBodies).toEqual([expect.objectContaining({
+      parameters: expect.objectContaining({ cacheTypeK: "q4_0", cacheTypeV: "q8_0" }),
+    })]));
+  });
+
+  // Форма профиля не размонтируется при закрытии, поэтому после сохранения списки должны вернуться к исходным значениям.
+  it("возвращает списки к значениям профиля после создания", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<ModelsPage />);
+    const form = (await screen.findByText("Добавить профиль")).closest("details")!;
+    await user.click(await screen.findByText("Добавить профиль"));
+
+    await user.type(within(form).getByLabelText(/Название профиля/u), "Экономный 2");
+    const cacheK = within(form).getByLabelText("Точность K-кеша", { selector: "summary" });
+    await user.click(cacheK);
+    await user.click(within(cacheK.closest("details")!).getByRole("button", { name: "q4_0" }));
+    await user.click(await screen.findByRole("button", { name: "Создать профиль" }));
+
+    await waitFor(() => expect(profileBodies).toHaveLength(1));
+    await waitFor(() => expect(cacheK.textContent).toBe("q8_0"));
+  });
+
   it("сохраняет температуру и seed, введённые для варианта профиля", async () => {
     const user = userEvent.setup();
     await renderInApp(<ModelsPage />);
