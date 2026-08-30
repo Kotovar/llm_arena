@@ -108,6 +108,42 @@ describe("preview в подробностях результата", () => {
   });
 });
 
+describe("подробности результата", () => {
+  const opened = (extra: Partial<GalleryResult>): GalleryResult => ({ ...result("p1", "Аквариум", ["код"]), screenshotUrl: "/api/shot.png", ...extra });
+
+  // Единственный результат в ячейке и так главный: выбирать не из чего.
+  it("прячет «сделать главным», пока у пары модель×промпт один результат", async () => {
+    const user = userEvent.setup();
+    gallery = [opened({})];
+    await renderInApp(<GalleryPage />);
+    await user.click(await screen.findByRole("button", { name: /Аквариум/u }));
+
+    expect(screen.queryByRole("button", { name: "Сделать главным в галерее" })).toBeNull();
+  });
+
+  it("показывает «сделать главным», когда результатов несколько", async () => {
+    const user = userEvent.setup();
+    gallery = [opened({}), opened({ taskRunId: "run-p1-b" })];
+    await renderInApp(<GalleryPage />);
+    await user.click((await screen.findAllByRole("button", { name: /Аквариум/u }))[0]!);
+
+    expect(screen.getByRole("button", { name: "Сделать главным в галерее" })).toBeTruthy();
+  });
+
+  it("показывает тег выполнения и комментарий к оценке", async () => {
+    const user = userEvent.setup();
+    gallery = [opened({ completion: "partial", reviewComment: "Драг-н-дроп работает через раз" })];
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+    expect(document.querySelector(".completion-dot.partial")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /Аквариум/u }));
+
+    expect(screen.getByText("Выполнен частично")).toBeTruthy();
+    expect(screen.getByText(/Драг-н-дроп работает через раз/u)).toBeTruthy();
+  });
+});
+
 describe("лидеры и разделение по типу моделей", () => {
   function scored(modelId: string, name: string, kind: "cloud" | "local-gguf", reviewScore: number): GalleryResult {
     return {

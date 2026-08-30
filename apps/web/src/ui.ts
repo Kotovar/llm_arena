@@ -127,6 +127,10 @@ export function matchTaskRuns(left: TaskRun[], right: TaskRun[]) {
 }
 
 /** Порядок и подписи групп моделей: подписочные заметно сильнее локальных, и мешать их в одном рейтинге нечестно. */
+/** Отметка о выполнении промпта: подпись для тега и краткая — для переключателя в оценке. */
+export const completionLabels = { full: "Выполнен полностью", partial: "Выполнен частично" } as const;
+export const completionChoices = [["full", "Полностью"], ["partial", "Частично"], ["broken", "Не работает"]] as const;
+
 export const modelKindOrder = ["cloud", "local-gguf"] as const;
 
 export const modelKindLabels: Record<Model["kind"], string> = { cloud: "По подписке", "local-gguf": "Локальные" };

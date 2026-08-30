@@ -67,7 +67,7 @@ const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict(
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
 const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
-const brokenResultSchema = z.object({ broken: z.boolean() }).strict();
+const completionSchema = z.object({ completion: z.enum(["full", "partial", "broken"]).nullable() }).strict();
 const updateModelEconomicsSchema = z.object({ economics: modelEconomicsSchema.nullable() }).strict();
 const pairReviewSchema = z.object({
   leftTaskRunId: z.string().uuid(),
@@ -478,6 +478,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           featured: featured.has(taskRun.id),
           reviewScore: taskRun.review ? taskRun.review.correctness + taskRun.review.code_quality + taskRun.review.ui_quality + taskRun.review.instruction_following : null,
           reviewPossible: taskRun.review ? (taskRun.review.ui_quality === 0 ? 30 : 40) : null,
+          reviewComment: taskRun.review?.comment || null,
+          completion: taskRun.completion ?? null,
           selectedVersion,
           followupPrompts: usedFollowups.map((followup) => followup.prompt),
           screenshotUrl: existsSync(join(artifactPath, "preview.png"))
@@ -861,12 +863,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     });
   });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => store.saveReview(request.params.id, parse(reviewSchema, request.body)));
-  // Пометка «результат нерабочий»: формально завершённый прогон, который на деле не работает.
-  app.put<{ Params: { id: string } }>("/api/task-runs/:id/broken", async (request) => {
-    const { broken } = parse(brokenResultSchema, request.body);
+  // Отметка о выполнении промпта: полностью, частично или «не работает» (последняя убирает результат из галереи и сводок).
+  app.put<{ Params: { id: string } }>("/api/task-runs/:id/completion", async (request) => {
+    const { completion } = parse(completionSchema, request.body);
     const taskRun = store.getTaskRun(request.params.id);
     if (!taskRun) throw new Error("Task run not found");
-    return withSelectedVersion(store.setTaskRunBroken(taskRun.id, broken)!);
+    return withSelectedVersion(store.setTaskRunCompletion(taskRun.id, completion)!);
   });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/selected-version", async (request) => {
     const { resultSha } = parse(selectResultVersionSchema, request.body);

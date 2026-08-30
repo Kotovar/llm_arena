@@ -248,7 +248,7 @@ describe("run queue", () => {
     store.close();
   });
 
-  it("adds the broken-result column to an existing task_runs table", () => {
+  it("adds the broken-result and completion columns to an existing task_runs table", () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-broken-column-"));
     directories.push(directory);
     const filename = join(directory, "arena.sqlite");
@@ -267,11 +267,12 @@ describe("run queue", () => {
     const store = createStore(filename);
     const inspect = new DatabaseSync(filename, { readOnly: true });
     const columns = (inspect.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>).map((column) => column.name);
-    const row = inspect.prepare("SELECT broken_at FROM task_runs WHERE id = 'run-a'").get() as { broken_at: string | null };
+    const row = inspect.prepare("SELECT broken_at, completion FROM task_runs WHERE id = 'run-a'").get() as { broken_at: string | null; completion: string | null };
 
-    expect(columns).toContain("broken_at");
+    expect(columns).toEqual(expect.arrayContaining(["broken_at", "completion"]));
     // Старые результаты нерабочими не становятся: пометка ставится только вручную.
     expect(row.broken_at).toBeNull();
+    expect(row.completion).toBeNull();
     inspect.close();
     store.close();
   });

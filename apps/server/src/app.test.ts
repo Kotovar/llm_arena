@@ -1051,7 +1051,7 @@ describe("REST API", () => {
     expect(featuredGallery.find((item: { taskRunId: string }) => item.taskRunId === duplicateTaskRun.id)).toMatchObject({ featured: true });
 
     // Нерабочий результат уходит из галереи и теряет звание главного, но остаётся в запуске.
-    const broken = await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/broken`, payload: { broken: true } });
+    const broken = await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/completion`, payload: { completion: "broken" } });
     expect(broken.statusCode).toBe(200);
     expect(broken.json()).toMatchObject({ id: duplicateTaskRun.id, broken_at: expect.any(String) });
     const brokenGallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
@@ -1059,10 +1059,10 @@ describe("REST API", () => {
     expect((await app.inject({ method: "PUT", url: "/api/gallery/featured", payload: { taskRunId: duplicateTaskRun.id } })).statusCode).toBe(404);
     expect((store.listLeaderboardTaskRuns()).some((row) => row.task_run_id === duplicateTaskRun.id)).toBe(false);
 
-    const restored = await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/broken`, payload: { broken: false } });
-    expect(restored.json()).toMatchObject({ broken_at: null });
+    const restored = await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/completion`, payload: { completion: "partial" } });
+    expect(restored.json()).toMatchObject({ broken_at: null, completion: "partial" });
     const restoredGallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
-    expect(restoredGallery.find((item: { taskRunId: string }) => item.taskRunId === duplicateTaskRun.id)).toMatchObject({ featured: false });
+    expect(restoredGallery.find((item: { taskRunId: string }) => item.taskRunId === duplicateTaskRun.id)).toMatchObject({ featured: false, completion: "partial" });
     await app.close();
     store.close();
   });

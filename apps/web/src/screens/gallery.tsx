@@ -5,7 +5,7 @@ import { api } from "../api.js";
 import { ArrowRightIcon, CloseIcon } from "../icons.js";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { GalleryMetrics, GalleryResult, ResultVersion } from "../types.js";
-import { formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, measurementConditions, modelKindLabels, modelKindOrder, plural } from "../ui.js";
+import { completionLabels, formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, measurementConditions, modelKindLabels, modelKindOrder, plural } from "../ui.js";
 import { ResultPreview } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
@@ -55,7 +55,7 @@ function GalleryResultButton({ result, leader, onOpen }: { result: GalleryResult
   const tags = galleryResultTags(result);
   return <button type="button" className="gallery-result" onClick={() => onOpen(result)}>
     <Screenshot result={result} className="gallery-shot" />
-    <span className="gallery-result-copy"><strong>{versionLabel(result.selectedVersion)}{result.reviewScore != null ? <span className="gallery-score">{leader ? <span className="gallery-leader" title={LEADER_TITLE} aria-label={LEADER_TITLE}>★</span> : null}{result.reviewScore}/{result.reviewPossible ?? 40}</span> : null}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
+    <span className="gallery-result-copy"><strong><span className="gallery-result-title">{result.completion ? <span className={`completion-dot ${result.completion}`} title={completionLabels[result.completion]} aria-label={completionLabels[result.completion]} /> : null}{versionLabel(result.selectedVersion)}</span>{result.reviewScore != null ? <span className="gallery-score">{leader ? <span className="gallery-leader" title={LEADER_TITLE} aria-label={LEADER_TITLE}>★</span> : null}{result.reviewScore}/{result.reviewPossible ?? 40}</span> : null}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
     <ResultMetrics metrics={result.metrics} compact />
   </button>;
 }
@@ -66,7 +66,7 @@ function GalleryCell({ results, leaders, onOpen }: { results: GalleryResult[]; l
   return <div className="gallery-cell"><GalleryResultButton result={featured!} leader={leaders.has(featured!.taskRunId)} onOpen={onOpen} />{alternatives.length ? <details className="gallery-multiple"><summary><strong>Ещё {alternatives.length} {plural(alternatives.length, "результат", "результата", "результатов")}</strong><span>Выберите запуск</span></summary><div>{alternatives.map((result) => <GalleryResultButton key={result.taskRunId} result={result} leader={leaders.has(result.taskRunId)} onOpen={onOpen} />)}</div></details> : null}</div>;
 }
 
-function GalleryDetail({ result, leader, onClose }: { result: GalleryResult; leader: boolean; onClose: () => void }) {
+function GalleryDetail({ result, leader, alternatives, onClose }: { result: GalleryResult; leader: boolean; alternatives: boolean; onClose: () => void }) {
   const client = useQueryClient();
   const dialog = useRef<HTMLDialogElement>(null);
   const activePreview = useRef<PreviewState | undefined>(undefined);
@@ -99,10 +99,11 @@ function GalleryDetail({ result, leader, onClose }: { result: GalleryResult; lea
     };
   }, []);
   return <dialog className="gallery-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
-    <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span><h2>{result.prompt.name}</h2>{result.prompt.description ? <p className="task-description">{result.prompt.description}</p> : null}</div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
+    <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span>{result.completion ? <span className={`completion-flag ${result.completion}`}>{completionLabels[result.completion]}</span> : null}<h2>{result.prompt.name}</h2>{result.prompt.description ? <p className="task-description">{result.prompt.description}</p> : null}</div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
     {/* Живой preview встаёт на место снимка: снимок — это та же версия, только застывшая. */}
     <div className="gallery-detail-grid"><section>{preview ? <ResultPreview url={preview.url} target={preview} onClose={() => stop.mutate()} closing={stop.isPending} title={result.prompt.name} /> : <><Screenshot result={result} className="gallery-detail-shot" /><section className="preview-cta"><div><span className="mono">Готовая версия</span><strong>Запустить web-приложение</strong><p>Preview соберёт эту версию и заменит текущий запущенный preview.</p></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview"}<ArrowRightIcon /></button></section></>}{start.error || stop.error ? <p className="error">{(start.error ?? stop.error)?.message}</p> : null}</section>
-      <aside className="gallery-details"><dl>{detailRows(result, leader).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button>}{feature.error ? <p className="error">{feature.error.message}</p> : null}<ResultMetrics metrics={result.metrics} /><details className="final-prompt"><summary>Итоговый промпт</summary><pre>{result.prompt.prompt}</pre>{result.followupPrompts?.map((prompt, index) => <div key={index}><strong>Уточнение {index + 1}</strong><pre>{prompt}</pre></div>)}</details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть полный результат запуска <ArrowRightIcon /></Link></aside>
+      <aside className="gallery-details"><dl>{detailRows(result, leader).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{/* Выбирать «главный» есть из чего только когда у пары модель×промпт несколько результатов. */}
+      {alternatives ? result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button> : null}{feature.error ? <p className="error">{feature.error.message}</p> : null}<ResultMetrics metrics={result.metrics} /><details className="final-prompt"><summary>Итоговый промпт</summary><pre>{result.prompt.prompt}</pre>{result.followupPrompts?.map((prompt, index) => <div key={index}><strong>Уточнение {index + 1}</strong><pre>{prompt}</pre></div>)}</details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть результат</Link>{result.reviewComment ? <p className="gallery-comment" title={result.reviewComment}><span className="mono">Комментарий к оценке</span>{result.reviewComment}</p> : null}</aside>
     </div>
   </dialog>;
 }
@@ -132,6 +133,6 @@ export function GalleryPage() {
       {groups.length > 1 ? <tr className="gallery-group"><th scope="rowgroup" colSpan={matrix.prompts.length + 1}><span>{modelKindLabels[group.kind]}</span></th></tr> : null}
       {group.rows.map((row) => <tr key={row.model.id}><th scope="row" className="gallery-model">{row.model.name}</th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} leaders={matrix.leaders} onOpen={setOpened} /></td>)}</tr>)}
     </tbody>)}</table></div></Panel> : null}
-    {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} leader={matrix.leaders.has(opened.taskRunId)} onClose={() => setOpened(undefined)} /> : null}
+    {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} leader={matrix.leaders.has(opened.taskRunId)} alternatives={visible.filter((item) => item.model.id === opened.model.id && item.prompt.id === opened.prompt.id).length > 1} onClose={() => setOpened(undefined)} /> : null}
   </Page></div>;
 }

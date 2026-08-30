@@ -64,6 +64,41 @@ describe("критерии оценки", () => {
   });
 });
 
+describe("отметка о выполнении промпта", () => {
+  const body = () => JSON.parse(String(fetchMock.mock.calls.find(([url]) => String(url).includes("/completion"))![1]!.body));
+
+  it("шлёт выбранную отметку и снимает её повторным кликом", async () => {
+    const user = userEvent.setup();
+    await renderResult(taskRun({ completion: "partial" }));
+
+    await user.click(screen.getByRole("button", { name: "Полностью" }));
+    expect(body()).toEqual({ completion: "full" });
+
+    fetchMock.mockClear();
+    // Активная отметка уже стоит: повторный клик по ней её снимает.
+    await user.click(screen.getByRole("button", { name: "Частично" }));
+    expect(body()).toEqual({ completion: null });
+  });
+
+  it("держит активной «Не работает», пока стоит пометка нерабочего результата", async () => {
+    const user = userEvent.setup();
+    await renderResult(taskRun({ broken_at: "2026-01-01T00:00:00.000Z", completion: "full" }));
+
+    expect(screen.getByRole("button", { name: "Не работает" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Полностью" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByText("Выполнен полностью")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Не работает" }));
+    expect(body()).toEqual({ completion: null });
+  });
+
+  it("показывает тег выполнения рядом со статусом", async () => {
+    await renderResult(taskRun({ completion: "partial" }));
+
+    expect(document.querySelector(".version-status .completion-flag.partial")!.textContent).toBe("Выполнен частично");
+  });
+});
+
 describe("комментарий к оценке", () => {
   // jsdom не вставляет перенос строки по Ctrl+Enter, поэтому здесь проверяется только отправка формы.
   it("сохраняет оценку по Ctrl+Enter", async () => {

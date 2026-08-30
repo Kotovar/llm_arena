@@ -94,6 +94,7 @@ type TaskRunRow = {
   artifact_path: string;
   selected_followup_id: string | null;
   broken_at: string | null;
+  completion: "full" | "partial" | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -278,7 +279,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS run_tasks (run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(run_id, position));
     CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, broken_at TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, broken_at TEXT, completion TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_attempts (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, attempt INTEGER NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, attempt));
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -361,6 +362,10 @@ function migrate(sqlite: DatabaseSync): void {
   // выбывает из галереи и любых сводок, но остаётся в запуске вместе с логами и файлами.
   if (!taskRunColumns.some((column) => column.name === "broken_at")) {
     sqlite.exec("ALTER TABLE task_runs ADD COLUMN broken_at TEXT");
+  }
+  // Полнота выполнения промпта: 'full' или 'partial'. NULL — человек ещё не отметил.
+  if (!taskRunColumns.some((column) => column.name === "completion")) {
+    sqlite.exec("ALTER TABLE task_runs ADD COLUMN completion TEXT");
   }
   const taskRevisionColumns = sqlite.prepare("PRAGMA table_info(task_revisions)").all() as Array<{ name: string }>;
   if (!taskRevisionColumns.some((column) => column.name === "images_json")) {
@@ -1019,8 +1024,10 @@ export function createStore(filename: string) {
       sqlite.prepare("UPDATE task_runs SET selected_followup_id = ? WHERE id = ?").run(followupId, taskRunId);
       return this.getTaskRun(taskRunId)!;
     },
-    setTaskRunBroken(taskRunId: string, broken: boolean) {
-      sqlite.prepare("UPDATE task_runs SET broken_at = ? WHERE id = ?").run(broken ? now() : null, taskRunId);
+    /** Одна отметка на три состояния: выполнен полностью, частично или не работает. null — отметки нет. */
+    setTaskRunCompletion(taskRunId: string, completion: "full" | "partial" | "broken" | null) {
+      const broken = completion === "broken";
+      sqlite.prepare("UPDATE task_runs SET broken_at = ?, completion = ? WHERE id = ?").run(broken ? now() : null, broken ? null : completion, taskRunId);
       // Нерабочий результат не может быть лицом модели в галерее.
       if (broken) sqlite.prepare("DELETE FROM gallery_featured WHERE task_run_id = ?").run(taskRunId);
       return this.getTaskRun(taskRunId);

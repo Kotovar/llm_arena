@@ -140,6 +140,9 @@ export type GalleryMetrics = {
   tokensPerSecond?: number;
 };
 
+/** Насколько промпт выполнен: отметку ставит человек в оценке. null — отметки нет. */
+export type TaskCompletion = "full" | "partial" | null;
+
 export type GalleryResult = {
   taskRunId: string;
   runId: string;
@@ -152,6 +155,8 @@ export type GalleryResult = {
   featured?: boolean;
   reviewScore?: number | null;
   reviewPossible?: number | null;
+  reviewComment?: string | null;
+  completion?: TaskCompletion;
   selectedVersion: ResultVersion;
   followupPrompts?: string[];
   screenshotUrl: string | null;
@@ -188,6 +193,7 @@ export type TaskRun = {
   selectedVersion?: ResultVersion | null;
   /** Отметка «результат нерабочий»: он не попадает ни в галерею, ни в сводки. */
   broken_at?: string | null;
+  completion?: TaskCompletion;
   review?: {
     correctness: number;
     code_quality: number;
