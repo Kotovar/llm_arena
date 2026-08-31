@@ -298,9 +298,9 @@ describe("подписи списка запусков", () => {
     expect(formatRelativeTime("не дата", now)).toBe("");
   });
 
-  it("вместо описания запуска показывает причину ошибки", () => {
+  it("сохраняет описание запуска при ошибке", () => {
     const failed = { runner_id: "llama-chat", result_mode: "text" as const, task_count: 2, error: "llama-server не стартовал", status: "failed" };
-    expect(runListMeta(failed, "llama.cpp Chat")).toBe("llama-server не стартовал");
+    expect(runListMeta(failed, "llama.cpp Chat", "с обвязкой (OMP)")).toBe("2 промпта · llama.cpp Chat · текстовый ответ · с обвязкой (OMP)");
     const completed = { ...failed, error: null, status: "completed" };
     expect(runListMeta(completed, "llama.cpp Chat")).toBe("2 промпта · llama.cpp Chat · текстовый ответ");
     expect(runListMeta({ ...completed, result_mode: "web" }, undefined)).toBe("2 промпта · llama-chat · web-приложение");

@@ -538,7 +538,6 @@ export function ompModeLabel(useOmpAgent: number) {
 }
 
 export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string; activityStatus?: string; activeTaskName?: string | null }, runnerName?: string, ompMode?: string) {
-  if (run.status === "failed" && run.error) return run.error;
   return [
     // В списке видно только «Выполняется» — без имени промпта непонятно, над чем агент сейчас работает.
     run.activeTaskName ? `${run.activityStatus === "running-followup" ? "уточняем" : "промпт"}: ${run.activeTaskName}` : undefined,

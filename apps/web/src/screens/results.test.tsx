@@ -429,6 +429,16 @@ describe("список промптов запуска", () => {
     await waitFor(() => expect(deleted).toEqual([`/api/task-runs/${run.taskRuns[0]!.id}`]));
   });
 
+  it("не показывает общую ошибку после удаления проблемного watchdog-промпта", async () => {
+    const healthy = taskRunAt(1, "Здоровый промпт");
+    const afterDelete = { ...run, status: "failed", error: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.", taskRuns: [healthy] };
+    fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/runs/") ? afterDelete : []), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Здоровый промпт" });
+    expect(screen.queryByText("Ошибка генерации")).toBeNull();
+  });
+
   it("не предлагает удалить промпт, когда он в запуске единственный", async () => {
     const single = { ...run, taskRuns: [run.taskRuns[0]!] };
     fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/runs/") ? single : []), { status: 200, headers: { "content-type": "application/json" } }));

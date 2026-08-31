@@ -18,7 +18,7 @@ function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[];
   const runnerName = runners.find((runner) => runner.id === run.runner_id)?.name;
   return <div className="run-row-wrap"><Link className="run-row" to="/runs/$runId" params={{ runId: run.id }}>
     <Status value={visibleStatus} />
-    <span className="run-row-copy"><strong>{modelName}</strong><small className={run.status === "failed" && run.error ? "error" : ""}>{runListMeta(run, runnerName, ompModeLabel(run.use_omp_agent))}</small></span>
+    <span className="run-row-copy"><strong>{modelName}</strong><small>{runListMeta(run, runnerName, ompModeLabel(run.use_omp_agent))}</small></span>
     <span className={run.reviewed_count ? "run-row-score" : "run-row-score run-row-score-none"}>{runListScore(run)}</span>
     <time dateTime={run.created_at} title={new Date(run.created_at).toLocaleString("ru-RU")}>{formatRelativeTime(run.created_at)}</time>
   </Link>{onDelete && terminal ? <button className="row-delete" title="Удалить результат" aria-label={`Удалить запуск ${modelName}`} onClick={() => onDelete(run)}><CloseIcon /></button> : null}</div>;
@@ -468,7 +468,6 @@ export function RunDetail({ runId }: { runId: string }) {
   const activeTask = run.data.taskRuns?.find((task) => task.status === "running");
   const activeTaskName = activeTask?.taskName;
   const activeFollowup = run.data.taskRuns?.flatMap((task) => task.followups ?? []).find((followup) => followup.status === "pending" || followup.status === "running");
-  const hasTaskError = run.data.taskRuns?.some((task) => task.error);
   const activityStatus = run.data.activityStatus ?? run.data.status;
   const runningFollowup = activityStatus === "running-followup";
   const followupTaskRun = activeFollowup ? run.data.taskRuns?.find((task) => (task.followups ?? []).some((item) => item.id === activeFollowup.id)) : undefined;
@@ -510,7 +509,7 @@ export function RunDetail({ runId }: { runId: string }) {
     <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName ?? followupTaskName, runningFollowup)} />
     {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? `Уточнение${followupTaskName ? `: ${followupTaskName}` : ""}` : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}${activeTaskName ? `: ${activeTaskName}` : ""}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
     {snapshot?.environment ? <Environment environment={snapshot.environment} profile={snapshot.profile} /> : null}
-    {run.data.error && !hasTaskError ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
+    {run.data.error && !run.data.taskRuns?.length ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
     <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive && remaining > 0 ? <button className="primary" disabled={resume.isPending} onClick={() => resume.mutate()}>{resume.isPending ? "Запускаем…" : `К следующему (осталось ${remaining})`}</button> : null}{!isActive && repeatSearch ? <Link to="/" search={repeatSearch} title="Те же промпты, модель и параметры">Повторить запуск</Link> : null}{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}>{items.length ? <div className="run-split"><PromptRail items={items} activeId={activeId!} reviewed={scores.reviewed} onSelect={selectTaskRun} onNextUnrated={nextUnrated ? () => selectTaskRun(nextUnrated.taskRun.id) : undefined} />
       <div className="run-pane">
         {activeTaskRun ? <TaskResult key={activeTaskRun.id} taskRun={activeTaskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} onDeleted={() => selectTaskRun(undefined)} deletable={items.length > 1} /> : null}
