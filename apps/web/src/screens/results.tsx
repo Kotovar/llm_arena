@@ -9,7 +9,7 @@ import { ArrowRightIcon, CloseIcon, ExternalIcon } from "../icons.js";
 import { Empty, NumberField, Page, Panel, SelectMenu, Status, useData, useHotkey } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
-import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
+import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, formatWatchdogDiagnostics, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
@@ -232,16 +232,9 @@ function GenerationError({ error, errorDetails, endpoint }: { error: string | nu
   return <section className="generation-error"><div><span className="mono">Ошибка генерации</span><strong>{message}</strong>{errorDetails?.details ? <p>{errorDetails.details}</p> : null}</div><details onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Показать технические детали</summary>{open ? <div className="generation-error-raw">{diagnostic.isPending ? <p>Загружаем диагностический лог…</p> : null}{diagnostic.error ? <p className="error">{diagnostic.error.message}</p> : null}{diagnostic.data ? <><div><small>{diagnostic.data.rawSize.toLocaleString("ru-RU")} Б</small><button onClick={() => void copyRaw()}>Копировать полный лог</button></div><pre>{diagnosticErrorPreview(diagnostic.data.raw)}</pre>{diagnostic.data.raw.length > 8_000 ? <p>В области показаны первые 8 000 символов; кнопка копирует полный лог.</p> : null}</> : null}</div> : null}</details></section>;
 }
 
-const watchdogReasonLabels: Record<string, string> = {
-  REPEATED_TOOL_ERROR: "одинаковый tool call с одной ошибкой",
-  REPEATED_ERROR: "одинаковая ошибка",
-  REPEATING_PATTERN: "повторяющийся pattern tool calls",
-  HARD_NO_PROGRESS: "слишком долго без прогресса",
-  HARD_TOOL_CALL_LIMIT: "достигнут аварийный лимит tool calls",
-};
-
 function WatchdogNotice({ diagnostics }: { diagnostics: WatchdogDiagnostics }) {
-  return <section className="watchdog-notice"><div><span className="mono">Watchdog</span><strong>Промпт остановлен: агент зациклился</strong><p>{watchdogReasonLabels[diagnostics.loopReason] ?? "агент не продвигался"}</p></div><dl><div><dt>Повтор</dt><dd>{diagnostics.tool ?? "неизвестный tool"}{diagnostics.repeatCount ? ` · ${diagnostics.repeatCount} повторов` : ""}</dd></div>{diagnostics.errorFingerprint ? <div><dt>Ошибка</dt><dd>{diagnostics.errorFingerprint}</dd></div> : null}<div><dt>Всего tool calls</dt><dd>{diagnostics.totalToolCalls}</dd></div></dl></section>;
+  const view = formatWatchdogDiagnostics(diagnostics);
+  return <section className="watchdog-notice"><div><span className="mono">Watchdog</span><strong>Промпт остановлен: агент зациклился</strong></div><dl><div><dt>Причина</dt><dd>{view.reason}</dd></div><div><dt>Tool</dt><dd>{view.tool ?? "неизвестный tool"}{view.repeatCount ? ` · ${view.repeatCount} повторов` : ""}</dd></div>{view.error ? <div><dt>Ошибка</dt><dd>{view.error}</dd></div> : null}<div><dt>Всего tool calls</dt><dd>{view.totalToolCalls}</dd></div></dl>{view.rawError || view.debug ? <details className="watchdog-details"><summary>Показать технические детали</summary><div className="watchdog-details-content">{view.rawError ? <div><span className="mono">Исходная ошибка</span><pre>{view.rawError}</pre></div> : null}{view.debug ? <div><span className="mono">Диагностика watchdog</span><dl><div><dt>Шагов без прогресса</dt><dd>{view.debug.stepsSinceProgress}</dd></div>{view.debug.errorFingerprint ? <div><dt>Fingerprint ошибки</dt><dd>{view.debug.errorFingerprint}</dd></div> : null}</dl></div> : null}</div></details> : null}</section>;
 }
 
 function FollowupResult({ followup, cancelPending, onCancel }: { followup: Followup; cancelPending: boolean; onCancel: () => void }) {
@@ -360,7 +353,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     </section> : null}
     {selectFinal.error ? <p className="error">{selectFinal.error.message}</p> : null}
     {watchdog ? <WatchdogNotice diagnostics={watchdog} /> : null}
-    {activeVersion.error ? <GenerationError error={activeVersion.error} errorDetails={activeVersion.errorDetails} endpoint={errorDetailsPath} /> : null}
+    {activeVersion.error && !watchdog ? <GenerationError error={activeVersion.error} errorDetails={activeVersion.errorDetails} endpoint={errorDetailsPath} /> : null}
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button onClick={() => cancel.mutate()} disabled={cancel.isPending || cancelRun.isPending}>Пропустить промпт</button><button className="danger" onClick={() => cancelRun.mutate()} disabled={cancelRun.isPending}>Остановить весь прогон</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
     {result ? <MetricStrip result={result} conditions={measurementConditions(snapshot.profile)} /> : null}
     {taskRun.attempts ? <p className="attempt-summary mono">{attemptSummary(taskRun.attempts)}</p> : null}

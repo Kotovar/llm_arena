@@ -183,6 +183,7 @@ export function createWatchdog(overrides: Partial<WatchdogConfig> = {}) {
         tool: current.toolName,
         repeatCount: stop.repeats,
         errorFingerprint: current.errorFingerprint,
+        rawError: current.isError ? resultText(call.result) || null : null,
         stepsSinceProgress,
         totalToolCalls,
       };

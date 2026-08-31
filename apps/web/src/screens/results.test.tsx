@@ -52,6 +52,8 @@ afterEach(() => {
 
 describe("watchdog diagnostics", () => {
   it("explains an automatically stopped agent loop in the task result", async () => {
+    const rawError = String.raw`line 1: payload line has no preceding hunk header. Use \`M:\`, \`CUT N.=M\`, or \`PUT <N:\`/\`PUT >N:\` above the body. Got "PUT >64*:[app.js#647A]".`;
+
     await renderResult(taskRun({
       status: "agent_loop",
       error: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.",
@@ -67,6 +69,7 @@ describe("watchdog diagnostics", () => {
           repeatCount: 5,
           tool: "bash",
           errorFingerprint: "ReferenceError: browser is not defined",
+          rawError,
           stepsSinceProgress: 3,
           totalToolCalls: 6,
         },
@@ -75,7 +78,14 @@ describe("watchdog diagnostics", () => {
 
     expect(screen.getByText("Промпт остановлен: агент зациклился")).toBeTruthy();
     expect(screen.getByText("bash · 5 повторов")).toBeTruthy();
-    expect(screen.getByText("ReferenceError: browser is not defined")).toBeTruthy();
+    expect(screen.queryByText("Ошибка генерации")).toBeNull();
+    expect(screen.queryByText("Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.")).toBeNull();
+    const watchdogNotice = document.querySelector(".watchdog-notice") as HTMLElement;
+    expect(within(watchdogNotice).getByText('Invalid edit instruction: "PUT >64*:[app.js#647A]"')).toBeTruthy();
+
+    await userEvent.setup().click(within(watchdogNotice).getByText("Показать технические детали"));
+    expect(within(watchdogNotice).getByText(rawError)).toBeTruthy();
+    expect(within(watchdogNotice).getByText("ReferenceError: browser is not defined")).toBeTruthy();
   });
 });
 

@@ -1,4 +1,5 @@
 import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared/constants";
+import type { WatchdogDiagnostics } from "@llm-arena/shared";
 import type { GalleryResult, Model, Runner, Task, TaskRun } from "./types.js";
 
 const statusLabels: Record<string, string> = {
@@ -368,6 +369,55 @@ export function shouldFollowOutput(scrollTop: number, clientHeight: number, scro
 
 export function diagnosticErrorPreview(raw: string, limit = 8_000) {
   return raw.slice(0, limit);
+}
+
+const watchdogReasonLabels: Record<string, string> = {
+  REPEATED_TOOL_ERROR: "одинаковый tool call с одной ошибкой",
+  REPEATED_ERROR: "одинаковая ошибка",
+  REPEATING_PATTERN: "повторяющийся pattern tool calls",
+  HARD_NO_PROGRESS: "слишком долго без прогресса",
+  HARD_TOOL_CALL_LIMIT: "достигнут аварийный лимит tool calls",
+};
+
+const ANSI_ESCAPE = /\u001b\[[0-?]*[ -/]*[@-~]/gu;
+
+function cleanWatchdogError(raw: string) {
+  return raw
+    .replace(/\\u001b/gu, "\u001b")
+    .replace(ANSI_ESCAPE, "")
+    .replace(/(?:\\r)?\\n/gu, " ")
+    .replace(/\\([`"'])/gu, "$1")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function watchdogErrorSummary(raw: string | null) {
+  if (!raw) return null;
+  const cleaned = cleanWatchdogError(raw);
+  if (!cleaned) return null;
+  const explicit = cleaned.match(/\bInvalid edit instruction:\s*(["'][^"']+["'])/iu)?.[0];
+  if (explicit) return explicit;
+  if (/payload line has no preceding hunk header|above the body/iu.test(cleaned)) {
+    const got = cleaned.match(/\bGot\s+(["'])(.+?)\1(?:[.!]|$)/u);
+    if (got) return `Invalid edit instruction: "${got[2]}"`;
+  }
+  return `${cleaned.slice(0, 240).trimEnd()}${cleaned.length > 240 ? "…" : ""}`;
+}
+
+export function formatWatchdogDiagnostics(diagnostics: WatchdogDiagnostics) {
+  const source = diagnostics.rawError ?? diagnostics.errorFingerprint;
+  return {
+    reason: watchdogReasonLabels[diagnostics.loopReason] ?? "агент не продвигался",
+    tool: diagnostics.tool,
+    repeatCount: diagnostics.repeatCount,
+    error: watchdogErrorSummary(source),
+    totalToolCalls: diagnostics.totalToolCalls,
+    rawError: diagnostics.rawError ?? null,
+    debug: {
+      stepsSinceProgress: diagnostics.stepsSinceProgress,
+      errorFingerprint: diagnostics.errorFingerprint,
+    },
+  };
 }
 
 export function reviewSaveLabel(isPending: boolean, isSuccess: boolean) {

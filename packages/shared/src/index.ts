@@ -202,6 +202,7 @@ export const watchdogDiagnosticsSchema = z.object({
   tool: z.string().nullable(),
   repeatCount: z.number().int().nonnegative(),
   errorFingerprint: z.string().nullable(),
+  rawError: z.string().nullable().default(null),
   stepsSinceProgress: z.number().int().nonnegative(),
   totalToolCalls: z.number().int().nonnegative(),
 }).strict();

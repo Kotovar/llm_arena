@@ -22,6 +22,20 @@ function call(toolName: string, args: unknown = { command: toolName }, error?: s
 }
 
 describe("agent watchdog", () => {
+  it("keeps the complete raw error beside its normalized fingerprint", () => {
+    const watchdog = createWatchdog(config({ sameFailureThreshold: 99, sameErrorThreshold: 99, maxNoProgress: 99 }));
+    const rawError = "line 1: payload line has no preceding hunk header.\n    at /tmp/edit.mjs:4:2";
+    let decision = watchdog.observe(call("edit", { path: "app.js" }, rawError));
+
+    for (let index = 1; index < 4; index += 1) decision = watchdog.observe(call("edit", { path: "app.js" }, rawError));
+
+    expect(decision).toMatchObject({
+      action: "terminate",
+      diagnostics: { loopReason: "REPEATING_PATTERN", rawError },
+    });
+    expect(decision.action === "terminate" && decision.diagnostics.errorFingerprint).not.toBe(rawError);
+  });
+
   it("does not flag many different successful calls", () => {
     const watchdog = createWatchdog(config());
 

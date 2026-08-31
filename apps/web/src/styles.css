@@ -172,9 +172,16 @@ button:where(:has(.icon)), a:where(:has(.icon)) { display: inline-flex; align-it
 .watchdog-notice strong { color: #ffd2cf; }
 .watchdog-notice p { margin: 0; color: var(--muted); }
 .watchdog-notice dl { display: grid; gap: 6px; margin: 0; }
-.watchdog-notice dl div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px; }
+.watchdog-notice dl div { display: grid; grid-template-columns: 130px minmax(0, 1fr); align-items: baseline; gap: 8px; }
 .watchdog-notice dt { color: var(--muted); }
 .watchdog-notice dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono); }
+.watchdog-details { margin-top: 2px; }
+.watchdog-details > summary { cursor: pointer; color: var(--signal); font-size: 12px; }
+.watchdog-details-content { display: grid; gap: 10px; margin-top: 8px; }
+.watchdog-details-content > div { display: grid; gap: 6px; }
+.watchdog-details-content pre { max-height: 360px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid #713d3e; background: #1d1617; padding: 8px; color: #f3d3d1; font: 11px/1.45 var(--font-mono); }
+.watchdog-details-content dl { display: grid; gap: 6px; margin: 0; }
+.watchdog-details-content dl div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px; }
 .run-split { display: grid; grid-template-columns: clamp(210px, 16vw, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .prompt-rail { position: sticky; top: 16px; display: grid; gap: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
 .prompt-rail ol { display: grid; gap: 2px; max-height: calc(100vh - 150px); margin: 0; padding: 8px; overflow-y: auto; list-style: none; }

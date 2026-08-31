@@ -81,6 +81,10 @@ describe("responsive result layout", () => {
     expect(css).toMatch(/\.answer[^}]*overflow-wrap:\s*anywhere/);
   });
 
+  it("aligns watchdog labels and values on the same baseline", () => {
+    expect(css).toMatch(/\.watchdog-notice dl div\s*\{[^}]*align-items:\s*baseline/);
+  });
+
   it("contains follow-up prompts and answers inside the result card", () => {
     expect(css).toMatch(/\.followup-item[^}]*min-width:\s*0/);
     expect(css).toMatch(/\.followup-item[^}]*overflow-wrap:\s*anywhere/);

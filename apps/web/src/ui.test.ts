@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -235,6 +235,47 @@ describe("интерфейс запуска", () => {
   it("показывает количество дополнительных промптов", () => {
     expect(followupCountLabel(0)).toBe("Уточнений: 0");
     expect(followupCountLabel(3)).toBe("Уточнений: 3");
+  });
+});
+
+describe("диагностика watchdog", () => {
+  it("выделяет короткую summary из полного parser error и сохраняет raw без изменений", () => {
+    const rawError = String.raw`line 1: payload line has no preceding hunk header. Use \`M:\`, \`CUT N.=M\`, or \`PUT <N:\`/\`PUT >N:\` above the body. Got "PUT >64*:[app.js#647A]".`;
+
+    expect(formatWatchdogDiagnostics({
+      loopReason: "REPEATING_PATTERN",
+      tool: "edit",
+      repeatCount: 4,
+      errorFingerprint: "M:\`, \`CUT N.=M\`, or \`PUT <N:\`/\`PUT >N:\` above the body. Got \"PUT >64*:[app.js#647A]\".",
+      rawError,
+      stepsSinceProgress: 3,
+      totalToolCalls: 12,
+    })).toEqual({
+      reason: "повторяющийся pattern tool calls",
+      tool: "edit",
+      repeatCount: 4,
+      error: 'Invalid edit instruction: "PUT >64*:[app.js#647A]"',
+      totalToolCalls: 12,
+      rawError,
+      debug: { stepsSinceProgress: 3, errorFingerprint: "M:\`, \`CUT N.=M\`, or \`PUT <N:\`/\`PUT >N:\` above the body. Got \"PUT >64*:[app.js#647A]\"." },
+    });
+  });
+
+  it("использует очищенный fallback, если parser error не распознаётся", () => {
+    expect(formatWatchdogDiagnostics({
+      loopReason: "REPEATED_ERROR",
+      tool: null,
+      repeatCount: 5,
+      errorFingerprint: "  \u001b[31mUnexpected\\nparser output\\u001b[0m  ",
+      rawError: null,
+      stepsSinceProgress: 0,
+      totalToolCalls: 8,
+    })).toMatchObject({
+      reason: "одинаковая ошибка",
+      tool: null,
+      error: "Unexpected parser output",
+      rawError: null,
+    });
   });
 });
 
