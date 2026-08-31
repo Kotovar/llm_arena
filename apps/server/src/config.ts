@@ -3,6 +3,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { createModelSchema, fixtureManifestSchema, llamaProfileSchema, runnerDefinitionSchema } from "@llm-arena/shared";
 import { parse } from "yaml";
 import { z } from "zod";
+import { DEFAULT_WATCHDOG_CONFIG } from "./watchdog.js";
 
 const configSchema = z.object({
   server: z.object({ host: z.literal("127.0.0.1"), port: z.number().int().positive() }),
@@ -19,6 +20,15 @@ const configSchema = z.object({
     // 0 отключает термозащиту. Это политика «прогон уже деградировал от троттлинга, хватит»,
     // а не спасение железа: от перегрева карту защищают драйвер и BIOS.
     gpuMaxTemperatureC: z.number().int().min(0).default(87),
+    watchdog: z.object({
+      errorWindowSize: z.number().int().positive(),
+      sameFailureThreshold: z.number().int().positive(),
+      sameErrorThreshold: z.number().int().positive(),
+      patternMinRepeats: z.number().int().positive(),
+      maxPatternLength: z.number().int().positive(),
+      maxNoProgress: z.number().int().positive(),
+      maxToolCalls: z.number().int().positive(),
+    }).default(DEFAULT_WATCHDOG_CONFIG),
   }),
   runners: z.array(runnerDefinitionSchema).min(1),
   fixtures: z.array(fixtureManifestSchema).default([]),

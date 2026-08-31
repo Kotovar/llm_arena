@@ -757,6 +757,32 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("exposes agent_loop as a task status with public watchdog diagnostics", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-agent-loop-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "omp", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "task"), { task: task.currentRevision });
+    const raw = "Agent loop detected: REPEATED_TOOL_ERROR; tool=bash; repeats=7; error=ReferenceError: browser is not defined";
+    const result = { watchdog: { loopReason: "REPEATED_TOOL_ERROR", repeatCount: 7, tool: "bash", errorFingerprint: "ReferenceError: browser is not defined", stepsSinceProgress: 3, totalToolCalls: 6 } };
+    store.saveTaskRunResult(taskRun.id, result, "agent_loop", raw);
+    store.updateRunStatus(run.id, "failed", raw);
+    const app = buildApp({ store, config });
+
+    const response = await app.inject({ method: "GET", url: `/api/runs/${run.id}` });
+
+    expect(response.json()).toMatchObject({
+      status: "failed",
+      error: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.",
+      taskRuns: [{ status: "agent_loop", error: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.", errorDetails: { code: "agent_loop" }, result_json: JSON.stringify(result) }],
+    });
+    await app.close();
+    store.close();
+  });
+
   it("bulk deletion needs an explicit list and keeps active runs", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-clear-"));
     directories.push(directory);

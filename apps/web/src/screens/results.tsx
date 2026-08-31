@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared/constants";
+import type { WatchdogDiagnostics } from "@llm-arena/shared";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { useConfirm } from "../confirm.js";
@@ -231,6 +232,18 @@ function GenerationError({ error, errorDetails, endpoint }: { error: string | nu
   return <section className="generation-error"><div><span className="mono">Ошибка генерации</span><strong>{message}</strong>{errorDetails?.details ? <p>{errorDetails.details}</p> : null}</div><details onToggle={(event) => setOpen(event.currentTarget.open)}><summary>Показать технические детали</summary>{open ? <div className="generation-error-raw">{diagnostic.isPending ? <p>Загружаем диагностический лог…</p> : null}{diagnostic.error ? <p className="error">{diagnostic.error.message}</p> : null}{diagnostic.data ? <><div><small>{diagnostic.data.rawSize.toLocaleString("ru-RU")} Б</small><button onClick={() => void copyRaw()}>Копировать полный лог</button></div><pre>{diagnosticErrorPreview(diagnostic.data.raw)}</pre>{diagnostic.data.raw.length > 8_000 ? <p>В области показаны первые 8 000 символов; кнопка копирует полный лог.</p> : null}</> : null}</div> : null}</details></section>;
 }
 
+const watchdogReasonLabels: Record<string, string> = {
+  REPEATED_TOOL_ERROR: "одинаковый tool call с одной ошибкой",
+  REPEATED_ERROR: "одинаковая ошибка",
+  REPEATING_PATTERN: "повторяющийся pattern tool calls",
+  HARD_NO_PROGRESS: "слишком долго без прогресса",
+  HARD_TOOL_CALL_LIMIT: "достигнут аварийный лимит tool calls",
+};
+
+function WatchdogNotice({ diagnostics }: { diagnostics: WatchdogDiagnostics }) {
+  return <section className="watchdog-notice"><div><span className="mono">Watchdog</span><strong>Промпт остановлен: агент зациклился</strong><p>{watchdogReasonLabels[diagnostics.loopReason] ?? "агент не продвигался"}</p></div><dl><div><dt>Повтор</dt><dd>{diagnostics.tool ?? "неизвестный tool"}{diagnostics.repeatCount ? ` · ${diagnostics.repeatCount} повторов` : ""}</dd></div>{diagnostics.errorFingerprint ? <div><dt>Ошибка</dt><dd>{diagnostics.errorFingerprint}</dd></div> : null}<div><dt>Всего tool calls</dt><dd>{diagnostics.totalToolCalls}</dd></div></dl></section>;
+}
+
 function FollowupResult({ followup, cancelPending, onCancel }: { followup: Followup; cancelPending: boolean; onCancel: () => void }) {
   const active = followup.status === "pending" || followup.status === "running";
   const liveLogs = useQuery({ queryKey: ["followup-logs", followup.id], queryFn: () => apiText(`/followups/${followup.id}/logs?stream=display`), enabled: followup.status === "running", refetchInterval: 1_000 });
@@ -253,6 +266,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     ?? versions.find((version) => version.key === selectedKey)
     ?? versions[0]!;
   const result = parseResult(activeVersion.resultJson);
+  const watchdog = result?.watchdog && typeof result.watchdog === "object" ? result.watchdog as WatchdogDiagnostics : undefined;
   const [artifact, setArtifact] = useState<string>();
   const [followOutput, setFollowOutput] = useState(true);
   const [lastActivity, setLastActivity] = useState<number>();
@@ -345,6 +359,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
       })}</div>
     </section> : null}
     {selectFinal.error ? <p className="error">{selectFinal.error.message}</p> : null}
+    {watchdog ? <WatchdogNotice diagnostics={watchdog} /> : null}
     {activeVersion.error ? <GenerationError error={activeVersion.error} errorDetails={activeVersion.errorDetails} endpoint={errorDetailsPath} /> : null}
     {taskRun.status === "running" ? <div className="live-output"><div className="live-head"><strong><span className="spinner" />Агент работает</strong><span>{lastActivity ? <>Последний вывод <ActivityAge at={lastActivity} /> назад</> : "Ожидаем первый вывод"}</span><button onClick={() => cancel.mutate()} disabled={cancel.isPending || cancelRun.isPending}>Пропустить промпт</button><button className="danger" onClick={() => cancelRun.mutate()} disabled={cancelRun.isPending}>Остановить весь прогон</button></div><pre ref={outputRef} onScroll={(event) => setFollowOutput(shouldFollowOutput(event.currentTarget.scrollTop, event.currentTarget.clientHeight, event.currentTarget.scrollHeight))}>{liveLogs.data || "Запускаем модель и ожидаем первый вывод…"}</pre>{!followOutput ? <button className="follow-output" onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}>Прокрутить вниз и следить</button> : null}</div> : null}
     {result ? <MetricStrip result={result} conditions={measurementConditions(snapshot.profile)} /> : null}

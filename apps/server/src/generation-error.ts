@@ -1,5 +1,5 @@
 export type GenerationErrorDetails = {
-  code: "invalid_tool_call" | "runner_inactive" | "task_time_limit_exceeded" | "generation_failed";
+  code: "invalid_tool_call" | "runner_inactive" | "task_time_limit_exceeded" | "agent_loop" | "generation_failed";
   message: string;
   details?: string;
   rawSize: number;
@@ -29,6 +29,14 @@ export function describeGenerationError(raw: string | null): GenerationErrorDeta
       code: "task_time_limit_exceeded",
       message: "Превышен лимит времени задачи.",
       details: `Runner был остановлен через ${formatDuration(Number(legacyTimeout[1]))}`,
+      rawSize,
+    };
+  }
+  if (/^Agent loop detected:/u.test(raw)) {
+    return {
+      code: "agent_loop",
+      message: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.",
+      details: "Агент повторял один и тот же вызов инструмента и не продвигался к результату.",
       rawSize,
     };
   }

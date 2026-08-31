@@ -2,7 +2,7 @@ import { z } from "zod";
 export { DEFAULT_LLAMA_TEMPERATURE } from "./constants.js";
 
 export const taskKindSchema = z.enum(["prompt", "coding"]);
-export const runStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled"]);
+export const runStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled", "agent_loop"]);
 export const runnerKindSchema = z.enum(["llama-chat", "omp", "claude-code", "codex", "opencode"]);
 export const resultShaSchema = z.string().trim().regex(/^[0-9a-f]{40,64}$/i, "Invalid result SHA");
 export const selectResultVersionSchema = z.object({ resultSha: resultShaSchema }).strict();
@@ -196,12 +196,23 @@ export const normalizedMetricsSchema = z.object({
   generationTokensPerSecond: measuredSchema,
 });
 
+export const watchdogReasonSchema = z.enum(["REPEATED_TOOL_ERROR", "REPEATED_ERROR", "REPEATING_PATTERN", "HARD_NO_PROGRESS", "HARD_TOOL_CALL_LIMIT"]);
+export const watchdogDiagnosticsSchema = z.object({
+  loopReason: watchdogReasonSchema,
+  tool: z.string().nullable(),
+  repeatCount: z.number().int().nonnegative(),
+  errorFingerprint: z.string().nullable(),
+  stepsSinceProgress: z.number().int().nonnegative(),
+  totalToolCalls: z.number().int().nonnegative(),
+}).strict();
+
 export const normalizedRunResultSchema = z.object({
   finalAnswer: z.string(),
   exitCode: z.number().int().nullable(),
   sessionId: z.string().nullable(),
   requestId: z.string().nullable(),
   metrics: normalizedMetricsSchema,
+  watchdog: watchdogDiagnosticsSchema.optional(),
 });
 
 const scoreSchema = z.number().int().min(1).max(10);
@@ -269,6 +280,7 @@ export type RunnerKind = z.infer<typeof runnerKindSchema>;
 export type RunnerDefinition = z.infer<typeof runnerDefinitionSchema>;
 export type FixtureManifest = z.infer<typeof fixtureManifestSchema>;
 export type NormalizedRunResult = z.infer<typeof normalizedRunResultSchema>;
+export type WatchdogDiagnostics = z.infer<typeof watchdogDiagnosticsSchema>;
 export type Review = z.infer<typeof reviewSchema>;
 export type SelectResultVersion = z.infer<typeof selectResultVersionSchema>;
 export type PreviewResultVersion = z.infer<typeof previewResultVersionSchema>;

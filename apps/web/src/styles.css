@@ -166,6 +166,15 @@ button:where(:has(.icon)), a:where(:has(.icon)) { display: inline-flex; align-it
 .run-row-score-none { color: var(--muted); font-weight: 400; }
 .row-delete { flex: 0 0 auto; display: grid; place-items: center; width: 100%; padding: 8px 0; color: var(--muted); background: transparent; border-color: transparent; font-size: 13px; line-height: 1; }
 .row-delete:hover { color: var(--bad); border-color: #9e5d65; background: rgba(248, 136, 130, .06); }.run-row strong { overflow: hidden; text-overflow: ellipsis; }.run-row time { color: var(--muted); font: 12px var(--font-ui); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }.status { display: inline-block; max-width: 100%; width: max-content; padding: 4px 8px; overflow: hidden; border: 1px solid currentColor; border-radius: 999px; font: 500 11px var(--font-ui); text-overflow: ellipsis; white-space: nowrap; background: var(--surface-3); }.status-completed { color: var(--good); background: rgba(130, 208, 173, .08); }.status-running { color: var(--signal); background: rgba(127, 166, 242, .08); }.status-pending { color: var(--warn); background: rgba(235, 194, 116, .08); }.status-failed, .status-cancelled { color: var(--bad); background: rgba(248, 136, 130, .08); }.status-partial { color: var(--warn); background: rgba(235, 194, 116, .08); }
+.status-agent_loop { color: var(--bad); background: rgba(248, 136, 130, .08); }
+.watchdog-notice { display: grid; gap: 12px; margin: 12px 0; padding: 12px; border: 1px solid #77464c; border-radius: var(--r-md); background: rgba(248, 136, 130, .06); }
+.watchdog-notice > div:first-child { display: grid; gap: 4px; }
+.watchdog-notice strong { color: #ffd2cf; }
+.watchdog-notice p { margin: 0; color: var(--muted); }
+.watchdog-notice dl { display: grid; gap: 6px; margin: 0; }
+.watchdog-notice dl div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px; }
+.watchdog-notice dt { color: var(--muted); }
+.watchdog-notice dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono); }
 .run-split { display: grid; grid-template-columns: clamp(210px, 16vw, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .prompt-rail { position: sticky; top: 16px; display: grid; gap: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
 .prompt-rail ol { display: grid; gap: 2px; max-height: calc(100vh - 150px); margin: 0; padding: 8px; overflow-y: auto; list-style: none; }
@@ -177,6 +186,7 @@ button:where(:has(.icon)), a:where(:has(.icon)) { display: inline-flex; align-it
 .rail-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .rail-dot.status-completed { background: var(--good); }
 .rail-dot.status-failed { background: var(--bad); }
+.rail-dot.status-agent_loop { background: var(--bad); }
 .rail-dot.status-running { background: var(--signal); }
 .rail-dot.status-pending { background: var(--warn); }
 .rail-score { color: var(--muted); font: 11px var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }

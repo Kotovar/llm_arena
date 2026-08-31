@@ -791,7 +791,7 @@ export function createStore(filename: string) {
       });
     },
     updateRunStatus(id: string, status: RunStatus, error?: string) {
-      const finishedAt = ["completed", "failed", "cancelled"].includes(status) ? now() : null;
+      const finishedAt = ["completed", "failed", "cancelled", "agent_loop"].includes(status) ? now() : null;
       sqlite.prepare("UPDATE benchmark_runs SET status = ?, error = ?, finished_at = COALESCE(?, finished_at) WHERE id = ?").run(status, error ?? null, finishedAt, id);
     },
     listRuns() {

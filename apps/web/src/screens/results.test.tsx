@@ -50,6 +50,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("watchdog diagnostics", () => {
+  it("explains an automatically stopped agent loop in the task result", async () => {
+    await renderResult(taskRun({
+      status: "agent_loop",
+      error: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.",
+      errorDetails: {
+        code: "agent_loop",
+        message: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.",
+        details: "Агент повторял один и тот же вызов инструмента и не продвигался к результату.",
+        rawSize: 120,
+      },
+      result_json: JSON.stringify({
+        watchdog: {
+          loopReason: "REPEATED_TOOL_ERROR",
+          repeatCount: 5,
+          tool: "bash",
+          errorFingerprint: "ReferenceError: browser is not defined",
+          stepsSinceProgress: 3,
+          totalToolCalls: 6,
+        },
+      }),
+    }));
+
+    expect(screen.getByText("Промпт остановлен: агент зациклился")).toBeTruthy();
+    expect(screen.getByText("bash · 5 повторов")).toBeTruthy();
+    expect(screen.getByText("ReferenceError: browser is not defined")).toBeTruthy();
+  });
+});
+
 describe("фильтры списка запусков", () => {
   const run = (id: string, modelId: string, name: string) => ({ id, model_id: modelId, runner_id: "runner-1", status: "completed", created_at: "2026-01-01T00:00:00.000Z", snapshot_json: JSON.stringify({ model: { name } }), use_omp_agent: 0 });
 

@@ -36,4 +36,11 @@ describe("generation error diagnostics", () => {
       details: "Runner был остановлен через 30 мин.",
     });
   });
+
+  it("classifies a watchdog stop separately from a provider failure", () => {
+    expect(describeGenerationError("Agent loop detected: REPEATED_TOOL_ERROR; tool=bash; repeats=7; error=ReferenceError: browser is not defined")).toMatchObject({
+      code: "agent_loop",
+      message: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.",
+    });
+  });
 });

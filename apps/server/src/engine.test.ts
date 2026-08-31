@@ -430,6 +430,65 @@ console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content
     store.close();
   });
 
+  it("stops the looping prompt and keeps running the rest of the benchmark", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-watchdog-stop-"));
+    directories.push(root);
+    const script = join(root, "fake-omp-watchdog.mjs");
+    writeFileSync(script, `const emit=(event) => console.log(JSON.stringify(event));
+if ((process.argv.at(-1) ?? "").includes("loop me")) for (let i=0; i<8; i++) {
+  emit({type:"tool_execution_start",toolCallId:String(i),toolName:"bash",args:{command:"node /tmp/browser_check.mjs"}});
+  emit({type:"tool_execution_end",toolCallId:String(i),toolName:"bash",result:{content:[{type:"text",text:"ReferenceError: browser is not defined at /tmp/browser_check.mjs:1:1"}]},isError:true});
+} else emit({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:"second prompt done"}]}]});`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const looping = store.createTask({ name: "Loop", kind: "prompt", prompt: "loop me", tags: [] });
+    const healthy = store.createTask({ name: "Healthy", kind: "prompt", prompt: "answer", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
+    const run = store.createRun({ taskRevisionIds: [looping.currentRevision.id, healthy.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", useOmpAgent: true });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("watchdog-stop-test", 100));
+
+    await engine.processNext();
+
+    const [looped, next] = store.listTaskRuns(run.id);
+    expect(looped?.status).toBe("agent_loop");
+    expect(JSON.parse(looped?.result_json ?? "{}")).toMatchObject({ watchdog: { tool: "bash", errorFingerprint: "ReferenceError: browser is not defined at <temp-path>:<location>" } });
+    expect(next?.status).toBe("completed");
+    expect(JSON.parse(next?.result_json ?? "{}").finalAnswer).toBe("second prompt done");
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed" });
+    await engine.stop();
+    store.close();
+  });
+
+  it("enforces the hard tool-call limit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-watchdog-hard-limit-"));
+    directories.push(root);
+    const script = join(root, "fake-omp-watchdog.mjs");
+    writeFileSync(script, `const emit=(event) => console.log(JSON.stringify(event));
+for (let i=0; i<4; i++) {
+  emit({type:"tool_execution_start",toolCallId:String(i),toolName:"tool-"+i,args:{command:"step-"+i}});
+  emit({type:"tool_execution_end",toolCallId:String(i),toolName:"tool-"+i,result:{content:[{type:"text",text:"ok-"+i}]},isError:false});
+}`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.defaults.watchdog = { ...config.defaults.watchdog, maxToolCalls: 4, maxNoProgress: 99, sameFailureThreshold: 99, sameErrorThreshold: 99, patternMinRepeats: 99 };
+    config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "original task", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", useOmpAgent: true });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("watchdog-hard-limit-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    expect(taskRun.status).toBe("agent_loop");
+    expect(JSON.parse(taskRun.result_json ?? "{}")).toMatchObject({ watchdog: { loopReason: "HARD_TOOL_CALL_LIMIT", totalToolCalls: 4 } });
+    await engine.stop();
+    store.close();
+  });
+
   it("saves the run environment beside the resolved profile", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-provenance-engine-"));
     directories.push(root);

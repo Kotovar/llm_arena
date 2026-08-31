@@ -92,6 +92,7 @@ describe("интерфейс запуска", () => {
     expect(statusLabel("completed")).toBe("Завершён");
     expect(statusLabel("failed")).toBe("Ошибка");
     expect(statusLabel("cancelled")).toBe("Остановлен");
+    expect(statusLabel("agent_loop")).toBe("Остановлен watchdog");
     expect(statusLabel("running-followup")).toBe("Выполняется уточнение");
     expect(statusLabel("partial")).toBe("Выполнен частично");
   });

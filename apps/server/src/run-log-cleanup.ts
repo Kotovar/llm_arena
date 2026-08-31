@@ -10,7 +10,7 @@ type RunLogStore = {
   }>;
 };
 
-const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+const terminalStatuses = new Set(["completed", "failed", "cancelled", "agent_loop"]);
 const runLogNames = ["backend.stdout.log", "backend.stderr.log", "system-metrics.ndjson"];
 // omp/models.db — копия каталога моделей OMP (~1.2 МБ на промпт), она восстанавливается сама при следующем запуске.
 const taskArtifactNames = ["stdout.log", "stderr.log", "display.log", "omp/models.db", "omp/models.db-shm", "omp/models.db-wal"];

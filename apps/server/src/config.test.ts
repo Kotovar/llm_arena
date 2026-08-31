@@ -19,6 +19,18 @@ describe("host configuration", () => {
     expect(fixture?.source).toMatch(/\/fixtures\/node-smoke$/u);
   });
 
+  it("loads conservative watchdog defaults", () => {
+    const config = loadConfig("../../arena.config.yaml");
+
+    expect(config.defaults.watchdog).toMatchObject({
+      sameFailureThreshold: 5,
+      sameErrorThreshold: 5,
+      patternMinRepeats: 4,
+      maxNoProgress: 16,
+      maxToolCalls: 600,
+    });
+  });
+
   it("uses environment overrides for local machine paths", () => {
     vi.stubEnv("LLM_ARENA_MODEL_DIRECTORY", "/models");
     vi.stubEnv("LLM_ARENA_LLAMA_SERVER", "/bin/llama-server");

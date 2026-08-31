@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { FixtureManifest, LlamaProfile, TaskImage } from "@llm-arena/shared";
+import type { FixtureManifest, LlamaProfile, TaskImage, WatchdogDiagnostics } from "@llm-arena/shared";
 import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { LlamaCppServerManager } from "./llama-server.js";
@@ -9,7 +9,7 @@ import { renderPreviewArgv, waitReady } from "./preview.js";
 import { type OwnedProcess, ProcessSupervisor } from "./process-supervisor.js";
 import { buildScreenshotArgv } from "./screenshot.js";
 import { createRedactor } from "./redact.js";
-import { createRunner } from "./runners/index.js";
+import { RunnerWatchdogStopError, createRunner } from "./runners/index.js";
 import { createLiveOutput } from "./runners/live-output.js";
 import type { ArenaStore } from "./store.js";
 import { completedResultVersions } from "./result-versions.js";
@@ -17,6 +17,7 @@ import { readExecutableVersion, readGpuInfo, startGpuSampler, type GpuInfo } fro
 import { buildTaskPrompt } from "./task-prompt.js";
 import { describeGenerationError } from "./generation-error.js";
 import { taskImagePath } from "./task-images.js";
+import { AgentLoopError, createWatchdog } from "./watchdog.js";
 
 type RunEvent = { type: string; runId: string; taskRunId?: string; data?: unknown };
 
@@ -122,14 +123,15 @@ export class BenchmarkEngine {
     this.#emit({ type: "run.status", runId: run.id, data: { status: "running" } });
     try {
       await this.#execute(run, controller.signal);
-      const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed");
+      const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed" || taskRun.status === "agent_loop");
+      const status = controller.signal.aborted ? "cancelled" : failedTask ? "failed" : "completed";
       this.store.updateRunStatus(
         run.id,
-        controller.signal.aborted ? "cancelled" : failedTask ? "failed" : "completed",
+        status,
         this.#stopReasons.get(run.id) ?? failedTask?.error ?? undefined,
       );
     } catch (error) {
-      const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed");
+      const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed" || taskRun.status === "agent_loop");
       const message = this.#stopReasons.get(run.id) ?? failedTask?.error ?? (error as Error).message;
       this.store.updateRunStatus(run.id, controller.signal.aborted ? "cancelled" : "failed", message);
       // При явной отмене техническая ошибка оборванного вызова — шум, а не то, что стоит показывать.
@@ -156,7 +158,8 @@ export class BenchmarkEngine {
     try {
       await this.#executeFollowup(followup, taskRun, controller.signal);
     } catch (error) {
-      this.store.saveFollowupResult(followup.id, {}, controller.signal.aborted ? "cancelled" : "failed", (error as Error).message);
+      const loopError = error instanceof AgentLoopError ? error : undefined;
+      this.store.saveFollowupResult(followup.id, loopError ? { watchdog: loopError.diagnostics } : {}, loopError ? "agent_loop" : controller.signal.aborted ? "cancelled" : "failed", (error as Error).message);
     } finally {
       this.#controllers.delete(followup.id);
       this.#emit({ type: "followup.status", runId: taskRun.benchmark_run_id, taskRunId: taskRun.id, data: { id: followup.id, status: this.store.getFollowup(followup.id)?.status } });
@@ -309,7 +312,9 @@ export class BenchmarkEngine {
             const failure = attemptResult.exitCode === 0 ? undefined : `Runner exited ${attemptResult.exitCode}`;
             this.store.recordTaskAttempt(taskRun.id, attempt, attemptResult, failure ? "failed" : "completed", failure);
           } catch (error) {
-            this.store.recordTaskAttempt(taskRun.id, attempt, {}, taskSignal.aborted ? "cancelled" : "failed", (error as Error).message);
+            const loopError = error instanceof AgentLoopError ? error : undefined;
+            const status = loopError ? "agent_loop" as const : taskSignal.aborted ? "cancelled" as const : "failed" as const;
+            this.store.recordTaskAttempt(taskRun.id, attempt, loopError ? { watchdog: loopError.diagnostics } : {}, status, (error as Error).message);
           }
         };
         const repeats = repeated ? run.repeat_count : 1;
@@ -348,10 +353,13 @@ export class BenchmarkEngine {
           this.store.saveTaskRunResult(taskRun.id, saved, status, failure);
           if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, saved, status, failure);
         } catch (error) {
+          const watchdogError = error instanceof AgentLoopError ? error : undefined;
           const failure = (error as Error).message;
-          const status = taskSignal.aborted ? "cancelled" as const : "failed" as const;
-          this.store.saveTaskRunResult(taskRun.id, {}, status, failure);
-          if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, {}, status, failure);
+          const status = watchdogError ? "agent_loop" as const : taskSignal.aborted ? "cancelled" as const : "failed" as const;
+          const result = watchdogError ? { watchdog: watchdogError.diagnostics } : {};
+          if (watchdogError) writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+          this.store.saveTaskRunResult(taskRun.id, result, status, failure);
+          if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, result, status, failure);
         }
         for (let attempt = 2; attempt <= repeats && !taskSignal.aborted; attempt += 1) {
           if (backend && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
@@ -463,36 +471,65 @@ export class BenchmarkEngine {
     const redact = createRedactor([...Object.values(input.definition.env), ...secretValues]);
     const liveOutput = createLiveOutput(input.definition.kind);
     let stderrShown = false;
-    return createRunner(input.definition.kind, this.supervisor).run({
-      definition: input.definition,
-      prompt: input.prompt,
-      images: input.images,
-      workspace: input.workspace,
-      modelRef: input.modelRef,
-      reasoningEffort: input.reasoningEffort,
-      taskKind: input.taskKind,
-      useOmpAgent: input.useOmpAgent,
-      taskDataDir: input.taskDataDir,
-      timeoutMs: input.timeoutMs,
-      signal: input.signal,
-      ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
-      onStdout: (text) => {
-        const safe = redact(text);
-        appendFileSync(input.stdoutPath, safe);
-        const display = liveOutput.push(safe);
-        if (display) appendFileSync(input.displayPath, display);
-        this.#emit({ type: "task.stdout", runId: input.runId, taskRunId: input.taskRunId, data: safe });
-      },
-      onStderr: (text) => {
-        const safe = redact(text);
-        appendFileSync(input.stderrPath, safe);
-        if (!stderrShown && safe.trim()) {
-          appendFileSync(input.displayPath, `\nОшибка runner: ${safe.trim().split("\n")[0]!.slice(0, 400)}\n`);
-          stderrShown = true;
-        }
-        this.#emit({ type: "task.stderr", runId: input.runId, taskRunId: input.taskRunId, data: safe });
-      },
-    });
+    const watchdog = input.definition.kind === "omp" ? createWatchdog(this.config.defaults.watchdog) : undefined;
+    // args приходят только в tool_execution_start, результат — только в end: склеиваем их по toolCallId.
+    const activeToolCalls = new Map<string, { toolName: string; args: unknown }>();
+    let loop: WatchdogDiagnostics | undefined;
+    try {
+      return await createRunner(input.definition.kind, this.supervisor).run({
+        definition: input.definition,
+        prompt: input.prompt,
+        images: input.images,
+        workspace: input.workspace,
+        modelRef: input.modelRef,
+        reasoningEffort: input.reasoningEffort,
+        taskKind: input.taskKind,
+        useOmpAgent: input.useOmpAgent,
+        taskDataDir: input.taskDataDir,
+        timeoutMs: input.timeoutMs,
+        signal: input.signal,
+        ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+        ...(watchdog ? {
+          onEvent: (event: Record<string, unknown>) => {
+            const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+            if (event.type === "tool_execution_start") {
+              if (id) activeToolCalls.set(id, { toolName: typeof event.toolName === "string" ? event.toolName : "unknown", args: event.args });
+              return "continue" as const;
+            }
+            if (event.type !== "tool_execution_end") return "continue" as const;
+            const started = id ? activeToolCalls.get(id) : undefined;
+            if (id) activeToolCalls.delete(id);
+            const toolName = typeof event.toolName === "string" ? event.toolName : started?.toolName;
+            if (!toolName) return "continue" as const;
+            const decision = watchdog.observe({ toolName, args: started?.args ?? event.args, result: event.result, isError: event.isError === true });
+            if (decision.action === "terminate") {
+              loop = decision.diagnostics;
+              appendFileSync(input.displayPath, `\nWatchdog: агент зациклился (${decision.diagnostics.tool}, повторов: ${decision.diagnostics.repeatCount}). Промпт остановлен.\n`);
+            }
+            return decision.action;
+          },
+        } : {}),
+        onStdout: (text) => {
+          const safe = redact(text);
+          appendFileSync(input.stdoutPath, safe);
+          const display = liveOutput.push(safe);
+          if (display) appendFileSync(input.displayPath, display);
+          this.#emit({ type: "task.stdout", runId: input.runId, taskRunId: input.taskRunId, data: safe });
+        },
+        onStderr: (text) => {
+          const safe = redact(text);
+          appendFileSync(input.stderrPath, safe);
+          if (!stderrShown && safe.trim()) {
+            appendFileSync(input.displayPath, `\nОшибка runner: ${safe.trim().split("\n")[0]!.slice(0, 400)}\n`);
+            stderrShown = true;
+          }
+          this.#emit({ type: "task.stderr", runId: input.runId, taskRunId: input.taskRunId, data: safe });
+        },
+      });
+    } catch (error) {
+      if (error instanceof RunnerWatchdogStopError && loop) throw new AgentLoopError(loop);
+      throw error;
+    }
   }
 
   // Поднимает результат на свободном порту и снимает превью браузером. Любой сбой — просто нет картинки.

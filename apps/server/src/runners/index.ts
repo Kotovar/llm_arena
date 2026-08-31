@@ -19,7 +19,15 @@ export type RunnerInput = {
   baseUrl?: string;
   onStdout: (text: string) => void;
   onStderr: (text: string) => void;
+  onEvent?: (event: Record<string, unknown>) => "continue" | "terminate";
 };
+
+export class RunnerWatchdogStopError extends Error {
+  constructor() {
+    super("Runner stopped by watchdog");
+    this.name = "RunnerWatchdogStopError";
+  }
+}
 
 export interface ModelRunner {
   readonly capabilities: ReadonlySet<"prompt" | "coding">;
@@ -54,6 +62,31 @@ class CliRunner implements ModelRunner {
     let idleTimer: NodeJS.Timeout | undefined;
     let inactive = false;
     let child: OwnedProcess | undefined;
+    let eventBuffer = "";
+    let watchdogStopped = false;
+    const inspectEvents = (text: string, flush = false) => {
+      if (!input.onEvent || watchdogStopped) return;
+      eventBuffer += text;
+      const lines = eventBuffer.split("\n");
+      const pending = lines.pop() ?? "";
+      eventBuffer = flush ? "" : pending;
+      if (flush && pending) lines.push(pending);
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let event: unknown;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!event || typeof event !== "object" || Array.isArray(event)) continue;
+        if (input.onEvent(event as Record<string, unknown>) === "terminate") {
+          watchdogStopped = true;
+          void child?.stop();
+          return;
+        }
+      }
+    };
     const resetIdleTimer = () => {
       if (inactive) return;
       if (idleTimer) clearTimeout(idleTimer);
@@ -69,6 +102,7 @@ class CliRunner implements ModelRunner {
       onStdout: (text) => {
         resetIdleTimer();
         stdout += text;
+        inspectEvents(text);
         input.onStdout(text);
       },
       onStderr: (text) => {
@@ -83,11 +117,14 @@ class CliRunner implements ModelRunner {
     child.stdin.end(this.promptOnStdin ? input.prompt : undefined);
     try {
       const processResult = await child.completed;
+      inspectEvents("", true);
+      if (watchdogStopped) throw new RunnerWatchdogStopError();
       if (inactive) throw new Error(`Runner inactive for ${input.timeoutMs} ms`);
       if (processResult.cancelled || input.signal.aborted) throw new Error("Runner cancelled");
       const parsed = this.parser(stdout, processResult.durationMs, 0);
       return { ...parsed, exitCode: processResult.exitCode === 0 ? parsed.exitCode : processResult.exitCode ?? 1 };
     } catch (error) {
+      if (error instanceof RunnerWatchdogStopError) throw error;
       const detail = stderr.trim();
       throw new Error(detail ? `${(error as Error).message}: ${detail}` : (error as Error).message);
     } finally {

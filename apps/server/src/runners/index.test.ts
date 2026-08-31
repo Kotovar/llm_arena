@@ -11,6 +11,37 @@ afterEach(() => {
 });
 
 describe("CLI runner", () => {
+  it("reports JSONL events and stops when the event consumer requests it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-watchdog-"));
+    directories.push(root);
+    const script = join(root, "fake-watchdog.mjs");
+    writeFileSync(script, `
+console.log(JSON.stringify({type:"tool_execution_start",toolCallId:"call-1",toolName:"bash",args:{command:"same"}}));
+console.log(JSON.stringify({type:"tool_execution_end",toolCallId:"call-1",toolName:"bash",result:{content:[{type:"text",text:"Error: stuck"}]},isError:true}));
+setTimeout(() => console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:"should not finish"}]}]})), 1_000);
+`);
+    const events: string[] = [];
+    const runner = createRunner("omp", new ProcessSupervisor("runner-watchdog-test", 100));
+
+    await expect(runner.run({
+      definition: { id: "fake", name: "Fake", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
+      prompt: "Keep context",
+      workspace: root,
+      modelRef: "test-model",
+      taskDataDir: root,
+      timeoutMs: 2_000,
+      signal: new AbortController().signal,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+      onEvent: (event) => {
+        events.push(String(event.type));
+        return "terminate";
+      },
+    })).rejects.toThrow("Runner stopped by watchdog");
+
+    expect(events).toEqual(["tool_execution_start"]);
+  });
+
   it("sends local task images as OpenAI-compatible content parts", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-runner-"));
     directories.push(root);
