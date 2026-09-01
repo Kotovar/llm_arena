@@ -144,6 +144,16 @@ describe("agent watchdog", () => {
     expect(decision).toMatchObject({ action: "terminate", diagnostics: { loopReason: "HARD_NO_PROGRESS" } });
   });
 
+  it("counts a two-step cycle as no progress once the repeat signals are disabled", () => {
+    // Раньше стоп считался только против предыдущего шага, поэтому чередование A,B,A,B
+    // вечно обнуляло счётчик и maxNoProgress был недостижим.
+    const watchdog = createWatchdog(config({ sameFailureThreshold: 99, sameErrorThreshold: 99, patternMinRepeats: 99, maxNoProgress: 4 }));
+    const cycle = ["a", "b", "a", "b", "a", "b"].map((tool) => watchdog.observe(call(tool)));
+
+    expect(cycle.map((item) => item.action)).toEqual(["continue", "continue", "continue", "continue", "continue", "terminate"]);
+    expect(cycle.at(-1)).toMatchObject({ action: "terminate", diagnostics: { loopReason: "HARD_NO_PROGRESS" } });
+  });
+
   it("uses the absolute total tool-call emergency limit", () => {
     const watchdog = createWatchdog(config({ maxToolCalls: 4, sameFailureThreshold: 99, sameErrorThreshold: 99, patternMinRepeats: 99, maxNoProgress: 99 }));
 

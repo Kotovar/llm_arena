@@ -412,7 +412,7 @@ export function formatWatchdogDiagnostics(diagnostics: WatchdogDiagnostics) {
     repeatCount: diagnostics.repeatCount,
     error: watchdogErrorSummary(source),
     totalToolCalls: diagnostics.totalToolCalls,
-    rawError: diagnostics.rawError ?? null,
+    rawError: diagnostics.rawError ? diagnosticErrorPreview(diagnostics.rawError) : null,
     debug: {
       stepsSinceProgress: diagnostics.stepsSinceProgress,
       errorFingerprint: diagnostics.errorFingerprint,

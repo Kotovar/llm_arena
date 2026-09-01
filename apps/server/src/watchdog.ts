@@ -47,6 +47,9 @@ type Step = {
   isError: boolean;
 };
 
+// Столько исходной ошибки хватает, чтобы разобраться; дальше начинается дамп, который поедет и в result.json, и в DOM.
+const MAX_RAW_ERROR = 4_000;
+
 const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]/gu;
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu;
 const ISO_TIMESTAMP = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b/gu;
@@ -150,10 +153,9 @@ export function createWatchdog(overrides: Partial<WatchdogConfig> = {}) {
         isError: call.isError === true,
         resultFingerprint: errorFingerprint ?? digest(call.result),
       };
-      const previous = history.at(-1);
-      const progress = !previous
-        || current.actionFingerprint !== previous.actionFingerprint
-        || current.resultFingerprint !== previous.resultFingerprint;
+      // Прогресс — шаг, которого в окне ещё не было. Сравнение с одним предыдущим шагом
+      // обнуляло счётчик на любом чередовании A,B,A,B и делал maxNoProgress недостижимым.
+      const progress = !history.some((item) => item.actionFingerprint === current.actionFingerprint && item.resultFingerprint === current.resultFingerprint);
       totalToolCalls += 1;
       stepsSinceProgress = progress ? 0 : stepsSinceProgress + 1;
       history.push(current);
@@ -183,7 +185,7 @@ export function createWatchdog(overrides: Partial<WatchdogConfig> = {}) {
         tool: current.toolName,
         repeatCount: stop.repeats,
         errorFingerprint: current.errorFingerprint,
-        rawError: current.isError ? resultText(call.result) || null : null,
+        rawError: current.isError ? resultText(call.result).slice(0, MAX_RAW_ERROR) || null : null,
         stepsSinceProgress,
         totalToolCalls,
       };

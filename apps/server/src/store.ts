@@ -126,7 +126,7 @@ type CompletedResultRow = {
 
 type DecisionRow = {
   id: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "agent_loop";
   result_json: string | null;
   run_id: string;
   run_status: RunStatus;
@@ -926,7 +926,7 @@ export function createStore(filename: string) {
         JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
         JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
-        WHERE task_runs.status IN ('completed', 'failed') AND task_runs.broken_at IS NULL
+        WHERE task_runs.status IN ('completed', 'failed', 'agent_loop') AND task_runs.broken_at IS NULL
         ORDER BY task_runs.created_at
       `);
     },

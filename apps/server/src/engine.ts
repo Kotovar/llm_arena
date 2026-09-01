@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import type { FixtureManifest, LlamaProfile, TaskImage, WatchdogDiagnostics } from "@llm-arena/shared";
 import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
+import { loadOwnerId, recoverOwnedProcesses } from "./lifecycle.js";
 import { LlamaCppServerManager } from "./llama-server.js";
 import { allocatePort } from "./port.js";
 import { renderPreviewArgv, waitReady } from "./preview.js";
@@ -92,7 +93,10 @@ export class BenchmarkEngine {
     const listeners = this.#listeners.get(runId) ?? new Set();
     listeners.add(listener);
     this.#listeners.set(runId, listeners);
-    return () => listeners.delete(listener);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) this.#listeners.delete(runId);
+    };
   }
 
   #emit(event: RunEvent): void {
@@ -100,6 +104,9 @@ export class BenchmarkEngine {
   }
 
   wake(): void {
+    // Калибровка и проверка модели держат свой llama-server с той же меткой владельца: очередь,
+    // стартовавшая поверх них, добила бы его в #reapOrphans. Обе сами зовут wake() в finally.
+    if (this.#calibrating || this.#testing) return;
     if (!this.#pumping && !this.#stopping) {
       const pumping = this.#pump();
       this.#pumping = pumping;
@@ -112,6 +119,20 @@ export class BenchmarkEngine {
   async #pump(): Promise<void> {
     while (!this.#stopping && (await this.processNext())) {
       // ponytail: one global worker is deliberate; add resource-aware lanes only if concurrent benchmarks become useful.
+      this.#reapOrphans();
+    }
+  }
+
+  /**
+   * Сервер, поднятый самим агентом в yolo-режиме, гибнет вместе с группой процессов раннера — но
+   * только если из неё не ушёл. Ушедший через setsid держал бы порт до следующего старта приложения,
+   * поэтому между единицами работы добиваем всё, что осталось помеченным нашим владельцем.
+   */
+  #reapOrphans(): void {
+    try {
+      recoverOwnedProcesses(loadOwnerId(this.config.dataDir));
+    } catch {
+      // Осиротевшие процессы — не повод валить очередь: их всё равно добьёт следующий старт.
     }
   }
 
@@ -361,11 +382,14 @@ export class BenchmarkEngine {
           this.store.saveTaskRunResult(taskRun.id, result, status, failure);
           if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, result, status, failure);
         }
-        for (let attempt = 2; attempt <= repeats && !taskSignal.aborted; attempt += 1) {
-          if (backend && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
-          await measure(attempt);
+        try {
+          for (let attempt = 2; attempt <= repeats && !taskSignal.aborted; attempt += 1) {
+            if (backend && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
+            await measure(attempt);
+          }
+        } finally {
+          this.#taskControllers.delete(taskRun.id);
         }
-        this.#taskControllers.delete(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: this.store.getTaskRun(taskRun.id)?.status } });
         if (backend && !signal.aborted && !(await backend.reset())) {
           throw new Error("llama.cpp KV slot reset failed");
@@ -491,15 +515,19 @@ export class BenchmarkEngine {
         ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
         ...(watchdog ? {
           onEvent: (event: Record<string, unknown>) => {
-            const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+            const eventTool = typeof event.toolName === "string" ? event.toolName : undefined;
+            // Без toolCallId склеиваем по имени инструмента: `args: undefined` схлопнул бы все вызовы
+            // одного инструмента в один fingerprint и сделал watchdog тихо агрессивнее.
+            // ponytail: потолок — два параллельных вызова одного инструмента без id перепутают args между собой.
+            const id = typeof event.toolCallId === "string" ? event.toolCallId : eventTool;
             if (event.type === "tool_execution_start") {
-              if (id) activeToolCalls.set(id, { toolName: typeof event.toolName === "string" ? event.toolName : "unknown", args: event.args });
+              if (id) activeToolCalls.set(id, { toolName: eventTool ?? "unknown", args: event.args });
               return "continue" as const;
             }
             if (event.type !== "tool_execution_end") return "continue" as const;
             const started = id ? activeToolCalls.get(id) : undefined;
             if (id) activeToolCalls.delete(id);
-            const toolName = typeof event.toolName === "string" ? event.toolName : started?.toolName;
+            const toolName = eventTool ?? started?.toolName;
             if (!toolName) return "continue" as const;
             const decision = watchdog.observe({ toolName, args: started?.args ?? event.args, result: event.result, isError: event.isError === true });
             if (decision.action === "terminate") {
@@ -541,6 +569,7 @@ export class BenchmarkEngine {
     const profileDir = join(artifactRoot, "browser-profile");
     const append = (text: string) => appendFileSync(logPath, text);
     let server: OwnedProcess | undefined;
+    let browser: OwnedProcess | undefined;
     try {
       // Уточнение снимает поверх исходного снимка: без удаления неудача сойдёт за успех по старому файлу.
       rmSync(target, { force: true });
@@ -556,7 +585,7 @@ export class BenchmarkEngine {
       });
       server.stdin.end();
       await waitReady(url, server, 60_000);
-      const browser = this.supervisor.spawn({
+      browser = this.supervisor.spawn({
         argv: buildScreenshotArgv(this.config.browser, url, target, profileDir),
         cwd: workspace,
         // Снимок необязателен, поэтому ждём его заметно меньше, чем проверку.
@@ -571,7 +600,7 @@ export class BenchmarkEngine {
       append(`${(error as Error).message}\n`);
       return false;
     } finally {
-      await server?.stop();
+      await Promise.all([browser?.stop(), server?.stop()]);
       rmSync(profileDir, { recursive: true, force: true });
     }
   }

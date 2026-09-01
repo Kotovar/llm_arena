@@ -1622,7 +1622,7 @@ describe("REST API", () => {
     const run = store.createRun({ taskRevisionIds: [agentTask.currentRevision.id], modelId: model.id, executionProfileId: profile.id, runnerId: "llama-chat", resultMode: "text" });
     mkdirSync(join(config.dataDir, "runs", run.id), { recursive: true });
     writeFileSync(join(config.dataDir, "runs", run.id, "system-summary.json"), JSON.stringify({ peakVramMiB: 15100, peakTemperatureC: 70 }));
-    const measured = async (revisionId: string, position: number, tps: number | null, status: "completed" | "failed", score?: number) => {
+    const measured = async (revisionId: string, position: number, tps: number | null, status: "completed" | "failed" | "agent_loop", score?: number) => {
       const taskRun = store.createTaskRun(run.id, revisionId, position, join(directory, `t${position}`), { task: { id: revisionId } });
       store.saveTaskRunResult(taskRun.id, tps === null ? { finalAnswer: "A" } : { finalAnswer: "A", metrics: { generationTokensPerSecond: { value: tps }, totalDurationMs: { value: 1000 } } }, status);
       if (score !== undefined) await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/review`, payload: review(score) });
@@ -1631,6 +1631,8 @@ describe("REST API", () => {
     await measured(agentTask.currentRevision.id, 0, 40, "completed", 8);
     await measured(agentTask.currentRevision.id, 1, 42, "completed", 8);
     await measured(agentTask.currentRevision.id, 2, 50, "failed");
+    // Остановленный watchdog'ом промпт — такая же неудача, как упавший: из статистики он выпадать не должен.
+    await measured(agentTask.currentRevision.id, 4, null, "agent_loop");
     // Промпт из другого среза: в срез coding-agent он попасть не должен.
     await measured(plainTask.currentRevision.id, 3, 5, "completed", 2);
     // Прогон, оборванный целиком: промптовых неудач он не даёт, но в цифрах должен быть виден.
@@ -1646,19 +1648,19 @@ describe("REST API", () => {
       profileName: "Скорость",
       tag: "coding-agent",
       untagged: false,
-      sampleCount: 4,
+      sampleCount: 5,
       qualityPercent: 80,
       medianTokensPerSecond: 42,
       medianDurationMs: 1000,
       peakVramMiB: 15100,
-      failureRate: expect.closeTo(0.25, 2),
+      failureRate: expect.closeTo(0.4, 2),
       runCount: 2,
       interruptedRunCount: 1,
       estimatedCostPerRun: null,
     })]);
 
     const all = await app.inject({ method: "GET", url: "/api/analytics/decision-points" });
-    expect((all.json() as Array<{ sampleCount: number; tag: string | null; untagged: boolean }>)[0]).toMatchObject({ sampleCount: 5, tag: null, untagged: false });
+    expect((all.json() as Array<{ sampleCount: number; tag: string | null; untagged: boolean }>)[0]).toMatchObject({ sampleCount: 6, tag: null, untagged: false });
 
     const untagged = await app.inject({ method: "GET", url: "/api/analytics/decision-points?untagged=1" });
     expect((untagged.json() as Array<{ sampleCount: number; untagged: boolean; qualityPercent: number | null }>)[0]).toMatchObject({ sampleCount: 1, untagged: true, qualityPercent: 20 });

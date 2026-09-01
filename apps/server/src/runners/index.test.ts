@@ -3,11 +3,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProcessSupervisor } from "../process-supervisor.js";
-import { createRunner } from "./index.js";
+import { createRunner, createStdoutBuffer } from "./index.js";
 
 const directories: string[] = [];
 afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+describe("stdout buffer", () => {
+  it("keeps everything a normal run produces", () => {
+    const buffer = createStdoutBuffer(10, 10);
+    for (const line of ["a\n", "b\n", "c\n"]) buffer.push(line);
+
+    expect(buffer.text()).toBe("a\nb\nc\n");
+  });
+
+  it("drops the middle of a runaway run but leaves both ends parseable", () => {
+    const buffer = createStdoutBuffer(8, 8);
+    for (const line of ["session\n", "junk-1\n", "junk-2\n", "junk-3\n", "end\n"]) buffer.push(line);
+    const lines = buffer.text().split("\n").filter(Boolean);
+
+    expect(lines[0]).toBe("session");
+    expect(lines.at(-1)).toBe("end");
+    expect(lines).not.toContain("junk-1");
+  });
 });
 
 describe("CLI runner", () => {

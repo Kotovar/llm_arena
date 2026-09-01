@@ -106,10 +106,12 @@ export class OwnedProcess {
     if (this.#settled) return;
     if (!this.#timedOut) this.#cancelled = true;
     signalGroup(this.pid, "SIGTERM");
+    let grace: NodeJS.Timeout | undefined;
     const exited = await Promise.race([
       this.completed.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), this.graceMs)),
+      new Promise<false>((resolve) => { grace = setTimeout(() => resolve(false), this.graceMs); }),
     ]);
+    if (grace) clearTimeout(grace);
     if (!exited) signalGroup(this.pid, "SIGKILL");
     await this.completed;
   }

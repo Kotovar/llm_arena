@@ -63,7 +63,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
         estimatedCostPerRun: model?.economics ? model.economics.monthlyCost / model.economics.includedRunEstimate : null,
       };
       point.sampleCount += 1;
-      if (row.status === "failed") point.failed += 1;
+      if (row.status === "failed" || row.status === "agent_loop") point.failed += 1;
       // Прогон может сорваться целиком — упасть на старте бэкенда или быть остановленным вручную.
       // Промптовые неудачи этого не показывают, поэтому считаем сорванные прогоны отдельно.
       point.runs.set(row.run_id, row.run_status === "failed" || row.run_status === "cancelled" ? "interrupted" : "completed");

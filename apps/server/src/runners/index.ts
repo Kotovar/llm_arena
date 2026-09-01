@@ -44,6 +44,33 @@ function childEnv(definition: RunnerDefinition): NodeJS.ProcessEnv {
 
 type Parser = (output: string, durationMs: number, startupMs: number) => NormalizedRunResult;
 
+// ponytail: держим в куче начало и конец вывода — парсерам нужны первое событие сессии и финальное
+// agent_end, а середина это тела tool call'ов. Потолок: у прогона длиннее лимита пропадут события из
+// середины, поэтому суммы по потоку (claude/codex) недосчитаются; полный вывод остаётся в stdout.log.
+const STDOUT_HEAD_LIMIT = 8_000_000;
+const STDOUT_TAIL_LIMIT = 56_000_000;
+
+export function createStdoutBuffer(headLimit = STDOUT_HEAD_LIMIT, tailLimit = STDOUT_TAIL_LIMIT) {
+  let head = "";
+  let tail = "";
+  let dropped = false;
+  return {
+    push(text: string) {
+      if (!tail && head.length < headLimit) {
+        head += text;
+        return;
+      }
+      tail += text;
+      if (tail.length <= tailLimit) return;
+      const cut = tail.indexOf("\n", tail.length - tailLimit);
+      tail = cut === -1 ? tail.slice(-tailLimit) : tail.slice(cut + 1);
+      dropped = true;
+    },
+    // Перенос строки на стыке обрывает недочитанную строку головы: парсер выбросит её как нечитаемую.
+    text: () => (dropped ? `${head}\n${tail}` : head + tail),
+  };
+}
+
 class CliRunner implements ModelRunner {
   readonly capabilities = new Set<"prompt" | "coding">(["prompt", "coding"]);
 
@@ -57,7 +84,7 @@ class CliRunner implements ModelRunner {
 
   async run(input: RunnerInput): Promise<NormalizedRunResult> {
     if (input.signal.aborted) throw new Error("Run cancelled before process start");
-    let stdout = "";
+    const stdout = createStdoutBuffer();
     let stderr = "";
     let idleTimer: NodeJS.Timeout | undefined;
     let inactive = false;
@@ -101,9 +128,10 @@ class CliRunner implements ModelRunner {
       env: { ...childEnv(input.definition), ...this.extraEnv?.(input) },
       onStdout: (text) => {
         resetIdleTimer();
-        stdout += text;
-        inspectEvents(text);
+        stdout.push(text);
+        // Сначала отдаём чанк наружу: иначе сообщение watchdog встаёт в логе перед выводом, который его и вызвал.
         input.onStdout(text);
+        inspectEvents(text);
       },
       onStderr: (text) => {
         resetIdleTimer();
@@ -121,7 +149,7 @@ class CliRunner implements ModelRunner {
       if (watchdogStopped) throw new RunnerWatchdogStopError();
       if (inactive) throw new Error(`Runner inactive for ${input.timeoutMs} ms`);
       if (processResult.cancelled || input.signal.aborted) throw new Error("Runner cancelled");
-      const parsed = this.parser(stdout, processResult.durationMs, 0);
+      const parsed = this.parser(stdout.text(), processResult.durationMs, 0);
       return { ...parsed, exitCode: processResult.exitCode === 0 ? parsed.exitCode : processResult.exitCode ?? 1 };
     } catch (error) {
       if (error instanceof RunnerWatchdogStopError) throw error;

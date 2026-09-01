@@ -461,6 +461,77 @@ if ((process.argv.at(-1) ?? "").includes("loop me")) for (let i=0; i<8; i++) {
     store.close();
   });
 
+  it("holds the queue while a calibration is running and starts it afterwards", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-wake-calibration-"));
+    directories.push(root);
+    const script = join(root, "fake-omp.mjs");
+    writeFileSync(script, `console.log(JSON.stringify({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:"queued answer"}]}]}));`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const local = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(root, "model.gguf"), alias: "local" });
+    const profile = store.createExecutionProfile({ modelId: local.id, name: "Manual", parameters: { context: 100_000, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: true, cacheReuse: 256, fit: false }, calibrated: false, ggufSha256: null });
+    const cloud = store.createModel({ name: "Cloud", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
+    const task = store.createTask({ name: "Queued", kind: "prompt", prompt: "answer", tags: [] });
+    let release = () => undefined as void;
+    const started = new Promise<void>((resolve) => { release = resolve; });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("wake-calibration-test", 100), {
+      createLlamaManager: () => ({ async start() { await started; return { baseUrl: "http://127.0.0.1:1234", async stop() {} }; } }),
+      fetch: async () => ({ ok: true, status: 200 }),
+      readGpuInfo: () => ({ name: "NVIDIA", totalMiB: 16303, usedMiB: 1000, freeMiB: 15303 }),
+      readExecutableVersion: () => null,
+    });
+
+    const calibration = engine.calibrate(profile.id);
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: cloud.id, executionProfileId: null, runnerId: "fake", resultMode: "text", useOmpAgent: true });
+    engine.wake();
+    await new Promise((resolve) => setImmediate(resolve));
+    // Пока идёт калибровка, очередь не трогаем: её llama-server помечен тем же владельцем, что и раннеры.
+    expect(store.getRun(run.id)).toMatchObject({ status: "pending" });
+
+    release();
+    await calibration;
+    // Калибровка сама будит очередь в finally: ждём, пока она доведёт отложенный прогон.
+    while (["pending", "running"].includes(store.getRun(run.id)?.status ?? "")) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(store.getRun(run.id)).toMatchObject({ status: "completed" });
+    await engine.stop();
+    store.close();
+  });
+
+  it("keeps different tool calls apart when the events carry no toolCallId", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-watchdog-no-id-"));
+    directories.push(root);
+    const script = join(root, "fake-omp-watchdog.mjs");
+    // Без toolCallId args доступны только в start: если их потерять, все вызовы одного инструмента
+    // схлопнутся в один fingerprint и watchdog остановит нормальную работу.
+    writeFileSync(script, `const emit=(event) => console.log(JSON.stringify(event));
+for (let i=0; i<6; i++) {
+  emit({type:"tool_execution_start",toolName:"bash",args:{command:"node check-"+i+".mjs"}});
+  emit({type:"tool_execution_end",toolName:"bash",result:{content:[{type:"text",text:"ok"}]},isError:false});
+}
+emit({type:"agent_end",messages:[{role:"assistant",content:[{type:"text",text:"finished"}]}]});`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake OMP", kind: "omp", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "do the work", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "test", modelRef: "test-model", capabilities: { toolUse: true, vision: false, reasoning: false } });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text", useOmpAgent: true });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("watchdog-no-id-test", 100));
+
+    await engine.processNext();
+
+    const [taskRun] = store.listTaskRuns(run.id);
+    expect(taskRun?.status).toBe("completed");
+    expect(JSON.parse(taskRun?.result_json ?? "{}").finalAnswer).toBe("finished");
+    await engine.stop();
+    store.close();
+  });
+
   it("enforces the hard tool-call limit", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-watchdog-hard-limit-"));
     directories.push(root);
