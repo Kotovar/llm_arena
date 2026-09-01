@@ -9,6 +9,7 @@ function entry(modelId: string, modelName: string, modelKind: "local-gguf" | "cl
   return {
     modelId, modelName, modelKind, runCount: 3, reviewedTaskRunCount: 5, scorePercent,
     generationTokensPerSecond: 20,
+    averageDurationMs: 90_000,
     estimatedCostPerRun: null,
     criteria: { correctness: 8, codeQuality: 8, uiQuality: null, instructionFollowing: 8 },
   };
@@ -63,13 +64,15 @@ describe("лидерборд", () => {
     expect(requested.some((url) => url.includes("/api/leaderboard?"))).toBe(false);
   });
 
-  it("показывает цену прогона как оценку и молчит, когда её не вводили", async () => {
+  it("показывает среднюю скорость и время промпта вместо цены прогона", async () => {
     await renderInApp(<LeaderboardPage />);
 
     const priced = (await screen.findByText("Облачная")).closest("tr")!;
-    const free = screen.getByText("Локальная").closest("tr")!;
-    expect(within(priced).getByText("≈ $0.20 за прогон")).toBeTruthy();
-    expect(within(free).getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("columnheader", { name: "Цена прогона" })).toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Средняя скорость" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Среднее время промпта" })).toBeTruthy();
+    expect(within(priced).getByText("~20 токенов/с")).toBeTruthy();
+    expect(within(priced).getByText("1 мин 30 с")).toBeTruthy();
   });
 
   it("показывает долю побед рядом с долей баллов и счёт по соперникам", async () => {

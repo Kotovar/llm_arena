@@ -99,6 +99,7 @@ export type LeaderboardEntry = {
   reviewedTaskRunCount: number;
   scorePercent: number | null;
   generationTokensPerSecond: number | null;
+  averageDurationMs: number | null;
   estimatedCostPerRun: number | null;
   criteria: { correctness: number | null; codeQuality: number | null; uiQuality: number | null; instructionFollowing: number | null };
 };
@@ -263,7 +264,7 @@ export type DecisionPoint = {
   interruptedRunCount: number;
   qualityPercent: number | null;
   medianTokensPerSecond: number | null;
-  medianDurationMs: number | null;
+  averageDurationMs: number | null;
   peakVramMiB: number | null;
   failureRate: number;
   estimatedCostPerRun: number | null;

@@ -103,6 +103,7 @@ type TaskRunRow = {
 type LeaderboardTaskRunRow = {
   run_id: string;
   task_run_id: string | null;
+  task_run_status: string | null;
   model_id: string;
   model_ref: string | null;
   tags_json: string | null;
@@ -111,6 +112,7 @@ type LeaderboardTaskRunRow = {
   ui_quality: number | null;
   instruction_following: number | null;
   generation_tps: number | null;
+  duration_ms: number | null;
 };
 
 type CompletedResultRow = {
@@ -821,10 +823,11 @@ export function createStore(filename: string) {
      */
     listLeaderboardTaskRuns() {
       return all<LeaderboardTaskRunRow>(`
-        SELECT benchmark_runs.id AS run_id, task_runs.id AS task_run_id, benchmark_runs.model_id, benchmark_runs.model_ref,
+        SELECT benchmark_runs.id AS run_id, task_runs.id AS task_run_id, task_runs.status AS task_run_status, benchmark_runs.model_id, benchmark_runs.model_ref,
                tasks.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following,
-               json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value') AS generation_tps
+               json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value') AS generation_tps,
+               json_extract(task_runs.result_json, '$.metrics.totalDurationMs.value') AS duration_ms
         FROM benchmark_runs
         LEFT JOIN task_runs ON task_runs.benchmark_run_id = benchmark_runs.id
         LEFT JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id

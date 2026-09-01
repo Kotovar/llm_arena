@@ -1651,7 +1651,7 @@ describe("REST API", () => {
       sampleCount: 5,
       qualityPercent: 80,
       medianTokensPerSecond: 42,
-      medianDurationMs: 1000,
+      averageDurationMs: 1000,
       peakVramMiB: 15100,
       failureRate: expect.closeTo(0.4, 2),
       runCount: 2,
@@ -1721,15 +1721,17 @@ describe("REST API", () => {
     const scored = store.createModel({ name: "Scored Model", kind: "cloud", provider: "openai", modelRef: "scored" });
     const runA = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRunA1 = store.createTaskRun(runA.id, task.currentRevision.id, 0, join(directory, "a1"), { task: task.currentRevision });
-    store.saveTaskRunResult(taskRunA1.id, { finalAnswer: "A1" });
+    store.saveTaskRunResult(taskRunA1.id, { finalAnswer: "A1", metrics: { generationTokensPerSecond: { value: 20 }, totalDurationMs: { value: 60_000 } } });
     await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunA1.id}/review`, payload: review(10) }); // 40
     const taskRunA2 = store.createTaskRun(runA.id, task.currentRevision.id, 1, join(directory, "a2"), { task: task.currentRevision });
-    store.saveTaskRunResult(taskRunA2.id, { finalAnswer: "A2" });
+    store.saveTaskRunResult(taskRunA2.id, { finalAnswer: "A2", metrics: { generationTokensPerSecond: { value: 20 }, totalDurationMs: { value: 60_000 } } });
     await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunA2.id}/review`, payload: review(5) }); // 20
     const runB = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
     const taskRunB1 = store.createTaskRun(runB.id, task.currentRevision.id, 0, join(directory, "b1"), { task: task.currentRevision });
-    store.saveTaskRunResult(taskRunB1.id, { finalAnswer: "B1" });
+    store.saveTaskRunResult(taskRunB1.id, { finalAnswer: "B1", metrics: { generationTokensPerSecond: { value: 20 }, totalDurationMs: { value: 180_000 } } });
     await app.inject({ method: "PUT", url: `/api/task-runs/${taskRunB1.id}/review`, payload: review(9) }); // 36
+    const cancelled = store.createTaskRun(runB.id, task.currentRevision.id, 1, join(directory, "cancelled"), { task: task.currentRevision });
+    store.saveTaskRunResult(cancelled.id, { finalAnswer: "Cancelled", metrics: { generationTokensPerSecond: { value: 20 }, totalDurationMs: { value: 0 } } }, "cancelled");
     // Средний балл считается по промптам (40+20+36)/3, а не по ранам ((40+20)/2 и 36)/2 — иначе один слабый ран с одним промптом весил бы столько же, сколько ран с двумя.
 
     const unscored = store.createModel({ name: "Unscored Model", kind: "cloud", provider: "openai", modelRef: "unscored" });
@@ -1750,9 +1752,11 @@ describe("REST API", () => {
 
     const response = await app.inject({ method: "GET", url: "/api/leaderboard" });
     expect(response.statusCode).toBe(200);
-    const entries = response.json() as Array<{ modelId: string; modelName: string; modelKind: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null; criteria: Record<string, number | null> }>;
+    const entries = response.json() as Array<{ modelId: string; modelName: string; modelKind: string; runCount: number; reviewedTaskRunCount: number; scorePercent: number | null; averageDurationMs: number | null; criteria: Record<string, number | null> }>;
 
-    expect(entries.find((entry) => entry.modelId === scored.id)).toMatchObject({ modelName: "Scored Model", runCount: 2, reviewedTaskRunCount: 3, scorePercent: 80 });
+    expect(entries.find((entry) => entry.modelId === scored.id)).toMatchObject({ modelName: "Scored Model", runCount: 2, reviewedTaskRunCount: 3, scorePercent: 80, averageDurationMs: 100_000 });
+    const decisionPoints = (await app.inject({ method: "GET", url: "/api/analytics/decision-points" })).json() as Array<{ modelId: string; averageDurationMs: number | null }>;
+    expect(decisionPoints.find((entry) => entry.modelId === scored.id)?.averageDurationMs).toBe(100_000);
     // Разбивка по критериям: визуал усредняется только по задачам, где он применялся.
     expect(entries.find((entry) => entry.modelId === scored.id)?.criteria).toEqual({ correctness: 8, codeQuality: 8, uiQuality: 8, instructionFollowing: 8 });
     expect(entries.find((entry) => entry.modelId === unscored.id)?.criteria).toEqual({ correctness: null, codeQuality: null, uiQuality: null, instructionFollowing: null });

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { LeaderboardEntry, PairSummary } from "../types.js";
-import { formatCost, formatMetricValue, modelKindFilters, plural } from "../ui.js";
+import { formatDuration, formatMetricValue, modelKindFilters, plural } from "../ui.js";
 import type { ModelKindFilter } from "../ui.js";
 
 // Ниже этого порога средняя ещё слишком шумная, чтобы читать её как результат модели.
@@ -15,15 +15,13 @@ const criteriaColumns = [
   ["instructionFollowing", "Задание", "Насколько точно выполнены требования промпта."],
 ] as const;
 
-/** Цена прогона — оценка пользователя, поэтому и подаётся как оценка, а не как факт. */
-function costLabel(entry: LeaderboardEntry) {
-  if (entry.estimatedCostPerRun === null) return "—";
-  return `${formatCost(entry.estimatedCostPerRun)} за прогон`;
-}
-
 // Единица скорости общая с аналитикой и галереей: «т/с» и «токенов/с» на соседних экранах читались как разные метрики.
 function speedLabel(entry: LeaderboardEntry) {
   return entry.generationTokensPerSecond === null ? "—" : `~${formatMetricValue("generationTokensPerSecond", entry.generationTokensPerSecond)}`;
+}
+
+function durationLabel(entry: LeaderboardEntry) {
+  return entry.averageDurationMs === null ? "—" : formatDuration(entry.averageDurationMs);
 }
 
 /** Счёт слепых дуэлей: до порога уверенности показываем сам счёт, а не процент от трёх пар. */
@@ -40,7 +38,7 @@ function Row({ entry, place, pair }: { entry: LeaderboardEntry; place?: number; 
     <td className="leaderboard-score">{entry.scorePercent === null ? "Не оценено" : `${entry.scorePercent.toFixed(1)}%`}{thin ? <small className="leaderboard-thin" title={`Оценено промптов: ${entry.reviewedTaskRunCount}`}>мало данных</small> : null}</td>
     {criteriaColumns.map(([key]) => <td className="mono" key={key}>{entry.criteria[key] === null ? "—" : entry.criteria[key]!.toFixed(1)}</td>)}
     <td className="mono">{speedLabel(entry)}</td>
-    <td className="mono">{costLabel(entry)}</td>
+    <td className="mono">{durationLabel(entry)}</td>
     <td className="mono" title={pair?.decided ? `Побед ${pair.wins}, поражений ${pair.losses}, ничьих ${pair.ties}` : undefined}>{winsLabel(pair)}</td>
     <td>{entry.runCount}</td>
     <td>{entry.reviewedTaskRunCount}</td>
@@ -70,8 +68,8 @@ export function LeaderboardPage() {
         <th scope="col">Модель</th>
         <th scope="col">Доля баллов</th>
         {criteriaColumns.map(([key, label, hint]) => <th scope="col" key={key} title={hint}>{label}</th>)}
-        <th scope="col" title="Средняя скорость генерации по всем замерам модели. Контекст и профиль у промптов разные, поэтому цифра ориентировочная.">Скорость</th>
-        <th scope="col" title="Оценка пользователя: месячная подписка в долларах, поделённая на ожидаемое число прогонов. Не цена провайдера и не факт по токенам.">Цена прогона</th>
+        <th scope="col" title="Средняя скорость генерации по всем замерам модели. Контекст и профиль у промптов разные, поэтому цифра ориентировочная.">Средняя скорость</th>
+        <th scope="col" title="Среднее время выполнения одного промпта по замерам модели.">Среднее время промпта</th>
         <th scope="col" title="Слепые дуэли: доля побед среди решённых пар. Это не доля баллов — там оценка по критериям, здесь прямое сравнение двух результатов. Пока пар мало, показан счёт.">Доля побед</th>
         <th scope="col">Прогонов</th>
         <th scope="col">Оценено промптов</th>

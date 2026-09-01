@@ -16,6 +16,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
       ? values.toSorted((left, right) => left - right)[Math.floor(values.length / 2)]!
       : null;
     const round = (value: number, digits = 1) => Math.round(value * 10 ** digits) / 10 ** digits;
+    const average = (values: number[]) => values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
     // Пик VRAM пишется файлом рядом с прогоном: в базе его нет, а выдумывать нечего.
     const peakVram = new Map<string, number | null>();
     const runPeakVram = (runId: string) => {
@@ -74,12 +75,15 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
       // Повторы дают устойчивую цифру по промпту: если они есть, берём их, а не единственный замер.
       const attempts = store.listTaskAttempts(row.id).filter((attempt) => attempt.attempt > 0 && attempt.status === "completed");
       const sources = attempts.length ? attempts.map((attempt) => attempt.result_json) : [row.result_json];
+      const durations: number[] = [];
       for (const source of sources) {
         let metrics: Record<string, { value?: number | null }> | undefined;
         try { metrics = (JSON.parse(source ?? "{}") as { metrics?: Record<string, { value?: number | null }> }).metrics; } catch { metrics = undefined; }
         if (typeof metrics?.generationTokensPerSecond?.value === "number") point.speed.push(metrics.generationTokensPerSecond.value);
-        if (typeof metrics?.totalDurationMs?.value === "number") point.duration.push(metrics.totalDurationMs.value);
+        if (typeof metrics?.totalDurationMs?.value === "number") durations.push(metrics.totalDurationMs.value);
       }
+      const duration = median(durations);
+      if (duration !== null) point.duration.push(duration);
       const vram = runPeakVram(row.run_id);
       if (vram !== null) point.peakVramMiB = Math.max(point.peakVramMiB ?? 0, vram);
       points.set(key, point);
@@ -90,7 +94,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
       interruptedRunCount: [...runs.values()].filter((status) => status === "interrupted").length,
       qualityPercent: possibleSum ? round((scoreSum / possibleSum) * 100) : null,
       medianTokensPerSecond: median(speed),
-      medianDurationMs: median(duration),
+      averageDurationMs: average(duration),
       failureRate: point.sampleCount ? round(failed / point.sampleCount, 4) : 0,
     })).sort((left, right) => (right.qualityPercent ?? -1) - (left.qualityPercent ?? -1));
   });

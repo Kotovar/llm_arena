@@ -6,7 +6,7 @@ import { renderInApp } from "../test-harness.js";
 import type { DecisionPoint } from "../types.js";
 import { AnalyticsPage, labelPlacer, paretoShortlist, seriesColor } from "./analytics.js";
 
-function point(overrides: Partial<DecisionPoint> = {}): DecisionPoint {
+function point(overrides: Partial<DecisionPoint & { averageDurationMs: number | null }> = {}): DecisionPoint & { averageDurationMs: number | null } {
   return {
     modelId: "model-1",
     modelName: "Локальная",
@@ -20,7 +20,7 @@ function point(overrides: Partial<DecisionPoint> = {}): DecisionPoint {
     interruptedRunCount: 1,
     qualityPercent: 80,
     medianTokensPerSecond: 42,
-    medianDurationMs: 1000,
+    averageDurationMs: 1000,
     peakVramMiB: 15846,
     failureRate: 0,
     estimatedCostPerRun: null,
@@ -120,6 +120,31 @@ describe("аналитика решений", () => {
     expect(within(table).getByText("Локальная · Скорость")).toBeTruthy();
     expect(within(table).getByText("15,5 ГиБ")).toBeTruthy();
     expect(within(table).getByText("42 токенов/с")).toBeTruthy();
+    expect(within(table).queryByRole("columnheader", { name: "Время промпта" })).toBeNull();
+  });
+
+  it("строит зависимость баллов от времени промпта", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : [
+      point({ modelId: "slow", modelName: "Долгая", medianTokensPerSecond: null, averageDurationMs: 614_612 }),
+      point({ modelId: "fast", modelName: "Быстрая", medianTokensPerSecond: null, averageDurationMs: 60_000 }),
+    ]), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderInApp(<AnalyticsPage />, "/analytics");
+
+    await user.click(await screen.findByRole("tab", { name: "Баллы и время" }));
+
+    const chart = await screen.findByRole("img", { name: "Зависимость баллов от времени выполнения промпта" });
+    expect(chart.querySelectorAll(".scatter-dot")).toHaveLength(2);
+    expect(chart.textContent).toContain("быстрее справа");
+    expect([...chart.querySelectorAll(".scatter-grid")].filter((line) => line.getAttribute("x1") === line.getAttribute("x2")).length).toBeLessThanOrEqual(7);
+    expect(chart.textContent).toContain("10 мин 0 с");
+    const dots = [...chart.querySelectorAll(".scatter-dot")];
+    expect(Number(dots[0]!.getAttribute("cx"))).toBeLessThan(Number(dots[1]!.getAttribute("cx")));
+    const table = screen.getByRole("table", { name: "Те же связки числами" });
+    expect(within(table).getByRole("columnheader", { name: "Время промпта" })).toBeTruthy();
+    expect(within(table).queryByRole("columnheader", { name: "Скорость" })).toBeNull();
+    expect(within(table).getByText("10 мин 15 с")).toBeTruthy();
+    expect(within(table).getByText("1 мин 0 с")).toBeTruthy();
   });
 
   it("показывает подробности точки при наведении и приглушает недоминирующие", async () => {

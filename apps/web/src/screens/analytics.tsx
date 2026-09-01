@@ -69,6 +69,12 @@ function speedLabel(value: number) {
   return formatMetricValue("generationTokensPerSecond", value);
 }
 
+function durationTickStep(largest: number) {
+  const base = 10 ** Math.floor(Math.log10(largest / 6));
+  const scale = (largest / 6) / base;
+  return (scale <= 1 ? 1 : scale <= 2 ? 2 : scale <= 5 ? 5 : 10) * base;
+}
+
 /**
  * Связка не хуже другой по каждому измерению, где обе цифры известны, и хотя бы в одном лучше.
  * Неизмеренное не считаем ни плюсом, ни минусом — сравнивать нечего.
@@ -120,17 +126,20 @@ export function labelPlacer() {
   };
 }
 
-function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color: (point: DecisionPoint) => string; shortlist: DecisionPoint[] }) {
+function Scatter({ points, color, shortlist, metric }: { points: DecisionPoint[]; color: (point: DecisionPoint) => string; shortlist: DecisionPoint[]; metric: "speed" | "duration" }) {
   const [hovered, setHovered] = useState<string>();
-  // Точку без качества или скорости рисовать нечем, но из таблицы она не исчезает.
-  const plotted = points.filter((point) => point.qualityPercent !== null && point.medianTokensPerSecond !== null);
-  const fastest = Math.max(...plotted.map((point) => point.medianTokensPerSecond!), 1);
-  // Шаг сетки круглый, а верх шкалы — следующее деление за самым быстрым: иначе точка липнет к краю.
-  const step = fastest <= 60 ? 10 : fastest <= 150 ? 20 : 50;
-  const maxSpeed = (Math.floor(fastest / step) + 1) * step;
-  const speedTicks = Array.from({ length: maxSpeed / step + 1 }, (_, index) => index * step);
+  const value = (point: DecisionPoint) => metric === "speed" ? point.medianTokensPerSecond : point.averageDurationMs;
+  const formatValue = (amount: number) => metric === "speed" ? speedLabel(amount) : formatDuration(amount);
+  const plotted = points.filter((point) => point.qualityPercent !== null && value(point) !== null);
+  const largest = Math.max(...plotted.map((point) => value(point)!), 1);
+  // Шаг сетки круглый, а верх шкалы — следующее деление за максимумом: иначе точка липнет к краю.
+  const step = metric === "speed"
+    ? largest <= 60 ? 10 : largest <= 150 ? 20 : 50
+    : durationTickStep(largest);
+  const maxValue = (Math.floor(largest / step) + 1) * step;
+  const metricTicks = Array.from({ length: maxValue / step + 1 }, (_, index) => index * step);
   const qualityTicks = [0, 25, 50, 75, 100];
-  const x = (speed: number) => 60 + (speed / maxSpeed) * 540;
+  const x = (amount: number) => metric === "speed" ? 60 + (amount / maxValue) * 540 : 60 + (1 - amount / maxValue) * 540;
   const y = (quality: number) => 280 - (quality / 100) * 250;
   // Радиус говорит, на скольких промптах держится точка: две оценки и двадцать выглядели одинаково веско.
   const widest = Math.max(...plotted.map((point) => point.sampleCount), 1);
@@ -139,22 +148,22 @@ function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color:
   const placeLabel = labelPlacer();
   const active = plotted.find((point) => pointKey(point) === hovered);
   return <>
-    {plotted.length ? null : <Empty>Ни у одной связки нет одновременно оценки и замера скорости.</Empty>}
-    <svg className="scatter" role="img" aria-label="Качество и скорость" viewBox="0 0 640 320">
+    {plotted.length ? null : <Empty>{`Ни у одной связки нет одновременно оценки и замера ${metric === "speed" ? "скорости" : "времени промпта"}.`}</Empty>}
+    <svg className="scatter" role="img" aria-label={metric === "speed" ? "Качество и скорость" : "Зависимость баллов от времени выполнения промпта"} viewBox="0 0 640 320">
       {qualityTicks.map((tick) => <g key={`q${tick}`}>
         <line className="scatter-grid" x1="60" y1={y(tick)} x2="620" y2={y(tick)} />
         <text x="52" y={y(tick) + 4} textAnchor="end" className="scatter-tick">{tick}</text>
       </g>)}
-      {speedTicks.map((tick) => <g key={`s${tick}`}>
+      {metricTicks.map((tick) => <g key={`x${tick}`}>
         <line className="scatter-grid" x1={x(tick)} y1="30" x2={x(tick)} y2="280" />
-        <text x={x(tick)} y="296" textAnchor="middle" className="scatter-tick">{tick}</text>
+        <text x={x(tick)} y="296" textAnchor="middle" className="scatter-tick">{metric === "speed" ? tick : formatDuration(tick)}</text>
       </g>)}
       <line x1="60" y1="30" x2="60" y2="280" />
       <line x1="60" y1="280" x2="620" y2="280" />
       <text x="60" y="20" className="scatter-axis">Доля баллов, %</text>
-      <text x="620" y="313" textAnchor="end" className="scatter-axis">Скорость, токенов/с</text>
+      <text x="620" y="313" textAnchor="end" className="scatter-axis">{metric === "speed" ? "Скорость, токенов/с" : "Среднее время промпта — быстрее справа"}</text>
       {plotted.map((point) => {
-        const cx = x(point.medianTokensPerSecond!);
+        const cx = x(value(point)!);
         const cy = y(point.qualityPercent!);
         const right = cx > 420;
         const label = shortLabel(point);
@@ -171,9 +180,9 @@ function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color:
         </g>;
       })}
       {active ? (() => {
-        const cx = x(active.medianTokensPerSecond!);
+        const cx = x(value(active)!);
         const cy = y(active.qualityPercent!);
-        const lines = [pointLabel(active), `${active.qualityPercent}% · ${speedLabel(active.medianTokensPerSecond!)}`, `промптов: ${active.sampleCount}`];
+        const lines = [pointLabel(active), `${active.qualityPercent}% · ${formatValue(value(active)!)}`, `промптов: ${active.sampleCount}`];
         const width = Math.max(...lines.map((line) => line.length)) * 6 + 16;
         const left = Math.min(Math.max(cx - width / 2, 4), 636 - width);
         const top = cy > 90 ? cy - 66 : cy + 20;
@@ -189,8 +198,7 @@ function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color:
       <thead><tr>
         <th scope="col">Связка</th>
         <th scope="col" title="Доля набранных баллов по оценённым промптам.">Доля баллов</th>
-        <th scope="col" title="Медиана скорости генерации по замерам этой связки.">Скорость</th>
-        <th scope="col" title="Медиана времени одного промпта, а не суммы прогона.">Время промпта</th>
+        <th scope="col" title={metric === "speed" ? "Медиана скорости генерации по замерам этой связки." : "Среднее время одного промпта, а не суммы прогона."}>{metric === "speed" ? "Скорость" : "Время промпта"}</th>
         <th scope="col" title="Наибольший наблюдавшийся расход видеопамяти среди прогонов связки.">Пик VRAM</th>
         <th scope="col" title="Промпты, завершившиеся ошибкой или непройденной проверкой.">Неудачных промптов</th>
         <th scope="col" title="Прогоны, упавшие целиком или остановленные вручную.">Сорванных прогонов</th>
@@ -199,8 +207,7 @@ function Scatter({ points, color, shortlist }: { points: DecisionPoint[]; color:
       <tbody>{points.map((point) => <tr key={`${point.modelId}-${point.profileId ?? ""}`}>
         <th scope="row">{pointLabel(point)}</th>
         <td className="mono">{point.qualityPercent === null ? "—" : `${point.qualityPercent}%`}</td>
-        <td className="mono">{point.medianTokensPerSecond === null ? "—" : speedLabel(point.medianTokensPerSecond)}</td>
-        <td className="mono">{point.medianDurationMs === null ? "—" : formatDuration(point.medianDurationMs)}</td>
+        <td className="mono">{value(point) === null ? "—" : formatValue(value(point)!)}</td>
         <td className="mono">{point.peakVramMiB === null ? "—" : formatVram(point.peakVramMiB)}</td>
         <td className="mono">{failureLabel(point.failureRate)}</td>
         <td className="mono">{`${point.interruptedRunCount} из ${point.runCount}`}</td>
@@ -232,14 +239,14 @@ function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPo
   </table></div>;
 }
 
-type View = "scatter" | "slices" | "pareto";
+type View = "scatter" | "duration" | "slices" | "pareto";
 
 // Пока промптам не проставлены теги, срез ровно один: чипсы и вкладка по срезам показывали бы
 // один и тот же общий результат под разными именами.
 function viewsFor(tagged: boolean): Array<[View, string]> {
   return tagged
-    ? [["scatter", "Качество и скорость"], ["slices", "Срезы нагрузки"], ["pareto", "Короткий список"]]
-    : [["scatter", "Качество и скорость"], ["pareto", "Короткий список"]];
+    ? [["scatter", "Качество и скорость"], ["duration", "Баллы и время"], ["slices", "Срезы нагрузки"], ["pareto", "Короткий список"]]
+    : [["scatter", "Качество и скорость"], ["duration", "Баллы и время"], ["pareto", "Короткий список"]];
 }
 
 export function AnalyticsPage() {
@@ -267,6 +274,7 @@ export function AnalyticsPage() {
   const shortlist = paretoShortlist(shown);
   const color = colorByKey(shown);
   const views = viewsFor(tags.length > 0);
+  const scatterMetric = view === "duration" ? "duration" : "speed";
   return <Page title="Аналитика решений" eyebrow="Аналитика" intro="Одна точка — модель с конкретным профилем на выбранном срезе нагрузки. Неизмеренное не рисуется нулём: такие связки видно только в таблице.">
     {points.error ? <p className="error">{points.error.message}</p> : null}
     {points.isPending ? <Skeleton rows={5} /> : null}
@@ -285,8 +293,8 @@ export function AnalyticsPage() {
             </div>
             <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, «Без тегов» — только по тем, которым тег не проставлен.</p>
           </> : null}
-          {view === "scatter"
-            ? shown.length ? <Scatter points={shown} color={color} shortlist={shortlist} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
+          {view === "scatter" || view === "duration"
+            ? shown.length ? <Scatter points={shown} color={color} shortlist={shortlist} metric={scatterMetric} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
             : shortlist.length
               ? <ul className="pareto-list">{shortlist.map((point) => <li key={pointKey(point)}><strong>{pointLabel(point)}</strong><span className="mono">{point.qualityPercent}% · {speedLabel(point.medianTokensPerSecond!)}{point.peakVramMiB === null ? "" : ` · ${formatVram(point.peakVramMiB)}`}</span></li>)}</ul>
               : <Empty>Ни одной связки с оценкой и замером скорости в этом срезе.</Empty>}
