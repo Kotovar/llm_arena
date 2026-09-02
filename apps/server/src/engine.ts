@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { FixtureManifest, LlamaProfile, TaskImage, WatchdogDiagnostics } from "@llm-arena/shared";
+import type { FixtureManifest, LlamaProfile, StopReason, TaskImage, WatchdogDiagnostics } from "@llm-arena/shared";
 import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { loadOwnerId, recoverOwnedProcesses } from "./lifecycle.js";
@@ -70,7 +70,8 @@ const HEAVY_LANE_BUSY = "Сейчас выполняется другой тяж
 export class BenchmarkEngine {
   readonly #controllers = new Map<string, AbortController>();
   readonly #taskControllers = new Map<string, AbortController>();
-  readonly #stopReasons = new Map<string, string>();
+  /** Почему прогон остановлен: сообщение уходит в `error`, причина — в `stop_reason`. */
+  readonly #stopReasons = new Map<string, { reason: StopReason; message?: string }>();
   readonly #listeners = new Map<string, Set<(event: RunEvent) => void>>();
   #pumping: Promise<void> | undefined;
   #stopping = false;
@@ -149,12 +150,14 @@ export class BenchmarkEngine {
       this.store.updateRunStatus(
         run.id,
         status,
-        this.#stopReasons.get(run.id) ?? failedTask?.error ?? undefined,
+        this.#stopReasons.get(run.id)?.message ?? failedTask?.error ?? undefined,
+        status === "cancelled" ? this.#stopReason(run.id) : null,
       );
     } catch (error) {
       const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed" || taskRun.status === "agent_loop");
-      const message = this.#stopReasons.get(run.id) ?? failedTask?.error ?? (error as Error).message;
-      this.store.updateRunStatus(run.id, controller.signal.aborted ? "cancelled" : "failed", message);
+      const message = this.#stopReasons.get(run.id)?.message ?? failedTask?.error ?? (error as Error).message;
+      const cancelled = controller.signal.aborted;
+      this.store.updateRunStatus(run.id, cancelled ? "cancelled" : "failed", message, cancelled ? this.#stopReason(run.id) : null);
       // При явной отмене техническая ошибка оборванного вызова — шум, а не то, что стоит показывать.
       if (!controller.signal.aborted) this.#emit({ type: "run.error", runId: run.id, data: { message } });
     } finally {
@@ -183,6 +186,7 @@ export class BenchmarkEngine {
       this.store.saveFollowupResult(followup.id, loopError ? { watchdog: loopError.diagnostics } : {}, loopError ? "agent_loop" : controller.signal.aborted ? "cancelled" : "failed", (error as Error).message);
     } finally {
       this.#controllers.delete(followup.id);
+      this.#stopReasons.delete(followup.id);
       this.#emit({ type: "followup.status", runId: taskRun.benchmark_run_id, taskRunId: taskRun.id, data: { id: followup.id, status: this.store.getFollowup(followup.id)?.status } });
     }
     return true;
@@ -252,7 +256,7 @@ export class BenchmarkEngine {
         // Карта уже несколько секунд держит критическую температуру: гасим прогон вместе с llama-server.
         onOverheat: (sample) => {
           const message = `Прогон остановлен: видеокарта нагрелась до ${sample.temperatureC} °C при пороге ${maxTemperatureC} °C`;
-          this.#stopReasons.set(run.id, message);
+          this.#stopReasons.set(run.id, { reason: "overheat", message });
           this.#emit({ type: "run.error", runId: run.id, data: { message } });
           void this.cancel(run.id).catch(() => undefined);
         },
@@ -379,7 +383,8 @@ export class BenchmarkEngine {
           const status = watchdogError ? "agent_loop" as const : taskSignal.aborted ? "cancelled" as const : "failed" as const;
           const result = watchdogError ? { watchdog: watchdogError.diagnostics } : {};
           if (watchdogError) writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
-          this.store.saveTaskRunResult(taskRun.id, result, status, failure);
+          // Промпт мог оборваться вместе со всем прогоном: тогда причина у него та же, что у прогона.
+          this.store.saveTaskRunResult(taskRun.id, result, status, failure, status === "cancelled" ? this.#stopReason(run.id) : null);
           if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, result, status, failure);
         }
         try {
@@ -644,6 +649,16 @@ export class BenchmarkEngine {
     return results;
   }
 
+  /**
+   * Почему остановлен прогон, который уже помечен `cancelled`. Записанная причина (перегрев,
+   * ручная отмена) главнее; без неё остановка на выключении приложения — это `restart`, а не
+   * решение человека: `stop()` дожидается текущего прогона, поэтому терминальную запись делает
+   * он сам, и `recoverInterruptedRuns` такую строку уже не увидит.
+   */
+  #stopReason(runId: string): StopReason {
+    return this.#stopReasons.get(runId)?.reason ?? (this.#stopping ? "restart" : "user");
+  }
+
   // ponytail: отмена одного промпта не трогает supervisor.stopAll() — раннер сам гасит свой процесс по сигналу, а бэкенд нужен следующим промптам.
   cancelTask(taskRunId: string): boolean {
     const controller = this.#taskControllers.get(taskRunId);
@@ -655,6 +670,9 @@ export class BenchmarkEngine {
   async cancel(runId: string): Promise<boolean> {
     const controller = this.#controllers.get(runId);
     if (!controller) return false;
+    // Причина фиксируется здесь, а не при записи результата: иначе одновременное выключение
+    // приложения выдало бы решение человека за перезапуск.
+    if (!this.#stopReasons.has(runId)) this.#stopReasons.set(runId, { reason: "user" });
     controller.abort();
     await this.supervisor.stopAll();
     return true;

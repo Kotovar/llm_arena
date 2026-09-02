@@ -588,7 +588,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       .find((item) => item.status === "pending" || item.status === "running");
     const cancelled = engine ? await engine.cancel(followup?.id ?? run.id) : false;
     if (!cancelled && followup) store.saveFollowupResult(followup.id, {}, "cancelled");
-    if (!cancelled && !followup) store.updateRunStatus(run.id, "cancelled");
+    // Движок доводит уже запущенный прогон сам и там же проставляет причину; сюда попадает
+    // только прогон, до которого очередь ещё не дошла.
+    if (!cancelled && !followup) store.updateRunStatus(run.id, "cancelled", undefined, "user");
     return reply.code(202).send({ status: "cancelled" });
   });
   // Прогон, упавший на середине группы, доигрывается с первого промпта без результата.
@@ -653,7 +655,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const taskRun = store.getTaskRun(request.params.id);
     if (!taskRun) throw new Error("Task run not found");
     if (taskRun.status !== "pending" && taskRun.status !== "running") throw new Error("Prompt is not running");
-    if (!engine?.cancelTask(taskRun.id)) store.saveTaskRunResult(taskRun.id, {}, "cancelled");
+    if (!engine?.cancelTask(taskRun.id)) store.saveTaskRunResult(taskRun.id, {}, "cancelled", undefined, "user");
     return reply.code(202).send({ status: "cancelled" });
   });
   // Перезапуск промпта с нуля: старый результат и его файлы уходят, движок проходит позицию заново.

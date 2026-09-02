@@ -559,3 +559,78 @@ describe("execution profiles and task results", () => {
     expect(() => store.selectFollowupVersion(taskRun.id, "other-task-followup")).toThrow("Completed follow-up not found");
   });
 });
+
+describe("причина остановки", () => {
+  const preparedRun = (store: ReturnType<typeof testStore>) => {
+    const task = store.createTask({ name: "Task", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-test" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, ".data/run/task", { task: task.currentRevision });
+    return { run, taskRun };
+  };
+
+  it("сохраняет причину остановки прогона и промпта", () => {
+    const store = testStore();
+    const { run, taskRun } = preparedRun(store);
+
+    store.updateRunStatus(run.id, "cancelled", "Перегрев", "overheat");
+    store.saveTaskRunResult(taskRun.id, {}, "cancelled", undefined, "user");
+
+    expect(store.getRun(run.id)).toMatchObject({ status: "cancelled", stop_reason: "overheat" });
+    expect(store.getTaskRun(taskRun.id)).toMatchObject({ status: "cancelled", stop_reason: "user" });
+  });
+
+  it("забывает прошлую причину, когда прогон уходит на второй круг", () => {
+    const store = testStore();
+    const { run, taskRun } = preparedRun(store);
+    store.updateRunStatus(run.id, "cancelled", "Остановлен", "user");
+    store.saveTaskRunResult(taskRun.id, {}, "cancelled", undefined, "user");
+
+    store.updateRunStatus(run.id, "pending");
+    store.startTaskRun(taskRun.id);
+
+    expect(store.getRun(run.id)?.stop_reason).toBeNull();
+    expect(store.getTaskRun(taskRun.id)?.stop_reason).toBeNull();
+  });
+
+  it("после перезапуска приложения помечает прерванное остановкой, а не ошибкой модели", () => {
+    const store = testStore();
+    const { run, taskRun } = preparedRun(store);
+    store.claimNextRun();
+    store.startTaskRun(taskRun.id);
+
+    store.recoverInterruptedRuns();
+
+    expect(store.getRun(run.id)).toMatchObject({ status: "cancelled", stop_reason: "restart", error: "Application restarted" });
+    expect(store.getTaskRun(taskRun.id)).toMatchObject({ status: "cancelled", stop_reason: "restart" });
+  });
+
+  it("заводит колонку причины в существующей базе", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-stop-reason-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const sqlite = new DatabaseSync(filename);
+    sqlite.exec(`
+      CREATE TABLE benchmark_runs (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_id TEXT NOT NULL, execution_profile_id TEXT,
+        runner_id TEXT NOT NULL, result_mode TEXT NOT NULL DEFAULT 'web', status TEXT NOT NULL, snapshot_json TEXT, error TEXT,
+        started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL
+      );
+      CREATE TABLE task_runs (
+        id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL,
+        status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL,
+        started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL
+      );
+      INSERT INTO benchmark_runs (id, model_id, runner_id, status, created_at) VALUES ('legacy-run', 'model', 'codex', 'cancelled', '2026-01-01T00:00:00.000Z');
+      INSERT INTO task_runs (id, benchmark_run_id, task_revision_id, position, status, snapshot_json, artifact_path, created_at)
+        VALUES ('legacy-task', 'legacy-run', 'revision', 0, 'cancelled', '{}', '.data/legacy', '2026-01-01T00:00:00.000Z');
+    `);
+    sqlite.close();
+
+    const store = createStore(filename);
+
+    expect(store.getRun("legacy-run")?.stop_reason).toBeNull();
+    expect(store.getTaskRun("legacy-task")?.stop_reason).toBeNull();
+    store.close();
+  });
+});

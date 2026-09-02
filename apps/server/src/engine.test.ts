@@ -210,9 +210,37 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_t
     await engine.processNext();
 
     const [first, second] = store.listTaskRuns(run.id);
-    expect(first?.status).toBe("cancelled");
+    expect(first).toMatchObject({ status: "cancelled", stop_reason: "user" });
     expect(second?.status).toBe("completed");
     expect(store.getRun(run.id)?.status).toBe("completed");
+    await engine.stop();
+    store.close();
+  });
+
+  it("помечает прогон перезапуском, когда его гасит выключение приложения", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-shutdown-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    writeFileSync(script, `setInterval(() => {}, 1000); process.stdout.write("working\\n");`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Slow", kind: "prompt", prompt: "slow", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("shutdown-test", 100));
+    engine.subscribe(run.id, (event) => {
+      const data = event.data as { status?: string } | undefined;
+      // Выключение приложения гасит прогон и дожидается его записи, поэтому строка остаётся
+      // терминальной и recoverInterruptedRuns её уже не увидит.
+      if (event.type === "task.status" && data?.status === "running") setTimeout(() => void engine.stop(), 50);
+    });
+
+    await engine.processNext();
+
+    expect(store.getRun(run.id)).toMatchObject({ status: "cancelled", stop_reason: "restart" });
+    expect(store.listTaskRuns(run.id)[0]).toMatchObject({ status: "cancelled", stop_reason: "restart" });
     await engine.stop();
     store.close();
   });
@@ -247,6 +275,9 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_t
     unsubscribe();
 
     expect(store.listTaskRuns(run.id).map((taskRun) => taskRun.status)).toEqual(["cancelled"]);
+    // Остановка человеком: ни прогон, ни промпт не должны попасть в неудачи модели.
+    expect(store.getRun(run.id)).toMatchObject({ status: "cancelled", stop_reason: "user" });
+    expect(store.listTaskRuns(run.id)[0]).toMatchObject({ stop_reason: "user" });
     const stoppedId = store.listTaskRuns(run.id)[0]!.id;
 
     store.updateRunStatus(run.id, "pending");

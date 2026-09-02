@@ -1,5 +1,18 @@
 import { z } from "zod";
 export { DEFAULT_LLAMA_TEMPERATURE } from "./constants.js";
+export {
+  classifyTaskRun,
+  isCounted,
+  isModelFailure,
+  isSuccess,
+  isUserAbort,
+  outcomeLabels,
+  outcomeOrder,
+  stopReasonSchema,
+  type OutcomeInput,
+  type StopReason,
+  type TaskOutcome,
+} from "./outcome.js";
 
 export const taskKindSchema = z.enum(["prompt", "coding"]);
 export const runStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled", "agent_loop"]);

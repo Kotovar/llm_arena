@@ -13,6 +13,7 @@ import {
   modelEconomicsSchema,
   type Review,
   type RunStatus,
+  type StopReason,
   type TaskImage,
   type TaskRevision,
 } from "@llm-arena/shared";
@@ -53,6 +54,8 @@ type RunRow = {
   runner_id: string;
   result_mode: "text" | "web";
   use_omp_agent: number;
+  /** Почему прогон остановлен; заполняется только при status = 'cancelled'. */
+  stop_reason: StopReason | null;
   model_ref: string | null;
   reasoning_effort: string | null;
   /** Сколько раз прогнать каждый промпт; 1 — обычный однократный прогон. */
@@ -95,6 +98,7 @@ type TaskRunRow = {
   selected_followup_id: string | null;
   broken_at: string | null;
   completion: "full" | "partial" | null;
+  stop_reason: StopReason | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -280,8 +284,8 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, position INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, capabilities_json TEXT NOT NULL DEFAULT '{"toolUse":false,"vision":false,"reasoning":false}', mmproj_path TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS run_tasks (run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(run_id, position));
-    CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, broken_at TEXT, completion TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS benchmark_runs (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, model_id TEXT NOT NULL, execution_profile_id TEXT, runner_id TEXT NOT NULL, use_omp_agent INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, stop_reason TEXT, snapshot_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS task_runs (id TEXT PRIMARY KEY, benchmark_run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, snapshot_json TEXT NOT NULL, result_json TEXT, error TEXT, artifact_path TEXT NOT NULL, selected_followup_id TEXT, broken_at TEXT, completion TEXT, stop_reason TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_attempts (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, attempt INTEGER NOT NULL, status TEXT NOT NULL, result_json TEXT, error TEXT, created_at TEXT NOT NULL, UNIQUE(task_run_id, attempt));
     CREATE TABLE IF NOT EXISTS check_runs (id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, check_id TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER, log_path TEXT);
     CREATE TABLE IF NOT EXISTS reviews (task_run_id TEXT PRIMARY KEY, correctness INTEGER NOT NULL, code_quality INTEGER NOT NULL, ui_quality INTEGER NOT NULL, instruction_following INTEGER NOT NULL, comment TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -323,6 +327,11 @@ function migrate(sqlite: DatabaseSync): void {
   }
   if (!runColumns.some((column) => column.name === "model_ref")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN model_ref TEXT");
+  }
+  // Причина остановки: 'user' | 'overheat' | 'restart'. NULL у всего, что не отменялось,
+  // и у старых записей, где ручную остановку от перегрева уже не отличить.
+  if (!runColumns.some((column) => column.name === "stop_reason")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN stop_reason TEXT");
   }
   if (!runColumns.some((column) => column.name === "use_omp_agent")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN use_omp_agent INTEGER NOT NULL DEFAULT 0");
@@ -368,6 +377,9 @@ function migrate(sqlite: DatabaseSync): void {
   // Полнота выполнения промпта: 'full' или 'partial'. NULL — человек ещё не отметил.
   if (!taskRunColumns.some((column) => column.name === "completion")) {
     sqlite.exec("ALTER TABLE task_runs ADD COLUMN completion TEXT");
+  }
+  if (!taskRunColumns.some((column) => column.name === "stop_reason")) {
+    sqlite.exec("ALTER TABLE task_runs ADD COLUMN stop_reason TEXT");
   }
   const taskRevisionColumns = sqlite.prepare("PRAGMA table_info(task_revisions)").all() as Array<{ name: string }>;
   if (!taskRevisionColumns.some((column) => column.name === "images_json")) {
@@ -792,9 +804,12 @@ export function createStore(filename: string) {
         return { ...pending, status: "running" as const, started_at: startedAt };
       });
     },
-    updateRunStatus(id: string, status: RunStatus, error?: string) {
+    // Причина пишется всегда, в том числе NULL: иначе возобновлённый прогон унёс бы в новый исход
+    // причину прошлой остановки.
+    updateRunStatus(id: string, status: RunStatus, error?: string, stopReason: StopReason | null = null) {
       const finishedAt = ["completed", "failed", "cancelled", "agent_loop"].includes(status) ? now() : null;
-      sqlite.prepare("UPDATE benchmark_runs SET status = ?, error = ?, finished_at = COALESCE(?, finished_at) WHERE id = ?").run(status, error ?? null, finishedAt, id);
+      sqlite.prepare("UPDATE benchmark_runs SET status = ?, error = ?, stop_reason = ?, finished_at = COALESCE(?, finished_at) WHERE id = ?")
+        .run(status, error ?? null, stopReason, finishedAt, id);
     },
     listRuns() {
       return all<RunSummaryRow>(`
@@ -851,12 +866,12 @@ export function createStore(filename: string) {
       return one<TaskRunRow>("SELECT * FROM task_runs WHERE id = ?", id)!;
     },
     startTaskRun(id: string) {
-      sqlite.prepare("UPDATE task_runs SET status = 'running', started_at = ? WHERE id = ?").run(now(), id);
+      sqlite.prepare("UPDATE task_runs SET status = 'running', stop_reason = NULL, started_at = ? WHERE id = ?").run(now(), id);
     },
-    saveTaskRunResult(id: string, result: unknown, status: Exclude<RunStatus, "pending" | "running"> = "completed", error?: string) {
+    saveTaskRunResult(id: string, result: unknown, status: Exclude<RunStatus, "pending" | "running"> = "completed", error?: string, stopReason: StopReason | null = null) {
       sqlite
-        .prepare("UPDATE task_runs SET status = ?, result_json = ?, error = ?, finished_at = ? WHERE id = ?")
-        .run(status, JSON.stringify(result), error ?? null, now(), id);
+        .prepare("UPDATE task_runs SET status = ?, result_json = ?, error = ?, stop_reason = ?, finished_at = ? WHERE id = ?")
+        .run(status, JSON.stringify(result), error ?? null, stopReason, now(), id);
     },
     updateTaskRunResult(id: string, result: unknown) {
       sqlite.prepare("UPDATE task_runs SET result_json = ? WHERE id = ?").run(JSON.stringify(result), id);
@@ -1054,10 +1069,15 @@ export function createStore(filename: string) {
         );
       return this.getTaskRun(taskRunId)?.review;
     },
+    /**
+     * Перезапуск приложения — это остановка снаружи, а не ошибка модели: статус `cancelled`
+     * с причиной `restart`. У дополнительных промптов колонки причины нет и в классификацию
+     * исходов они не входят, поэтому там остаётся прежний `failed`.
+     */
     recoverInterruptedRuns() {
       const timestamp = now();
-      sqlite.prepare("UPDATE benchmark_runs SET status = 'failed', error = 'Application restarted', finished_at = ? WHERE status = 'running'").run(timestamp);
-      sqlite.prepare("UPDATE task_runs SET status = 'failed', error = 'Application restarted', finished_at = ? WHERE status = 'running'").run(timestamp);
+      sqlite.prepare("UPDATE benchmark_runs SET status = 'cancelled', error = 'Application restarted', stop_reason = 'restart', finished_at = ? WHERE status = 'running'").run(timestamp);
+      sqlite.prepare("UPDATE task_runs SET status = 'cancelled', error = 'Application restarted', stop_reason = 'restart', finished_at = ? WHERE status = 'running'").run(timestamp);
       sqlite.prepare("UPDATE task_run_followups SET status = 'failed', error = 'Application restarted', finished_at = ? WHERE status = 'running'").run(timestamp);
     },
     close() {

@@ -1280,7 +1280,7 @@ describe("REST API", () => {
     const response = await app.inject({ method: "POST", url: `/api/task-runs/${taskRun.id}/cancel` });
 
     expect(response.statusCode).toBe(202);
-    expect(store.getTaskRun(taskRun.id)?.status).toBe("cancelled");
+    expect(store.getTaskRun(taskRun.id)).toMatchObject({ status: "cancelled", stop_reason: "user" });
     await app.close();
     store.close();
   });
