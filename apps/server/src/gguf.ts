@@ -118,3 +118,31 @@ export function readGgufFacts(path: string): GgufFacts {
   cache.set(path, { ...facts, mtimeMs: stats.mtimeMs });
   return facts;
 }
+
+// Квантование пишут в имени файла, а не в заголовке: варианты вроде IQ4_XS, Q4_K_M, F16, NVFP4.
+// Берём последнее совпадение — в «...-Q4_K-IQ4_XS.gguf» именно оно описывает сам файл.
+const QUANT_PATTERN = /(?:^|[-_.])(IQ\d[A-Z0-9_]*|Q\d[A-Z0-9_]*|BF16|F16|F32|MXFP4|NVFP4)(?=[-_.]|$)/giu;
+
+/**
+ * Квантование из имени GGUF-файла; у облачных моделей и нераспознанных имён — null.
+ * Эвристика best-effort: она опирается на конвенцию «квант — последний такой токен в имени»,
+ * потому что в заголовке файла его нет. Имя, нарушающее конвенцию, распознается неверно.
+ */
+export function quantFromPath(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const name = path.split("/").at(-1)!.replace(/\.gguf$/iu, "");
+  const matches = [...name.matchAll(QUANT_PATTERN)];
+  return matches.at(-1)?.[1]?.toUpperCase() ?? null;
+}
+
+// Число параметров тоже живёт в имени файла: «35B», «26B», у MoE — общее число перед числом активных
+// («26B-A4B»), поэтому берём первое совпадение, а не последнее, как у кванта.
+const PARAMS_PATTERN = /(?:^|[-_.])(\d+(?:\.\d+)?)B(?=[-_.]|$)/iu;
+
+/** Число параметров из имени GGUF-файла в виде «35B»; у облачных и нераспознанных имён — null. */
+export function paramsFromPath(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const name = path.split("/").at(-1)!.replace(/\.gguf$/iu, "");
+  const match = PARAMS_PATTERN.exec(name);
+  return match ? `${match[1]}B` : null;
+}

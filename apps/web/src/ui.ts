@@ -303,12 +303,13 @@ function oneDecimal(value: number) {
 }
 
 export function formatDuration(milliseconds: number) {
-  if (milliseconds < 60_000) return `${String(oneDecimal(milliseconds / 1_000)).replace(".", ",")} с`;
+  if (milliseconds < 60_000) return `${String(oneDecimal(milliseconds / 1_000)).replace(".", ",")}с`;
   const totalSeconds = Math.round(milliseconds / 1_000);
   const hours = Math.floor(totalSeconds / 3_600);
   const minutes = Math.floor((totalSeconds % 3_600) / 60);
   const seconds = totalSeconds % 60;
-  return [hours ? `${hours} ч` : "", hours || minutes ? `${minutes} мин` : "", `${seconds} с`].filter(Boolean).join(" ");
+  // Компактно и без пробелов внутри единицы: «11 мин 50 с» не помещалось в столбец таблицы.
+  return [hours ? `${hours}ч` : "", hours || minutes ? `${minutes}м` : "", `${seconds}с`].filter(Boolean).join(" ");
 }
 
 export function formatMetricValue(name: string, value: number) {
@@ -350,6 +351,29 @@ export function ggufSummary(sizeBytes?: number, expertCount?: number): string {
   if (expertCount !== undefined) parts.push(expertCount > 0 ? `MoE, ${expertCount} экспертов` : "dense");
   return parts.join(" · ");
 }
+
+/**
+ * Длинное имя обрезается, полное остаётся в подсказке: одно имя не должно занимать половину
+ * графика или растягивать столбец таблицы. Общее для аналитики и лидерборда.
+ */
+export function shortLabel(label: string, maxChars = 20) {
+  return label.length > maxChars ? `${label.slice(0, maxChars - 1)}…` : label;
+}
+
+/**
+ * Подкраска числа по качеству: четыре ступени вместо плавного градиента, потому что цвета берутся
+ * из токенов, проверенных на контраст. `invert` — для величин, где меньше значит лучше.
+ */
+export function toneClass(value: number | null, [good, ok, warn]: readonly [number, number, number], invert = false) {
+  if (value === null) return "";
+  const reached = (limit: number) => invert ? value <= limit : value >= limit;
+  return reached(good) ? "tone-good" : reached(ok) ? "tone-ok" : reached(warn) ? "tone-warn" : "tone-bad";
+}
+
+/** Пороги общие для лидерборда и аналитики: одна и та же цифра не должна краситься по-разному. */
+export const scoreTone = [80, 60, 40] as const;
+export const criteriaTone = [8, 6, 4] as const;
+export const failureTone = [5, 15, 30] as const;
 
 export function formatBytes(sizeBytes: number) {
   return `${String(oneDecimal(sizeBytes / 1024 ** 3)).replace(".", ",")} Гб`;

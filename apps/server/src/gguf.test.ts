@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readGgufFacts } from "./gguf.js";
+import { paramsFromPath, quantFromPath, readGgufFacts } from "./gguf.js";
 
 function string(value: string): Buffer {
   const bytes = Buffer.from(value, "utf8");
@@ -64,5 +64,42 @@ describe("readGgufFacts", () => {
   it("falls back to dense on unreadable files", () => {
     const body = Buffer.from("not a gguf file at all");
     expect(readGgufFacts(write("broken.gguf", body))).toEqual({ sizeBytes: body.length, expertCount: 0, layerCount: 0 });
+  });
+});
+
+describe("quantFromPath", () => {
+  it("берёт квантование из имени файла, включая нестандартные варианты", () => {
+    expect(quantFromPath("/models/gemma4-v2-Q4_K_M.gguf")).toBe("Q4_K_M");
+    expect(quantFromPath("/models/gemma-4-26B-A4B-it-UD-IQ4_NL.gguf")).toBe("IQ4_NL");
+    expect(quantFromPath("/models/gpt-oss-20b-F16.gguf")).toBe("F16");
+    expect(quantFromPath("/models/Nemotron-3.5-Lightning-30B-A3B-NVFP4-noMTP.gguf")).toBe("NVFP4");
+  });
+
+  it("берёт последнее совпадение: им и описан сам файл", () => {
+    expect(quantFromPath("/models/Ornith-1.5-35B-A3B-AD-Q4_K-IQ4_XS.gguf")).toBe("IQ4_XS");
+  });
+
+  it("молчит там, где квантования в имени нет", () => {
+    expect(quantFromPath("/models/some-model.gguf")).toBeNull();
+    // Размер модели не квантование: «30B» и «A3B» распознаваться не должны.
+    expect(quantFromPath("/models/Model-30B-A3B.gguf")).toBeNull();
+    expect(quantFromPath(null)).toBeNull();
+  });
+});
+
+describe("paramsFromPath", () => {
+  it("берёт число параметров из имени файла", () => {
+    expect(paramsFromPath("/models/Ornith-1.5-35B-A3B-AD-Q4_K-IQ4_XS.gguf")).toBe("35B");
+    expect(paramsFromPath("/models/gpt-oss-20b-F16.gguf")).toBe("20B");
+    expect(paramsFromPath("/models/Qwen3.8-27B-UD-IQ4_XS.gguf")).toBe("27B");
+  });
+
+  it("у MoE берёт общее число параметров, а не активных", () => {
+    expect(paramsFromPath("/models/gemma-4-26B-A4B-it-UD-IQ4_NL.gguf")).toBe("26B");
+  });
+
+  it("молчит, когда в имени параметров нет", () => {
+    expect(paramsFromPath("/models/gemma4-v2-Q4_K_M.gguf")).toBeNull();
+    expect(paramsFromPath(null)).toBeNull();
   });
 });

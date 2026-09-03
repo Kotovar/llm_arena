@@ -1,10 +1,11 @@
 import { classifyTaskRun, representativeThreshold } from "@llm-arena/shared";
 import type { FastifyInstance } from "fastify";
+import { paramsFromPath, quantFromPath } from "../gguf.js";
 import { aggregateModelStats, attemptMetrics, mean, median, type MetricRow, reviewCriteria, round, scoreShare } from "../metrics.js";
 import type { ArenaStore } from "../store.js";
 import { leaderboardSliceSchema, passesCompletion, type SliceQuery } from "./slice.js";
 
-type ModelMeta = { modelName: string; modelKind: "local-gguf" | "cloud"; estimatedCostPerRun: number | null };
+type ModelMeta = { modelName: string; modelKind: "local-gguf" | "cloud"; quant: string | null; modelParams: string | null; estimatedCostPerRun: number | null };
 
 export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStore): void {
   app.get<{ Querystring: SliceQuery }>("/api/leaderboard", async (request) => {
@@ -28,6 +29,9 @@ export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStor
         models.set(row.model_id, {
           modelName: model?.name ?? row.model_ref ?? row.model_id.slice(0, 8),
           modelKind: model?.kind ?? "cloud",
+          // Квантование читается из пути, поэтому остаётся и у архивных моделей — их лидерборд не выбрасывает.
+          quant: quantFromPath(model?.path),
+          modelParams: paramsFromPath(model?.path),
           // Цена — оценка пользователя: месячная подписка, поделённая на ожидаемое число прогонов.
           estimatedCostPerRun: model?.economics ? model.economics.monthlyCost / model.economics.includedRunEstimate : null,
         });

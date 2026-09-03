@@ -40,6 +40,10 @@ export type Model = {
   /** Оценка пользователя: месячная подписка и ожидаемое число прогонов. Нет — цену не показываем. */
   economics: { monthlyCost: number; includedRunEstimate: number } | null;
   mmprojPath: string | null;
+  /** Квантование из имени GGUF-файла; у облачных моделей его нет. */
+  quant?: string | null;
+  /** Число параметров из имени GGUF-файла, например «35B». */
+  params?: string | null;
   sizeBytes?: number;
   expertCount?: number;
   /** Число блоков модели из GGUF. 0 — прочитать не удалось. */
@@ -97,7 +101,21 @@ export type LeaderboardEntry = {
   modelId: string;
   modelName: string;
   modelKind: "local-gguf" | "cloud";
+  /** Квантование из имени GGUF-файла; у облачных моделей — null. */
+  quant: string | null;
+  /** Число параметров из имени GGUF-файла, например «35B»; у облачных моделей — null. */
+  modelParams: string | null;
   runCount: number;
+  /** Учтённые промпты: успехи и неудачи модели, без ручных остановок. */
+  attempted: number;
+  outcomes: Record<TaskOutcome, number>;
+  successCount: number;
+  successPercent: number | null;
+  failureCount: number;
+  failurePercent: number | null;
+  userAbortCount: number;
+  representative: boolean;
+  representativeThreshold: number;
   reviewedTaskRunCount: number;
   scorePercent: number | null;
   generationTokensPerSecond: number | null;
@@ -267,8 +285,8 @@ export type DecisionPoint = {
   medianTokensPerSecond: number | null;
   averageDurationMs: number | null;
   peakVramMiB: number | null;
-  /** Размер GGUF-файла на диске: у облачных моделей его нет. */
-  modelSizeBytes: number | null;
+  /** Число параметров из имени GGUF-файла, например «35B»; у облачных моделей его нет. */
+  modelParams: string | null;
   failureRate: number;
   estimatedCostPerRun: number | null;
 };

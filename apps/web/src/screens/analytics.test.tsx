@@ -21,7 +21,7 @@ function point(overrides: Partial<DecisionPoint & { averageDurationMs: number | 
     medianTokensPerSecond: 42,
     averageDurationMs: 1000,
     peakVramMiB: 15846,
-    modelSizeBytes: 24 * 1024 ** 3,
+    modelParams: "35B",
     failureRate: 0,
     estimatedCostPerRun: null,
     ...overrides,
@@ -142,7 +142,7 @@ describe("аналитика решений", () => {
     await renderAnalytics();
 
     expect(await screen.findByRole("img", { name: "Качество и скорость" })).toBeTruthy();
-    expect(screen.getByText("Pareto: 1 связка")).toBeTruthy();
+    expect(screen.getByText("Парето: 1 связка")).toBeTruthy();
     const fills = [...document.querySelectorAll(".scatter .scatter-dot")].map((circle) => circle.getAttribute("fill"));
     expect(new Set(fills).size).toBe(2);
     // Опознавать связку по одному цвету нельзя: у каждой точки есть подпись.
@@ -168,14 +168,14 @@ describe("аналитика решений", () => {
     expect(chart.querySelectorAll(".scatter-dot")).toHaveLength(2);
     expect(chart.textContent).toContain("быстрее справа");
     expect([...chart.querySelectorAll(".scatter-grid")].filter((line) => line.getAttribute("x1") === line.getAttribute("x2")).length).toBeLessThanOrEqual(7);
-    expect(chart.textContent).toContain("10 мин 0 с");
+    expect(chart.textContent).toContain("10м 0с");
     const dots = [...chart.querySelectorAll(".scatter-dot")];
     expect(Number(dots[0]!.getAttribute("cx"))).toBeLessThan(Number(dots[1]!.getAttribute("cx")));
     const table = screen.getByRole("table", { name: "Те же связки числами" });
     expect(within(table).getByRole("columnheader", { name: "Время промпта" })).toBeTruthy();
     expect(within(table).queryByRole("columnheader", { name: "Скорость" })).toBeNull();
-    expect(within(table).getByText("10 мин 15 с")).toBeTruthy();
-    expect(within(table).getByText("1 мин 0 с")).toBeTruthy();
+    expect(within(table).getByText("10м 15с")).toBeTruthy();
+    expect(within(table).getByText("1м 0с")).toBeTruthy();
   });
 
   it("показывает подробности точки при наведении и приглушает недоминирующие", async () => {
@@ -346,12 +346,12 @@ describe("разделение локальных и подписочных мо
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     // Без фильтра локальная модель доминируется подписочной и вылетает из короткого списка.
-    expect(screen.getByText("Pareto: 1 связка")).toBeTruthy();
+    expect(screen.getByText("Парето: 1 связка")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Локальные" }));
 
     await waitFor(() => expect([...document.querySelectorAll(".scatter-point-label")].map((label) => label.textContent)).toEqual(["Локальная · Скорость"]));
-    expect(screen.getByText("Pareto: 1 связка")).toBeTruthy();
+    expect(screen.getByText("Парето: 1 связка")).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Короткий список" }));
     expect(screen.getByText("Локальная · Скорость")).toBeTruthy();
     expect(screen.queryByText("Подписочная")).toBeNull();

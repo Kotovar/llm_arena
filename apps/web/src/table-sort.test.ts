@@ -24,5 +24,7 @@ describe("сортировка таблицы", () => {
     expect(result.current.ariaSort("name")).toBe("descending");
     expect(result.current.ariaSort("score")).toBe("none");
     expect(result.current.arrow("name")).toBe("▼");
+    // У неактивного столбца стрелка тоже рисуется — место под неё занято всегда.
+    expect(result.current.arrow("score")).toBe("▼");
   });
 });

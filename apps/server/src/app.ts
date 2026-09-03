@@ -27,7 +27,7 @@ import { assertWorkspaceCommit, workspaceVersionDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
-import { readGgufFacts } from "./gguf.js";
+import { paramsFromPath, quantFromPath, readGgufFacts } from "./gguf.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ArenaStore } from "./store.js";
@@ -358,11 +358,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
 
   app.get("/api/models", async () => store.listModels().map((model) => {
     if (model.kind !== "local-gguf" || !model.path) return model;
+    // Квантование и число параметров берём из имени файла: колонок в базе для них нет, а путь уже хранится.
+    const facts = { quant: quantFromPath(model.path), params: paramsFromPath(model.path) };
     try {
       const { sizeBytes, expertCount, layerCount } = readGgufFacts(model.path);
-      return { ...model, sizeBytes, expertCount, layerCount };
+      return { ...model, ...facts, sizeBytes, expertCount, layerCount };
     } catch {
-      return model;
+      return { ...model, ...facts };
     }
   }));
   app.get("/api/models/archived", async () => store.listArchivedModels());

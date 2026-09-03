@@ -5,7 +5,7 @@ import { api } from "../api.js";
 import { Empty, Page, Panel, SelectMenu, Skeleton, useData } from "../shell.js";
 import { useTableSort } from "../table-sort.js";
 import type { DecisionPoint, ModelStats, Task } from "../types.js";
-import { DEFAULT_PROFILE_NAME, formatBytes, formatDuration, formatMetricValue, formatVram, modelKindFilters, plural } from "../ui.js";
+import { DEFAULT_PROFILE_NAME, failureTone, formatDuration, formatMetricValue, formatVram, modelKindFilters, plural, scoreTone, shortLabel, toneClass } from "../ui.js";
 import type { ModelKindFilter } from "../ui.js";
 
 type Slice = { kind: "all" } | { kind: "tag"; tag: string };
@@ -37,9 +37,8 @@ const LABEL_MAX_CHARS = 20;
 const LABEL_CHAR_WIDTH = 6;
 
 /** Подпись у точки: длинное имя обрезается, полное остаётся в подсказке, легенде и таблице. */
-function shortLabel(point: DecisionPoint) {
-  const label = pointLabel(point);
-  return label.length > LABEL_MAX_CHARS ? `${label.slice(0, LABEL_MAX_CHARS - 1)}…` : label;
+function pointShortLabel(point: DecisionPoint) {
+  return shortLabel(pointLabel(point), LABEL_MAX_CHARS);
 }
 
 function pointKey(point: DecisionPoint) {
@@ -178,7 +177,7 @@ function Scatter({ points, color, shortlist, metric }: { points: DecisionPoint[]
         const cx = x(value(point)!);
         const cy = y(point.qualityPercent!);
         const right = cx > 420;
-        const label = shortLabel(point);
+        const label = pointShortLabel(point);
         const labelWidth = label.length * LABEL_CHAR_WIDTH;
         const labelX = right ? cx - 13 : cx + 13;
         const labelLeft = right ? labelX - labelWidth : labelX;
@@ -211,8 +210,8 @@ function Scatter({ points, color, shortlist, metric }: { points: DecisionPoint[]
         <th scope="col">Связка</th>
         <th scope="col" title="Доля набранных баллов по оценённым промптам.">Доля баллов</th>
         <th scope="col" title={metric === "speed" ? "Медиана скорости генерации по замерам этой связки." : "Среднее время одного промпта, а не суммы прогона."}>{metric === "speed" ? "Скорость" : "Время промпта"}</th>
-        <th scope="col" title="Наибольший наблюдавшийся расход видеопамяти среди прогонов связки.">Пик VRAM</th>
-        <th scope="col" title="Размер GGUF-файла на диске: у облачных моделей его нет.">Размер модели</th>
+        <th scope="col" title="Наибольший наблюдавшийся расход видеопамяти среди прогонов связки.">Пик видеопамяти</th>
+        <th scope="col" title="Число параметров модели из имени GGUF-файла.">Размер модели</th>
         <th scope="col" title="Промпты, завершившиеся ошибкой или непройденной проверкой.">Неудачных промптов</th>
         <th scope="col" title="Прогоны, упавшие целиком или остановленные вручную.">Сорванных прогонов</th>
         <th scope="col" title="Сколько промптов вошло в эту связку.">Промптов</th>
@@ -222,7 +221,7 @@ function Scatter({ points, color, shortlist, metric }: { points: DecisionPoint[]
         <td className="mono">{point.qualityPercent === null ? "—" : `${point.qualityPercent}%`}</td>
         <td className="mono">{value(point) === null ? "—" : formatValue(value(point)!)}</td>
         <td className="mono">{point.peakVramMiB === null ? "—" : formatVram(point.peakVramMiB)}</td>
-        <td className="mono">{point.modelSizeBytes === null ? "—" : formatBytes(point.modelSizeBytes)}</td>
+        <td className="mono">{point.modelParams ?? "—"}</td>
         <td className="mono">{failureLabel(point.failureRate)}</td>
         <td className="mono">{`${point.interruptedRunCount} из ${point.runCount}`}</td>
         <td className="mono">{point.sampleCount}</td>
@@ -238,15 +237,15 @@ function Shortlist({ points }: { points: DecisionPoint[] }) {
       <th scope="col">Связка</th>
       <th scope="col" title="Набрано от возможного по оценённым промптам.">Доля баллов</th>
       <th scope="col" title="Медиана скорости генерации по замерам этой связки.">Скорость</th>
-      <th scope="col" title="Наибольший наблюдавшийся расход видеопамяти среди прогонов связки.">Пик VRAM</th>
-      <th scope="col" title="Размер GGUF-файла на диске: у облачных моделей его нет.">Размер модели</th>
+      <th scope="col" title="Наибольший наблюдавшийся расход видеопамяти среди прогонов связки.">Пик видеопамяти</th>
+      <th scope="col" title="Число параметров модели из имени GGUF-файла.">Размер модели</th>
     </tr></thead>
     <tbody>{points.map((point) => <tr key={pointKey(point)}>
       <th scope="row">{pointLabel(point)}</th>
       <td className="mono">{point.qualityPercent}%</td>
       <td className="mono">{speedLabel(point.medianTokensPerSecond!)}</td>
       <td className="mono">{point.peakVramMiB === null ? "—" : formatVram(point.peakVramMiB)}</td>
-      <td className="mono">{point.modelSizeBytes === null ? "—" : formatBytes(point.modelSizeBytes)}</td>
+      <td className="mono">{point.modelParams ?? "—"}</td>
     </tr>)}</tbody>
   </table></div>;
 }
@@ -280,6 +279,11 @@ function percentLabel(count: number, total: number) {
   return `${count} · ${percent > 0 && percent < 1 ? "<1" : Math.round(percent)}%`;
 }
 
+/** Красим по тому числу, которое видно в ячейке: иначе округление и порог расходятся. */
+function shownPercent(count: number, total: number) {
+  return total ? Math.round((count / total) * 100) : null;
+}
+
 /**
  * Сводная таблица: точка входа «быстро оценить модель». Нерепрезентативные модели показываются,
  * но места в ранжировании не занимают — иначе две оценённые связки садятся на первую строку.
@@ -307,7 +311,7 @@ function SummaryTable({ stats }: { stats: ModelStats[] }) {
     ["partial", "Част.", "Результаты с отметкой «выполнен частично»."],
     ["failureCount", "Неудач", "Ошибки, непройденные проверки, зацикливания, «не работает» и автоматические остановки."],
     ["averageDurationMs", "Ср. время", "Среднее время одного промпта."],
-    ["medianTokensPerSecond", "tok/s", "Медиана скорости генерации по всем замерам модели."],
+    ["medianTokensPerSecond", "Ток/с", "Медиана скорости генерации по всем замерам модели."],
     ["scorePercent", "Доля баллов", "Набрано от возможного по оценённым промптам."],
   ];
   return <div className="analytics-scroll"><table className="analytics-table">
@@ -317,13 +321,13 @@ function SummaryTable({ stats }: { stats: ModelStats[] }) {
     <tbody>{rows.map((row) => <tr key={row.modelId} className={row.representative ? undefined : "leaderboard-unranked"}>
       <th scope="row">{row.modelName}{row.representative ? null : <em className="unranked-note" title="Место в ранжировании занимают только модели, прошедшие порог.">{`нерепрезентативно: ${row.successCount} из ${row.representativeThreshold}`}</em>}</th>
       <td className="mono">{row.attempted}</td>
-      <td className="mono">{percentLabel(row.successCount, row.attempted)}</td>
+      <td className={`mono ${toneClass(shownPercent(row.successCount, row.attempted), scoreTone)}`}>{percentLabel(row.successCount, row.attempted)}</td>
       <td className="mono">{row.outcomes.full}</td>
       <td className="mono">{row.outcomes.partial}</td>
-      <td className="mono">{percentLabel(row.failureCount, row.attempted)}</td>
+      <td className={`mono ${toneClass(shownPercent(row.failureCount, row.attempted), failureTone, true)}`}>{percentLabel(row.failureCount, row.attempted)}</td>
       <td className="mono">{row.averageDurationMs === null ? "—" : formatDuration(row.averageDurationMs)}</td>
-      <td className="mono">{row.medianTokensPerSecond === null ? "—" : speedLabel(row.medianTokensPerSecond)}</td>
-      <td className="mono" title={`Оценено ${row.reviewedCount} из ${row.attempted}`}>{row.scorePercent === null ? "—" : `${row.scorePercent}%`}</td>
+      <td className="mono">{row.medianTokensPerSecond ?? "—"}</td>
+      <td className={`mono ${toneClass(row.scorePercent === null ? null : Math.round(row.scorePercent), scoreTone)}`} title={`Оценено ${row.reviewedCount} из ${row.attempted}`}>{row.scorePercent === null ? "—" : `${row.scorePercent}%`}</td>
     </tr>)}</tbody>
   </table></div>;
 }
@@ -350,7 +354,7 @@ function FailuresTable({ stats }: { stats: ModelStats[] }) {
     </tr></thead>
     <tbody>{stats.map((row) => <tr key={row.modelId}>
       <th scope="row">{row.modelName}</th>
-      <td className="mono">{percentLabel(row.failureCount, row.attempted)}</td>
+      <td className={`mono ${toneClass(shownPercent(row.failureCount, row.attempted), failureTone, true)}`}>{percentLabel(row.failureCount, row.attempted)}</td>
       {cells.map(([label, , value]) => <td className="mono" key={label}>{value(row) || "—"}</td>)}
       <td className="mono aside-column">{row.userAbortCount || "—"}</td>
     </tr>)}</tbody>
@@ -415,7 +419,7 @@ export function AnalyticsPage() {
         {views.map(([value, label]) => <button type="button" role="tab" key={value} aria-selected={view === value} className={view === value ? "active" : ""} onClick={() => setView(value)}>{label}</button>)}
       </div>
       <Panel title={views.find(([value]) => value === view)![1]} action={<div className="panel-actions">
-        {view === "scatter" ? <span className="mono">{`Pareto: ${shortlist.length} ${plural(shortlist.length, "связка", "связки", "связок")}`}</span> : null}
+        {view === "scatter" ? <span className="mono">{`Парето: ${shortlist.length} ${plural(shortlist.length, "связка", "связки", "связок")}`}</span> : null}
         <SelectMenu label="Учитывать" value={completion} onSelect={(next) => setCompletion(next as Completion)} options={completionOptions.map(([value, label]) => ({ value, label }))} />
       </div>}>
         <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{modelKindFilters.map(([value, label]) => <button type="button" key={value} className={modelKind === value ? "active" : ""} aria-pressed={modelKind === value} onClick={() => setModelKind(value)}>{label}</button>)}</div>

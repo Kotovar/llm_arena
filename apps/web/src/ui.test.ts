@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, visionProjectorFiles } from "./ui.js";
+import { attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, toneClass, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -170,10 +170,10 @@ describe("интерфейс запуска", () => {
   });
 
   it("форматирует длительность без миллисекунд", () => {
-    expect(formatDuration(12_450)).toBe("12,5 с");
-    expect(formatDuration(139_038)).toBe("2 мин 19 с");
-    expect(formatDuration(3_600_000)).toBe("1 ч 0 мин 0 с");
-    expect(formatDuration(3_723_000)).toBe("1 ч 2 мин 3 с");
+    expect(formatDuration(12_450)).toBe("12,5с");
+    expect(formatDuration(139_038)).toBe("2м 19с");
+    expect(formatDuration(3_600_000)).toBe("1ч 0м 0с");
+    expect(formatDuration(3_723_000)).toBe("1ч 2м 3с");
   });
 
   it("форматирует токены и скорость для человека", () => {
@@ -540,7 +540,7 @@ describe("название модели в истории", () => {
 describe("сводка повторов", () => {
   it("показывает медиану и размах, когда замеров несколько", () => {
     expect(attemptSummary({ attempts: 3, completedAttempts: 3, medianTokensPerSecond: 42, minTokensPerSecond: 40, maxTokensPerSecond: 50, medianDurationMs: 1000, minDurationMs: 800, maxDurationMs: 1200 }))
-      .toBe("Повторов: 3 из 3 · медиана скорости: 42 токенов/с (40 токенов/с — 50 токенов/с) · медиана времени: 1 с (0,8 с — 1,2 с)");
+      .toBe("Повторов: 3 из 3 · медиана скорости: 42 токенов/с (40 токенов/с — 50 токенов/с) · медиана времени: 1с (0,8с — 1,2с)");
   });
 
   it("не выдаёт единственный удавшийся замер за медиану", () => {
@@ -573,5 +573,20 @@ describe("раскладка слоёв", () => {
     expect(gpuLayerSplit("auto", 48)).toBeNull();
     expect(gpuLayerSplit("", 48)).toBeNull();
     expect(gpuLayerSplit("1.5", 48)).toBeNull();
+  });
+});
+
+describe("подкраска чисел", () => {
+  it("красит по ступеням и молчит на неизмеренном", () => {
+    expect(toneClass(90, [80, 60, 40])).toBe("tone-good");
+    expect(toneClass(60, [80, 60, 40])).toBe("tone-ok");
+    expect(toneClass(41, [80, 60, 40])).toBe("tone-warn");
+    expect(toneClass(10, [80, 60, 40])).toBe("tone-bad");
+    expect(toneClass(null, [80, 60, 40])).toBe("");
+  });
+
+  it("переворачивает шкалу там, где меньше значит лучше", () => {
+    expect(toneClass(0, [5, 15, 30], true)).toBe("tone-good");
+    expect(toneClass(40, [5, 15, 30], true)).toBe("tone-bad");
   });
 });

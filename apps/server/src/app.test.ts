@@ -1774,6 +1774,34 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("отдаёт квантование и число параметров и там, где архивной модели уже нет в каталоге", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-quant-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+
+    const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
+    const path = join(directory, "Some-Model-30B-A3B-IQ4_XS.gguf");
+    writeFileSync(path, "not a real gguf");
+    const model = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path, alias: "local" });
+
+    const models = (await app.inject({ method: "GET", url: "/api/models" })).json() as Array<{ id: string; quant: string | null; params: string | null; sizeBytes?: number }>;
+    expect(models.find((item) => item.id === model.id)).toMatchObject({ quant: "IQ4_XS", params: "30B", sizeBytes: 15 });
+
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "t0"), { task: task.currentRevision });
+    store.saveTaskRunResult(taskRun.id, { finalAnswer: "A" });
+    store.updateRunStatus(run.id, "completed");
+    expect((await app.inject({ method: "DELETE", url: `/api/models/${model.id}` })).statusCode).toBe(204);
+
+    // Архивная модель из каталога исчезает, но на лидерборде остаётся — значит и её данные должны остаться.
+    expect(((await app.inject({ method: "GET", url: "/api/models" })).json() as unknown[]).length).toBe(0);
+    const entries = (await app.inject({ method: "GET", url: "/api/leaderboard" })).json() as Array<{ modelId: string; quant: string | null; modelParams: string | null }>;
+    expect(entries.find((entry) => entry.modelId === model.id)).toMatchObject({ quant: "IQ4_XS", modelParams: "30B" });
+    await app.close();
+    store.close();
+  });
+
   it("aggregates the leaderboard by model, weighting by reviewed task run and keeping archived models", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-leaderboard-"));
     directories.push(directory);

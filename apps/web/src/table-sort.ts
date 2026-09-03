@@ -26,6 +26,8 @@ export function useTableSort<T>(
   // в этих таблицах интересен верх рейтинга, а не хвост.
   const toggle = (key: string) => setSort((current) => current.key === key ? { key, dir: current.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" });
   const ariaSort = (key: string) => sort.key === key ? (sort.dir === "asc" ? "ascending" as const : "descending" as const) : "none" as const;
-  const arrow = (key: string) => sort.key === key ? (sort.dir === "asc" ? "▲" : "▼") : "";
+  // Стрелка рисуется всегда: появляясь только у активного столбца, она меняла его ширину и двигала числа.
+  // У неактивного она показывает направление первого клика и гасится через `aria-sort` в CSS.
+  const arrow = (key: string) => sort.key === key && sort.dir === "asc" ? "▲" : "▼";
   return { rows: sorted, sort, toggle, ariaSort, arrow };
 }
