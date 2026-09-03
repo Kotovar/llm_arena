@@ -862,12 +862,19 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       reveal: [modelName(left.id), modelName(right.id)],
     });
   });
-  app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => store.saveReview(request.params.id, parse(reviewSchema, request.body)));
+  // Оценка и отметка полноты сохраняются одним запросом: результат без отметки не считается оценённым.
+  app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => {
+    const review = parse(reviewSchema, request.body);
+    if (!store.getTaskRun(request.params.id)) throw new Error("Task run not found");
+    return store.saveReviewWithCompletion(request.params.id, review);
+  });
   // Отметка о выполнении промпта: полностью, частично или «не работает» (последняя убирает результат из галереи и сводок).
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/completion", async (request) => {
     const { completion } = parse(completionSchema, request.body);
     const taskRun = store.getTaskRun(request.params.id);
     if (!taskRun) throw new Error("Task run not found");
+    // Сменить чип на «выполнено» можно только у оценённого результата: иначе это обход обязательной оценки.
+    if ((completion === "full" || completion === "partial") && !taskRun.review) throw new Error("Rate the result before marking it complete");
     return withSelectedVersion(store.setTaskRunCompletion(taskRun.id, completion)!);
   });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/selected-version", async (request) => {

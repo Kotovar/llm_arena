@@ -1085,7 +1085,11 @@ describe("REST API", () => {
     expect((await app.inject({ method: "PUT", url: "/api/gallery/featured", payload: { taskRunId: duplicateTaskRun.id } })).statusCode).toBe(404);
     // Из выборки лидерборда «Не работает» больше не выпадает: это неудача модели, а не отсутствие результата.
     expect((store.listLeaderboardTaskRuns()).find((row) => row.task_run_id === duplicateTaskRun.id)?.task_run_broken_at).toEqual(expect.any(String));
+    // Отметку «выполнено» нельзя поставить в обход оценки: иначе обязательность оценки обходится одним запросом.
+    expect((await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/completion`, payload: { completion: "full" } })).statusCode).toBe(400);
 
+    // Оценённому результату чип меняется одним запросом — оценка у него уже есть.
+    await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/review`, payload: { correctness: 7, codeQuality: 7, uiQuality: 7, instructionFollowing: 7, comment: "", completion: "full" } });
     const restored = await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/completion`, payload: { completion: "partial" } });
     expect(restored.json()).toMatchObject({ broken_at: null, completion: "partial" });
     const restoredGallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
@@ -1623,7 +1627,7 @@ describe("REST API", () => {
     const plainTask = store.createTask({ name: "Plain", kind: "prompt", prompt: "Answer", tags: [] });
     const model = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
     const profile = store.createExecutionProfile({ modelId: model.id, name: "Скорость", parameters: { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 512, ubatchSize: 256, flashAttention: "auto", cacheReuse: 128 }, calibrated: true, ggufSha256: null });
-    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
+    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "", completion: "full" as const });
 
     const run = store.createRun({ taskRevisionIds: [agentTask.currentRevision.id], modelId: model.id, executionProfileId: profile.id, runnerId: "llama-chat", resultMode: "text" });
     mkdirSync(join(config.dataDir, "runs", run.id), { recursive: true });
@@ -1744,7 +1748,7 @@ describe("REST API", () => {
 
     const agentTask = store.createTask({ name: "Agent", kind: "prompt", prompt: "Answer", tags: ["coding-agent"] });
     const plainTask = store.createTask({ name: "Plain", kind: "prompt", prompt: "Answer", tags: [] });
-    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
+    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "", completion: "full" as const });
     const model = store.createModel({ name: "Agent Model", kind: "cloud", provider: "openai", modelRef: "agent" });
     const other = store.createModel({ name: "Plain Model", kind: "cloud", provider: "openai", modelRef: "plain" });
 
@@ -1778,7 +1782,7 @@ describe("REST API", () => {
     const app = buildApp({ store, config });
 
     const task = store.createTask({ name: "Prompt", kind: "prompt", prompt: "Answer", tags: [] });
-    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "" });
+    const review = (score: number) => ({ correctness: score, codeQuality: score, uiQuality: score, instructionFollowing: score, comment: "", completion: "full" as const });
 
     const scored = store.createModel({ name: "Scored Model", kind: "cloud", provider: "openai", modelRef: "scored" });
     const runA = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: scored.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });

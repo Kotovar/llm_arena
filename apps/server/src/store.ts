@@ -1059,7 +1059,14 @@ export function createStore(filename: string) {
       if (broken) sqlite.prepare("DELETE FROM gallery_featured WHERE task_run_id = ?").run(taskRunId);
       return this.getTaskRun(taskRunId);
     },
-    saveReview(taskRunId: string, review: Review) {
+    /** Оценка и отметка полноты — одна запись: половина сохранённого хуже, чем ничего. */
+    saveReviewWithCompletion(taskRunId: string, review: Review) {
+      return transaction(() => {
+        this.setTaskRunCompletion(taskRunId, review.completion);
+        return this.saveReview(taskRunId, review);
+      });
+    },
+    saveReview(taskRunId: string, review: Omit<Review, "completion">) {
       sqlite
         .prepare(
           `INSERT INTO reviews VALUES (?, ?, ?, ?, ?, ?, ?)

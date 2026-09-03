@@ -241,6 +241,9 @@ export const reviewSchema = z.object({
   uiQuality: visualScoreSchema,
   instructionFollowing: scoreSchema,
   comment: z.string().trim().max(10_000).default(""),
+  // Отметка полноты идёт вместе с оценкой одним запросом: двумя мутациями «всё или ничего» разъезжалось.
+  // «Не работает» сюда не попадает — у него оценка не требуется и ставится отдельным эндпоинтом.
+  completion: z.enum(["full", "partial"]),
 });
 
 export const commandSpecSchema = z.object({

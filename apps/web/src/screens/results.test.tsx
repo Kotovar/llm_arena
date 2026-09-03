@@ -8,10 +8,11 @@ import { criteriaForKind, RunDetail, RunsPage, TaskResult } from "./results.js";
 
 installDialogSupport();
 
-function snapshot(kind: "prompt" | "coding") {
+function snapshot(kind: "prompt" | "coding", resultMode: "text" | "web" = "web") {
   return JSON.stringify({
     task: { id: "revision-1", taskId: "task-1", name: "Аквариум", kind, prompt: "Сделай", revision: 1, contentHash: "h", tags: [], images: [] },
     profile: { name: "Automatic", parameters: { context: 102_400 } },
+    resultMode,
   });
 }
 
@@ -134,25 +135,57 @@ describe("критерии оценки", () => {
   it("считает максимум по числу применимых критериев", async () => {
     await renderResult(taskRun({ snapshot_json: snapshot("prompt") }));
 
-    expect(screen.getByText((_, element) => element?.tagName === "OUTPUT" && element.textContent === "15/30")).toBeDefined();
+    // Ни один критерий не выставлен: сумма нулевая, а сами критерии показаны прочерком.
+    expect(screen.getByText((_, element) => element?.tagName === "OUTPUT" && element.textContent === "0/30")).toBeDefined();
     expect(screen.queryByText("Визуал")).toBeNull();
+    expect(screen.getAllByText((_, element) => element?.tagName === "OUTPUT" && element.textContent === "—")).toHaveLength(3);
+  });
+
+  it("предвыбирает «не применяется» у визуала для текстового результата и оставляет его пустым для web", async () => {
+    const notApplied = () => screen.getByTitle("Визуал к этому результату не применяется");
+    await renderResult(taskRun({ snapshot_json: snapshot("coding", "text") }));
+    expect(notApplied().getAttribute("aria-pressed")).toBe("true");
+
+    cleanup();
+    await renderResult(taskRun({ snapshot_json: snapshot("coding", "web") }));
+    expect(notApplied().getAttribute("aria-pressed")).toBe("false");
   });
 });
 
 describe("отметка о выполнении промпта", () => {
   const body = () => JSON.parse(String(fetchMock.mock.calls.find(([url]) => String(url).includes("/completion"))![1]!.body));
+  const reviewBody = () => JSON.parse(String(fetchMock.mock.calls.find(([url]) => String(url).includes("/review"))![1]!.body));
+  // По одной ячейке «8 из 10» на каждый применимый критерий: у текстового ответа их три, у web — четыре.
+  const rate = async (user: ReturnType<typeof userEvent.setup>) => {
+    for (const cell of screen.getAllByTitle("8 из 10")) await user.click(cell);
+  };
 
-  it("шлёт выбранную отметку и снимает её повторным кликом", async () => {
+  it("уходит на сервер одним запросом вместе с оценкой", async () => {
     const user = userEvent.setup();
-    await renderResult(taskRun({ completion: "partial" }));
+    await renderResult();
+    await rate(user);
 
     await user.click(screen.getByRole("button", { name: "Полностью" }));
-    expect(body()).toEqual({ completion: "full" });
+    await user.click(screen.getByRole("button", { name: "Сохранить" }));
 
-    fetchMock.mockClear();
-    // Активная отметка уже стоит: повторный клик по ней её снимает.
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/review"))).toBe(true));
+    expect(reviewBody()).toMatchObject({ correctness: 8, codeQuality: 8, uiQuality: 8, instructionFollowing: 8, completion: "full" });
+    // Отдельной мутации отметки быть не должно: «всё или ничего» разъезжалось именно на двух запросах.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/completion"))).toBe(false);
+  });
+
+  it("не даёт сохранить, пока не выставлены все критерии и отметка", async () => {
+    const user = userEvent.setup();
+    await renderResult();
+
+    expect((screen.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Не выставлено/u).textContent).toContain("отметка выполнения");
+
+    await rate(user);
+    expect((screen.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(true);
+
     await user.click(screen.getByRole("button", { name: "Частично" }));
-    expect(body()).toEqual({ completion: null });
+    expect((screen.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("держит активной «Не работает», пока стоит пометка нерабочего результата", async () => {
@@ -163,8 +196,27 @@ describe("отметка о выполнении промпта", () => {
     expect(screen.getByRole("button", { name: "Полностью" }).getAttribute("aria-pressed")).toBe("false");
     expect(screen.queryByText("Выполнен полностью")).toBeNull();
 
+    // Ответ на снятие пометки должен быть валидным JSON: иначе мутация падает и onSuccess не отработает.
+    fetchMock.mockImplementation(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
     await user.click(screen.getByRole("button", { name: "Не работает" }));
     expect(body()).toEqual({ completion: null });
+    // Черновик обязан догнать сервер: иначе форма остаётся заблокированной после снятия пометки.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Не работает" }).getAttribute("aria-pressed")).toBe("false"));
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeTruthy();
+  });
+
+  it("сохраняет нерабочий результат без оценки", async () => {
+    const user = userEvent.setup();
+    await renderResult();
+
+    await user.click(screen.getByRole("button", { name: "Не работает" }));
+    const save = screen.getByRole("button", { name: "Сохранить как нерабочий" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+
+    await user.click(save);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/completion"))).toBe(true));
+    expect(body()).toEqual({ completion: "broken" });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/review"))).toBe(false);
   });
 
   it("показывает тег выполнения рядом со статусом", async () => {
@@ -179,6 +231,8 @@ describe("комментарий к оценке", () => {
   it("сохраняет оценку по Ctrl+Enter", async () => {
     const user = userEvent.setup();
     await renderResult();
+    for (const cell of screen.getAllByTitle("8 из 10")) await user.click(cell);
+    await user.click(screen.getByRole("button", { name: "Полностью" }));
     const comment = screen.getByLabelText("Комментарий");
 
     await user.click(comment);

@@ -9,7 +9,7 @@ import { ArrowRightIcon, CloseIcon, ExternalIcon } from "../icons.js";
 import { Empty, NumberField, Page, Panel, SelectMenu, Status, useData, useHotkey } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
-import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, formatWatchdogDiagnostics, measurementConditions, ompModeLabel, promptCountLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
+import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, formatWatchdogDiagnostics, measurementConditions, ompModeLabel, promptCountLabel, reviewMissingLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
@@ -195,7 +195,8 @@ export function ResultPreview({ url, target, onClose, closing, title = "Гото
   return <section className="result-preview"><header><div><span className="mono">Preview запущен</span><strong>{title}</strong></div><div><a href={url} target="_blank" rel="noreferrer">Открыть в новой вкладке <ExternalIcon /></a><button type="button" onClick={onClose} disabled={closing} title="Esc">Остановить preview</button></div></header><iframe title={`Preview: ${title}`} src={url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" /></section>;
 }
 
-type ReviewDraft = { correctness: number; codeQuality: number; uiQuality: number; instructionFollowing: number; comment: string };
+type ScoreKey = "correctness" | "codeQuality" | "uiQuality" | "instructionFollowing";
+type ReviewDraft = Record<ScoreKey, number | null> & { comment: string; completion: "full" | "partial" | "broken" | null };
 const reviewCriteria = [
   ["correctness", "Корректность"],
   ["codeQuality", "Удобство"],
@@ -204,18 +205,24 @@ const reviewCriteria = [
 ] as const;
 
 /** У текстового ответа нечего оценивать визуально, поэтому критерий выпадает вместе со своими десятью баллами. */
-export function criteriaForKind(kind: "prompt" | "coding"): ReadonlyArray<readonly [keyof Omit<ReviewDraft, "comment">, string]> {
+export function criteriaForKind(kind: "prompt" | "coding"): ReadonlyArray<readonly [ScoreKey, string]> {
   return kind === "coding" ? reviewCriteria : reviewCriteria.filter(([key]) => key !== "uiQuality");
 }
 
-function initialReview(taskRun: TaskRun): ReviewDraft {
+/**
+ * Невыставленный критерий — `null`, а не пятёрка: иначе «не оценено» неотличимо от «оценено на пять».
+ * Визуал у текстового результата предвыбран нулём — «не применяется», выбирать там нечего.
+ */
+function initialReview(taskRun: TaskRun, resultMode: "text" | "web" | undefined): ReviewDraft {
+  const completion = taskRun.broken_at ? "broken" as const : taskRun.completion ?? null;
   return taskRun.review ? {
     correctness: taskRun.review.correctness,
     codeQuality: taskRun.review.code_quality,
     uiQuality: taskRun.review.ui_quality,
     instructionFollowing: taskRun.review.instruction_following,
     comment: taskRun.review.comment,
-  } : { correctness: 5, codeQuality: 5, uiQuality: 5, instructionFollowing: 5, comment: "" };
+    completion,
+  } : { correctness: null, codeQuality: null, uiQuality: resultMode === "text" ? 0 : null, instructionFollowing: null, comment: "", completion };
 }
 
 function GenerationError({ error, errorDetails, endpoint }: { error: string | null; errorDetails: GenerationErrorDetails | null | undefined; endpoint: string }) {
@@ -251,7 +258,7 @@ type PreviewState = { taskRunId: string; resultSha: string; url: string };
 
 export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, onDeleted, deletable }: { taskRun: TaskRun; runId: string; preview: PreviewState | undefined; onPreview: (preview: PreviewState | undefined) => void; onDeleted?: () => void; deletable?: boolean }) {
   const client = useQueryClient();
-  const snapshot = JSON.parse(taskRun.snapshot_json) as { task: Task["currentRevision"]; fixture?: Fixture; model?: { kind?: string }; profile?: { name: string; parameters: { context: number | "auto"; temperature?: number } } };
+  const snapshot = JSON.parse(taskRun.snapshot_json) as { task: Task["currentRevision"]; fixture?: Fixture; model?: { kind?: string }; resultMode?: "text" | "web"; profile?: { name: string; parameters: { context: number | "auto"; temperature?: number } } };
   const versions = resultVersions(taskRun);
   const selectedKey = versions.find((version) => version.resultSha === taskRun.selectedVersion?.resultSha)?.key;
   const [activeVersionKey, setActiveVersionKey] = useState<string>();
@@ -263,7 +270,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
   const [artifact, setArtifact] = useState<string>();
   const [followOutput, setFollowOutput] = useState(true);
   const [lastActivity, setLastActivity] = useState<number>();
-  const [draft, setDraft] = useState(() => initialReview(taskRun));
+  const [draft, setDraft] = useState(() => initialReview(taskRun, snapshot.resultMode));
   const [hoveredScore, setHoveredScore] = useState<{ key: string; value: number } | null>(null);
   const [saved, setSaved] = useState(Boolean(taskRun.review));
   const [shotMissing, setShotMissing] = useState(false);
@@ -306,9 +313,27 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     void stopPreviewTarget(activePreview).finally(() => onPreview(undefined));
   }, [activePreview?.resultSha, activePreview?.taskRunId, activeVersion.resultSha, taskRun.id]);
   const zedErrorWorkspace = (zed.error as (Error & { data?: { workspace?: string } }) | null)?.data?.workspace;
-  function rate(event: FormEvent<HTMLFormElement>) { event.preventDefault(); review.mutate(snapshot.task.kind === "coding" ? draft : { ...draft, uiQuality: 0 }); }
+  function rate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    // «Не работает» — единственный исход, который сохраняется без оценки: оценивать нечего.
+    if (draft.completion === "broken") { markCompletion.mutate("broken"); return; }
+    if (missingReview) return;
+    const { completion, ...scores } = draft;
+    review.mutate({ ...scores, completion, ...(snapshot.task.kind === "coding" ? {} : { uiQuality: 0 }) });
+  }
   // Оценка ставится по нажатию, а не по полному клику: на узких делениях мышь успевает сползти, и клик не доходил до нужного деления.
-  function updateScore(key: keyof Omit<ReviewDraft, "comment">, value: number) { setDraft((current) => ({ ...current, [key]: value })); setSaved(false); review.reset(); }
+  function updateScore(key: ScoreKey, value: number | null) { if (isBroken) return; setDraft((current) => ({ ...current, [key]: value })); setSaved(false); review.reset(); }
+  function chooseCompletion(value: "full" | "partial" | "broken") {
+    // Повторный клик снимает отметку — кроме «Не работает»: её снятие меняет базу и идёт отдельным запросом.
+    // Пометка уже в базе: снимаем её запросом и тем же движением возвращаем черновик в редактируемое состояние.
+    if (value === "broken" && draft.completion === "broken" && taskRun.broken_at) {
+      markCompletion.mutate(null, { onSuccess: () => setDraft((current) => ({ ...current, completion: null })) });
+      return;
+    }
+    setDraft((current) => ({ ...current, completion: current.completion === value ? null : value }));
+    setSaved(false);
+    review.reset();
+  }
   async function copyAnswer() {
     try { await navigator.clipboard.writeText(String(result?.finalAnswer ?? "")); toast("Скопировано"); }
     catch { toast("Не удалось скопировать", "error"); }
@@ -329,8 +354,14 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     confirm({ title: "Запустить промпт заново?", body: `Готовый результат «${snapshot.task.name}», его оценка, уточнения и файлы будут удалены, промпт пройдёт заново${value === null ? "" : ` при температуре ${value}`}.`, action: "Запустить заново", onConfirm: () => retryTaskRun.mutate(value) });
   }
   const criteria = criteriaForKind(snapshot.task.kind);
-  const draftTotal = criteria.reduce((sum, [key]) => sum + draft[key], 0);
-  const completion = taskRun.broken_at ? "broken" : taskRun.completion ?? null;
+  const draftTotal = criteria.reduce((sum, [key]) => sum + (draft[key] ?? 0), 0);
+  // «Не применяется» убирает свои десять баллов и из возможных — так же, как считает сохранённая оценка.
+  const draftPossible = criteria.reduce((sum, [key]) => sum + (draft[key] === 0 ? 0 : 10), 0);
+  const completion = draft.completion;
+  const isBroken = completion === "broken";
+  const missingScores = criteria.filter(([key]) => draft[key] === null).map(([, label]) => label);
+  // Сохранить можно только целиком: все критерии и отметка полноты. «Не работает» — исключение из обоих правил.
+  const missingReview = !isBroken && (missingScores.length > 0 || completion === null);
   const isSelectedFinal = activeVersion.resultSha === taskRun.selectedVersion?.resultSha;
   const canUseVersion = activeVersion.status === "completed" && Boolean(activeVersion.resultSha);
   const logsPath = activeVersion.type === "followup" ? `/followups/${activeVersion.followupId!}/logs` : `/task-runs/${taskRun.id}/logs`;
@@ -368,7 +399,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{zedErrorWorkspace ? <><code>{zedErrorWorkspace}</code><button onClick={() => void copyWorkspacePath(zedErrorWorkspace)}>Скопировать путь</button></> : null}</div> : null}
     {artifact !== undefined ? <pre className="artifact">{artifact || "Нет данных"}</pre> : null}
     {taskRun.status === "completed" ? <details className="followups"><summary><strong>Уточнения ({followups.length})</strong>{hasActiveFollowup ? <span className="chip">Выполняется</span> : null}</summary><div className="followups-content">{followups.length ? <div className="followup-list">{followups.map((item) => <FollowupResult key={item.id} followup={item} cancelPending={cancelFollowup.isPending} onCancel={() => cancelFollowup.mutate(item.id)} />)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" title="Ctrl+Enter" disabled={hasActiveFollowup || addFollowup.isPending}>{hasActiveFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></div></details> : null}
-    {taskRun.status === "completed" || taskRun.review ? <form className="review" onSubmit={rate}><div className="review-heading"><span className="mono">Моя оценка</span><output>{draftTotal}<span>/{criteria.length * 10}</span></output></div>{markCompletion.error ? <span className="error review-message">{markCompletion.error.message}</span> : null}{taskRun.broken_at ? <p className="broken-note">Результат помечен как нерабочий: он не попадёт в галерею, а в лидерборде и аналитике считается неудачей модели. Оценку можно оставить для памяти — в долю баллов она не пойдёт.</p> : null}{criteria.map(([key, label]) => <fieldset className="score-control" key={key}><legend>{label}<output>{draft[key]}/10</output></legend><div className="score-scale" onMouseLeave={() => setHoveredScore(null)}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <label key={value} title={`${value} из 10`} onMouseEnter={() => setHoveredScore({ key, value })} onMouseDown={() => updateScore(key, value)}><input type="radio" name={`${taskRun.id}-${key}`} value={value} checked={draft[key] === value} onChange={() => updateScore(key, value)} /><span aria-hidden="true" style={{ "--step": value } as CSSProperties} className={value <= (hoveredScore?.key === key ? hoveredScore.value : draft[key]) ? `score-cell ${hoveredScore?.key === key ? "hovered" : "on"}` : "score-cell"}>{value}</span><span className="visually-hidden">{label}: {value} из 10</span></label>)}</div></fieldset>)}<label className="comment">Комментарий<textarea rows={2} value={draft.comment} title="Ctrl+Enter — сохранить оценку" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} onChange={(event) => { const comment = event.currentTarget.value; setDraft((current) => ({ ...current, comment })); setSaved(false); review.reset(); }} /></label><div className="review-actions"><div className="completion-choice" role="group" aria-label="Выполнение промпта">{completionChoices.map(([value, label]) => <button key={value} type="button" className={completion === value ? `completion-toggle ${value} on` : "completion-toggle"} aria-pressed={completion === value} disabled={markCompletion.isPending} title={value === "broken" ? "Формально завершён, но по факту не работает: результат исчезнет из галереи, а в лидерборде и аналитике будет считаться неудачей" : `Промпт выполнен ${label.toLowerCase()}`} onClick={() => markCompletion.mutate(completion === value ? null : value)}>{label}</button>)}</div><button className={saved ? "saved" : ""} disabled={review.isPending}>{reviewSaveLabel(review.isPending, saved)}</button></div>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form> : null}
+    {taskRun.status === "completed" || taskRun.review ? <form className="review" onSubmit={rate}><div className="review-heading"><span className="mono">Моя оценка</span><output>{draftTotal}<span>/{draftPossible}</span></output></div>{markCompletion.error ? <span className="error review-message">{markCompletion.error.message}</span> : null}{taskRun.broken_at ? <p className="broken-note">Результат помечен как нерабочий: он не попадёт в галерею, а в лидерборде и аналитике считается неудачей модели. Оценку можно оставить для памяти — в долю баллов она не пойдёт.</p> : null}{criteria.map(([key, label]) => <fieldset className="score-control" key={key} disabled={isBroken}><legend>{label}{key === "uiQuality" ? <button type="button" className={draft[key] === 0 ? "not-applied on" : "not-applied"} aria-pressed={draft[key] === 0} title="Визуал к этому результату не применяется" onClick={() => updateScore(key, draft[key] === 0 ? null : 0)}>не применяется</button> : null}<output>{draft[key] === null ? "—" : draft[key] === 0 ? "н/п" : `${draft[key]}/10`}</output></legend><div className="score-scale" onMouseLeave={() => setHoveredScore(null)}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <label key={value} title={`${value} из 10`} onMouseEnter={() => setHoveredScore({ key, value })} onMouseDown={() => updateScore(key, value)}><input type="radio" name={`${taskRun.id}-${key}`} value={value} checked={draft[key] === value} onChange={() => updateScore(key, value)} /><span aria-hidden="true" style={{ "--step": value } as CSSProperties} className={value <= (hoveredScore?.key === key ? hoveredScore.value : draft[key] ?? 0) ? `score-cell ${hoveredScore?.key === key ? "hovered" : "on"}` : "score-cell"}>{value}</span><span className="visually-hidden">{label}: {value} из 10</span></label>)}</div></fieldset>)}<label className="comment">Комментарий<textarea rows={2} value={draft.comment} title="Ctrl+Enter — сохранить оценку" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} onChange={(event) => { const comment = event.currentTarget.value; setDraft((current) => ({ ...current, comment })); setSaved(false); review.reset(); }} /></label><div className="review-actions"><div className="completion-choice" role="group" aria-label="Выполнение промпта">{completionChoices.map(([value, label]) => <button key={value} type="button" className={completion === value ? `completion-toggle ${value} on` : "completion-toggle"} aria-pressed={completion === value} disabled={markCompletion.isPending} title={value === "broken" ? "Формально завершён, но по факту не работает: результат исчезнет из галереи, а в лидерборде и аналитике будет считаться неудачей" : `Промпт выполнен ${label.toLowerCase()}`} onClick={() => chooseCompletion(value)}>{label}</button>)}</div>{missingReview ? <span className="review-missing">{reviewMissingLabel(missingScores, completion === null)}</span> : null}<button className={saved ? "saved" : ""} disabled={review.isPending || markCompletion.isPending || missingReview}>{isBroken ? "Сохранить как нерабочий" : reviewSaveLabel(review.isPending, saved)}</button></div>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form> : null}
   </article>;
 }
 

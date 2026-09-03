@@ -424,6 +424,12 @@ export function reviewSaveLabel(isPending: boolean, isSuccess: boolean) {
   return isPending ? "Сохраняем…" : isSuccess ? "Сохранено" : "Сохранить";
 }
 
+/** Оценка сохраняется целиком, поэтому кнопка блокируется с объяснением, чего именно не хватает. */
+export function reviewMissingLabel(missingScores: readonly string[], missingCompletion: boolean) {
+  const parts = [...missingScores, ...(missingCompletion ? ["отметка выполнения"] : [])];
+  return `Не выставлено: ${parts.join(", ").toLowerCase()}`;
+}
+
 export type ReviewScores = {
   correctness: number;
   code_quality: number;

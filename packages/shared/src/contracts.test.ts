@@ -196,6 +196,7 @@ describe("human review", () => {
     uiQuality,
     instructionFollowing: 9,
     comment: "Useful result",
+    completion: "full",
   });
 
   it("accepts zero as a criterion that was not applied", () => {
@@ -208,9 +209,17 @@ describe("human review", () => {
   });
 
   it("allows the not-applied zero only for the visual criterion", () => {
-    const base = { correctness: 10, codeQuality: 8, uiQuality: 7, instructionFollowing: 9, comment: "" };
+    const base = { correctness: 10, codeQuality: 8, uiQuality: 7, instructionFollowing: 9, comment: "", completion: "full" };
     expect(reviewSchema.safeParse({ ...base, correctness: 0 }).success).toBe(false);
     expect(reviewSchema.safeParse({ ...base, codeQuality: 0 }).success).toBe(false);
     expect(reviewSchema.safeParse({ ...base, instructionFollowing: 0 }).success).toBe(false);
+  });
+
+  it("не принимает оценку без отметки полноты и не принимает «не работает» как отметку", () => {
+    const base = { correctness: 10, codeQuality: 8, uiQuality: 7, instructionFollowing: 9, comment: "" };
+    expect(reviewSchema.safeParse(base).success).toBe(false);
+    // «Не работает» ставится отдельным эндпоинтом: оценка ему не нужна и не сохраняется.
+    expect(reviewSchema.safeParse({ ...base, completion: "broken" }).success).toBe(false);
+    expect(reviewSchema.safeParse({ ...base, completion: "partial" }).success).toBe(true);
   });
 });
