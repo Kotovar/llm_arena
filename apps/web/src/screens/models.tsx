@@ -7,17 +7,9 @@ import { CheckIcon, CloseIcon } from "../icons.js";
 import { Empty, NumberField, Page, Panel, SelectMenu, useData } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { AppSettings, CalibrationResult, ExternalLauncher, LlamaParameters, LocalModelFile, Model, ModelCatalog, Profile, Runner } from "../types.js";
-import { chooseRunner, defaultLocalProfile, formatCost, formatDuration, gpuLayerSplit, latestProfiles, visionProjectorFiles } from "../ui.js";
+import { chooseRunner, defaultLocalProfile, formatCost, formatDuration, ggufSummary, gpuLayerSplit, latestProfiles, visionProjectorFiles } from "../ui.js";
 
 type Capabilities = Model["capabilities"];
-
-/** Компактная подпись к GGUF: размер файла и тип архитектуры. */
-export function ggufSummary(sizeBytes?: number, expertCount?: number): string {
-  const parts: string[] = [];
-  if (sizeBytes) parts.push(`${(sizeBytes / 1024 ** 3).toFixed(1)} GiB`);
-  if (expertCount !== undefined) parts.push(expertCount > 0 ? `MoE, ${expertCount} экспертов` : "dense");
-  return parts.join(" · ");
-}
 
 export function moveModel<T extends { id: string }>(models: readonly T[], modelId: string, targetId: string): T[] {
   const source = models.findIndex((model) => model.id === modelId);

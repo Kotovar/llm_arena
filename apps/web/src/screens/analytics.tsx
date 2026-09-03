@@ -1,15 +1,28 @@
+import { Link } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api.js";
-import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
-import type { DecisionPoint, Task } from "../types.js";
-import { DEFAULT_PROFILE_NAME, formatDuration, formatMetricValue, formatVram, modelKindFilters, plural } from "../ui.js";
+import { Empty, Page, Panel, SelectMenu, Skeleton, useData } from "../shell.js";
+import { useTableSort } from "../table-sort.js";
+import type { DecisionPoint, ModelStats, Task } from "../types.js";
+import { DEFAULT_PROFILE_NAME, formatBytes, formatDuration, formatMetricValue, formatVram, modelKindFilters, plural } from "../ui.js";
 import type { ModelKindFilter } from "../ui.js";
 
 type Slice = { kind: "all" } | { kind: "tag"; tag: string };
+type Completion = "any" | "full" | "partial";
 
-function sliceQuery(slice: Slice) {
-  return slice.kind === "tag" ? `?tag=${encodeURIComponent(slice.tag)}` : "";
+const completionOptions: Array<[Completion, string]> = [
+  ["any", "Все результаты"],
+  ["full", "Только полностью рабочие"],
+  ["partial", "Полностью и частично"],
+];
+
+function sliceQuery(slice: Slice, completion: Completion) {
+  const parts = [
+    ...(slice.kind === "tag" ? [`tag=${encodeURIComponent(slice.tag)}`] : []),
+    ...(completion === "any" ? [] : [`completion=${completion}`]),
+  ];
+  return parts.length ? `?${parts.join("&")}` : "";
 }
 
 function pointLabel(point: DecisionPoint) {
@@ -199,6 +212,7 @@ function Scatter({ points, color, shortlist, metric }: { points: DecisionPoint[]
         <th scope="col" title="Доля набранных баллов по оценённым промптам.">Доля баллов</th>
         <th scope="col" title={metric === "speed" ? "Медиана скорости генерации по замерам этой связки." : "Среднее время одного промпта, а не суммы прогона."}>{metric === "speed" ? "Скорость" : "Время промпта"}</th>
         <th scope="col" title="Наибольший наблюдавшийся расход видеопамяти среди прогонов связки.">Пик VRAM</th>
+        <th scope="col" title="Размер GGUF-файла на диске: у облачных моделей его нет.">Размер модели</th>
         <th scope="col" title="Промпты, завершившиеся ошибкой или непройденной проверкой.">Неудачных промптов</th>
         <th scope="col" title="Прогоны, упавшие целиком или остановленные вручную.">Сорванных прогонов</th>
         <th scope="col" title="Сколько промптов вошло в эту связку.">Промптов</th>
@@ -208,12 +222,33 @@ function Scatter({ points, color, shortlist, metric }: { points: DecisionPoint[]
         <td className="mono">{point.qualityPercent === null ? "—" : `${point.qualityPercent}%`}</td>
         <td className="mono">{value(point) === null ? "—" : formatValue(value(point)!)}</td>
         <td className="mono">{point.peakVramMiB === null ? "—" : formatVram(point.peakVramMiB)}</td>
+        <td className="mono">{point.modelSizeBytes === null ? "—" : formatBytes(point.modelSizeBytes)}</td>
         <td className="mono">{failureLabel(point.failureRate)}</td>
         <td className="mono">{`${point.interruptedRunCount} из ${point.runCount}`}</td>
         <td className="mono">{point.sampleCount}</td>
       </tr>)}</tbody>
     </table></div>
   </>;
+}
+
+/** Короткий список Парето: те же величины, что в подписи точки, но каждая в своём столбце. */
+function Shortlist({ points }: { points: DecisionPoint[] }) {
+  return <div className="analytics-scroll"><table className="analytics-table">
+    <thead><tr>
+      <th scope="col">Связка</th>
+      <th scope="col" title="Набрано от возможного по оценённым промптам.">Доля баллов</th>
+      <th scope="col" title="Медиана скорости генерации по замерам этой связки.">Скорость</th>
+      <th scope="col" title="Наибольший наблюдавшийся расход видеопамяти среди прогонов связки.">Пик VRAM</th>
+      <th scope="col" title="Размер GGUF-файла на диске: у облачных моделей его нет.">Размер модели</th>
+    </tr></thead>
+    <tbody>{points.map((point) => <tr key={pointKey(point)}>
+      <th scope="row">{pointLabel(point)}</th>
+      <td className="mono">{point.qualityPercent}%</td>
+      <td className="mono">{speedLabel(point.medianTokensPerSecond!)}</td>
+      <td className="mono">{point.peakVramMiB === null ? "—" : formatVram(point.peakVramMiB)}</td>
+      <td className="mono">{point.modelSizeBytes === null ? "—" : formatBytes(point.modelSizeBytes)}</td>
+    </tr>)}</tbody>
+  </table></div>;
 }
 
 function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPoint[] }> }) {
@@ -238,14 +273,103 @@ function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPo
   </table></div>;
 }
 
-type View = "scatter" | "duration" | "slices" | "pareto";
+function percentLabel(count: number, total: number) {
+  if (!total) return "—";
+  const percent = (count / total) * 100;
+  // Ненулевую долю не округляем в «0%»: именно так неудачи однажды и потерялись из виду.
+  return `${count} · ${percent > 0 && percent < 1 ? "<1" : Math.round(percent)}%`;
+}
+
+/**
+ * Сводная таблица: точка входа «быстро оценить модель». Нерепрезентативные модели показываются,
+ * но места в ранжировании не занимают — иначе две оценённые связки садятся на первую строку.
+ */
+function SummaryTable({ stats }: { stats: ModelStats[] }) {
+  const sort = useTableSort(stats, {
+    modelName: (row) => row.modelName,
+    attempted: (row) => row.attempted,
+    successCount: (row) => row.successCount,
+    full: (row) => row.outcomes.full,
+    partial: (row) => row.outcomes.partial,
+    failureCount: (row) => row.failureCount,
+    averageDurationMs: (row) => row.averageDurationMs,
+    medianTokensPerSecond: (row) => row.medianTokensPerSecond,
+    scorePercent: (row) => row.scorePercent,
+  }, { key: "scorePercent", dir: "desc" });
+  if (!stats.length) return <Empty>В этом срезе ещё нет завершённых промптов.</Empty>;
+  // Сортировка стабильна, поэтому вторым проходом достаточно поднять репрезентативные наверх.
+  const rows = [...sort.rows].sort((left, right) => Number(right.representative) - Number(left.representative));
+  const columns: Array<[string, string, string]> = [
+    ["modelName", "Модель", "Модель без разбивки по профилям."],
+    ["attempted", "Промптов", "Успехи и неудачи модели; ручные остановки сюда не входят."],
+    ["successCount", "Успешно", "Доля от учтённых промптов."],
+    ["full", "Полн.", "Результаты с отметкой «выполнен полностью»."],
+    ["partial", "Част.", "Результаты с отметкой «выполнен частично»."],
+    ["failureCount", "Неудач", "Ошибки, непройденные проверки, зацикливания, «не работает» и автоматические остановки."],
+    ["averageDurationMs", "Ср. время", "Среднее время одного промпта."],
+    ["medianTokensPerSecond", "tok/s", "Медиана скорости генерации по всем замерам модели."],
+    ["scorePercent", "Доля баллов", "Набрано от возможного по оценённым промптам."],
+  ];
+  return <div className="analytics-scroll"><table className="analytics-table">
+    <thead><tr>{columns.map(([key, label, hint]) => <th scope="col" key={key} aria-sort={sort.ariaSort(key)} title={hint}>
+      <button type="button" className="sort-toggle" onClick={() => sort.toggle(key)}>{label}<span aria-hidden="true">{sort.arrow(key)}</span></button>
+    </th>)}</tr></thead>
+    <tbody>{rows.map((row) => <tr key={row.modelId} className={row.representative ? undefined : "leaderboard-unranked"}>
+      <th scope="row">{row.modelName}{row.representative ? null : <em className="unranked-note" title="Место в ранжировании занимают только модели, прошедшие порог.">{`нерепрезентативно: ${row.successCount} из ${row.representativeThreshold}`}</em>}</th>
+      <td className="mono">{row.attempted}</td>
+      <td className="mono">{percentLabel(row.successCount, row.attempted)}</td>
+      <td className="mono">{row.outcomes.full}</td>
+      <td className="mono">{row.outcomes.partial}</td>
+      <td className="mono">{percentLabel(row.failureCount, row.attempted)}</td>
+      <td className="mono">{row.averageDurationMs === null ? "—" : formatDuration(row.averageDurationMs)}</td>
+      <td className="mono">{row.medianTokensPerSecond === null ? "—" : speedLabel(row.medianTokensPerSecond)}</td>
+      <td className="mono" title={`Оценено ${row.reviewedCount} из ${row.attempted}`}>{row.scorePercent === null ? "—" : `${row.scorePercent}%`}</td>
+    </tr>)}</tbody>
+  </table></div>;
+}
+
+/**
+ * Из чего сложились неудачи. Успехи здесь не повторяются — они уже посчитаны в сводке,
+ * а две таблицы с одинаковыми колонками читаются как одна и та же, только шире.
+ */
+function FailuresTable({ stats }: { stats: ModelStats[] }) {
+  if (!stats.length) return <Empty>В этом срезе ещё нет завершённых промптов.</Empty>;
+  const cells: Array<[string, string, (row: ModelStats) => number]> = [
+    ["Не работает", "Формально готовый результат, который не запускается.", (row) => row.outcomes.broken],
+    ["Зациклился", "Промпт остановлен watchdog'ом.", (row) => row.outcomes.watchdog],
+    ["Проверки", "Fixture-проверки не прошли.", (row) => row.outcomes.check_failed],
+    ["Ошибки", "Падение раннера, таймаут, невалидный вызов инструмента.", (row) => row.outcomes.error],
+    ["Авто-стоп", "Гашение по перегреву или перезапуск приложения.", (row) => row.outcomes.aborted_auto],
+  ];
+  return <div className="analytics-scroll"><table className="analytics-table">
+    <thead><tr>
+      <th scope="col">Модель</th>
+      <th scope="col" title="Доля неудач от учтённых промптов.">Всего неудач</th>
+      {cells.map(([label, hint]) => <th scope="col" key={label} title={hint}>{label}</th>)}
+      <th scope="col" className="aside-column" title="Человек передумал: проблемой модели это не считается и в проценты не входит.">Ручных остановок</th>
+    </tr></thead>
+    <tbody>{stats.map((row) => <tr key={row.modelId}>
+      <th scope="row">{row.modelName}</th>
+      <td className="mono">{percentLabel(row.failureCount, row.attempted)}</td>
+      {cells.map(([label, , value]) => <td className="mono" key={label}>{value(row) || "—"}</td>)}
+      <td className="mono aside-column">{row.userAbortCount || "—"}</td>
+    </tr>)}</tbody>
+  </table></div>;
+}
+
+type View = "summary" | "failures" | "scatter" | "duration" | "slices" | "pareto";
 
 // Пока промптам не проставлены теги, срез ровно один: чипсы и вкладка по срезам показывали бы
 // один и тот же общий результат под разными именами.
 function viewsFor(tagged: boolean): Array<[View, string]> {
-  return tagged
-    ? [["scatter", "Качество и скорость"], ["duration", "Баллы и время"], ["slices", "Срезы нагрузки"], ["pareto", "Короткий список"]]
-    : [["scatter", "Качество и скорость"], ["duration", "Баллы и время"], ["pareto", "Короткий список"]];
+  return [
+    ["summary", "Итог"],
+    ["failures", "Разбор неудач"],
+    ["scatter", "Качество и скорость"],
+    ["duration", "Баллы и время"],
+    ...(tagged ? [["slices", "Срезы нагрузки"] as [View, string]] : []),
+    ["pareto", "Короткий список"],
+  ];
 }
 
 export function AnalyticsPage() {
@@ -253,21 +377,30 @@ export function AnalyticsPage() {
   // Локальные модели проигрывают подписочным по всем измерениям сразу, поэтому в общем
   // коротком списке их просто не остаётся. Разделение возвращает им собственный зачёт.
   const [modelKind, setModelKind] = useState<ModelKindFilter>("all");
-  const [view, setView] = useState<View>("scatter");
+  const [view, setView] = useState<View>("summary");
+  const [completion, setCompletion] = useState<Completion>("any");
   const tasks = useData<Task[]>("tasks", "/tasks");
   const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
-  const query = sliceQuery(slice);
+  const query = sliceQuery(slice, completion);
   // Ключ той же формы, что у запросов тепловой карты: иначе общий срез грузится дважды.
   const points = useQuery({ queryKey: ["decision-points", query], queryFn: () => api<DecisionPoint[]>(`/analytics/decision-points${query}`) });
-  const heatmapColumns = [{ label: "Вся нагрузка", query: "" }, ...tags.map((tag) => ({ label: tag, query: `?tag=${encodeURIComponent(tag)}` }))];
+  const modelStats = useQuery({ queryKey: ["model-stats", query], queryFn: () => api<ModelStats[]>(`/analytics/model-stats${query}`) });
+  // Результаты без отметки полноты сам фильтр и отбрасывает, поэтому считать их надо по нефильтрованному
+  // срезу. При «Все результаты» это тот же ключ, и лишнего запроса не возникает.
+  const unfilteredQuery = sliceQuery(slice, "any");
+  const unmarkedStats = useQuery({ queryKey: ["model-stats", unfilteredQuery], queryFn: () => api<ModelStats[]>(`/analytics/model-stats${unfilteredQuery}`) });
+  const heatmapColumns = [{ label: "Вся нагрузка", query: sliceQuery({ kind: "all" }, completion) }, ...tags.map((tag) => ({ label: tag, query: sliceQuery({ kind: "tag", tag }, completion) }))];
   const sliceQueries = useQueries({
     queries: heatmapColumns.map((column) => ({
       queryKey: ["decision-points", column.query],
       queryFn: () => api<DecisionPoint[]>(`/analytics/decision-points${column.query}`),
     })),
   });
-  const inKind = (point: DecisionPoint) => modelKind === "all" || point.modelKind === modelKind;
+  const inKind = (point: { modelKind: "local-gguf" | "cloud" }) => modelKind === "all" || point.modelKind === modelKind;
   const shown = (points.data ?? []).filter(inKind);
+  const stats = (modelStats.data ?? []).filter(inKind);
+  // Старые записи без отметки полноты фильтр отсекает молча, поэтому их считаем вслух.
+  const unmarked = (unmarkedStats.data ?? []).filter(inKind).reduce((sum, row) => sum + row.outcomes.completed, 0);
   const heatmapSlices = heatmapColumns.map((column, index) => ({ label: column.label, points: (sliceQueries[index]?.data ?? []).filter(inKind) }));
   const shortlist = paretoShortlist(shown);
   const color = colorByKey(shown);
@@ -275,12 +408,16 @@ export function AnalyticsPage() {
   const scatterMetric = view === "duration" ? "duration" : "speed";
   return <Page title="Аналитика решений" eyebrow="Аналитика" intro="Одна точка — модель с конкретным профилем на выбранном срезе нагрузки. Неизмеренное не рисуется нулём: такие связки видно только в таблице.">
     {points.error ? <p className="error">{points.error.message}</p> : null}
+    {modelStats.error ? <p className="error">{modelStats.error.message}</p> : null}
     {points.isPending ? <Skeleton rows={5} /> : null}
     {points.data ? <>
       <div className="compare-tabs" role="tablist" aria-label="Вид аналитики">
         {views.map(([value, label]) => <button type="button" role="tab" key={value} aria-selected={view === value} className={view === value ? "active" : ""} onClick={() => setView(value)}>{label}</button>)}
       </div>
-      <Panel title={views.find(([value]) => value === view)![1]} action={view === "scatter" ? <span className="mono">{`Pareto: ${shortlist.length} ${plural(shortlist.length, "связка", "связки", "связок")}`}</span> : undefined}>
+      <Panel title={views.find(([value]) => value === view)![1]} action={<div className="panel-actions">
+        {view === "scatter" ? <span className="mono">{`Pareto: ${shortlist.length} ${plural(shortlist.length, "связка", "связки", "связок")}`}</span> : null}
+        <SelectMenu label="Учитывать" value={completion} onSelect={(next) => setCompletion(next as Completion)} options={completionOptions.map(([value, label]) => ({ value, label }))} />
+      </div>}>
         <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{modelKindFilters.map(([value, label]) => <button type="button" key={value} className={modelKind === value ? "active" : ""} aria-pressed={modelKind === value} onClick={() => setModelKind(value)}>{label}</button>)}</div>
         {view === "slices" ? <Heatmap slices={heatmapSlices} /> : <>
           {tags.length ? <>
@@ -290,10 +427,14 @@ export function AnalyticsPage() {
             </div>
             <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, остальные — только по промптам с этим тегом.</p>
           </> : null}
-          {view === "scatter" || view === "duration"
+          {completion !== "any" && unmarked ? <p className="slice-hint">{`Без отметки полноты: ${unmarked} ${plural(unmarked, "результат", "результата", "результатов")} — этот фильтр их не показывает.`} <Link to="/runs">Открыть запуски</Link></p> : null}
+          {(view === "summary" || view === "failures") && modelStats.isPending ? <Skeleton rows={4} />
+            : view === "summary" ? <SummaryTable stats={stats} />
+            : view === "failures" ? <FailuresTable stats={stats} />
+            : view === "scatter" || view === "duration"
             ? shown.length ? <Scatter points={shown} color={color} shortlist={shortlist} metric={scatterMetric} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>
             : shortlist.length
-              ? <ul className="pareto-list">{shortlist.map((point) => <li key={pointKey(point)}><strong>{pointLabel(point)}</strong><span className="mono">{point.qualityPercent}% · {speedLabel(point.medianTokensPerSecond!)}{point.peakVramMiB === null ? "" : ` · ${formatVram(point.peakVramMiB)}`}</span></li>)}</ul>
+              ? <Shortlist points={shortlist} />
               : <Empty>Ни одной связки с оценкой и замером скорости в этом срезе.</Empty>}
         </>}
       </Panel>

@@ -15,7 +15,7 @@ import { SettingsPage } from "./screens/settings.js";
 import { Empty, Page, Panel, Shell, useData } from "./shell.js";
 import { ToastProvider, useToast } from "./toast.js";
 import type { Task, TaskImage } from "./types.js";
-import { matchesPromptQuery, taskUpdateBody } from "./ui.js";
+import { matchesPromptQuery, plural, taskUpdateBody } from "./ui.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 2_000, retry: 1 } } });
@@ -47,6 +47,7 @@ function TasksPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [query, setQuery] = useState("");
+  const [untaggedOnly, setUntaggedOnly] = useState(false);
   const { confirm, view: confirmView } = useConfirm();
   const toast = useToast();
   const importTasks = useMutation({
@@ -84,7 +85,9 @@ function TasksPage() {
       setUploading(false);
     }
   }
-  const found = (tasks.data ?? []).filter((task) => matchesPromptQuery(task, query));
+  // Промпт без тега не попадает ни в один срез аналитики и молча выпадает из тепловой карты.
+  const untagged = (tasks.data ?? []).filter((task) => !task.tags.length);
+  const found = (tasks.data ?? []).filter((task) => matchesPromptQuery(task, query) && (!untaggedOnly || !task.tags.length));
   return <Page title="Подготовленные промпты" eyebrow="Промпты" intro="Добавьте задания, на которых хотите сравнивать модели. История старых запусков не изменится после редактирования.">
     <div className="two-col"><Panel title="Добавить промпт"><form onSubmit={submit} className="form-grid">
       <label className="span-2">Название<input name="name" required /></label>
@@ -97,7 +100,7 @@ function TasksPage() {
     <Panel title={`Промптов: ${found.length} из ${tasks.data?.length ?? 0}`} action={<div className="prompt-transfer">
       <a href="/api/tasks/export" download>Экспорт JSON</a>
       <label className="prompt-import">{importTasks.isPending ? "Импортируем…" : "Импорт JSON"}<input type="file" accept="application/json,.json" disabled={importTasks.isPending} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) importTasks.mutate(file); }} /></label>
-    </div>}><label className="prompt-search"><input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск по названию и тексту" aria-label="Поиск промптов" /></label><div className="stack">{found.map((task) => <article className="item prompt-item" key={task.id}>
+    </div>}>{untagged.length ? <p className="untagged-note">{`Без тегов: ${untagged.length} ${plural(untagged.length, "промпт", "промпта", "промптов")}. В аналитике они не попадают ни в один срез нагрузки.`} <button type="button" className="link-button" aria-pressed={untaggedOnly} onClick={() => setUntaggedOnly((current) => !current)}>{untaggedOnly ? "Показать все" : "Показать их"}</button></p> : null}<label className="prompt-search"><input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск по названию и тексту" aria-label="Поиск промптов" /></label><div className="stack">{found.map((task) => <article className="item prompt-item" key={task.id}>
       <div className="prompt-item-head"><div><span className="mono">Версия {task.currentRevision.revision}</span>{editing?.taskId === task.id ? null : <h3>{task.currentRevision.name}</h3>}{editing?.taskId === task.id || !task.description ? null : <small className="task-description">{task.description}</small>}{task.currentRevision.images.length ? <small className="task-image-summary">Изображения: {task.currentRevision.images.map((image) => image.filename).join(", ")}</small> : null}</div><div className="item-actions">{editing?.taskId === task.id ? null : <button type="button" onClick={() => setEditing({ taskId: task.id, name: task.currentRevision.name, description: task.description ?? "", prompt: task.currentRevision.prompt, images: task.currentRevision.images, files: [] })}>Редактировать</button>}<button type="button" className="danger" disabled={remove.isPending} onClick={() => confirm({ title: "Убрать промпт в архив?", body: `«${task.currentRevision.name}» исчезнет из списка и из выбора при запуске. Результаты прошлых прогонов останутся, но вернуть промпт из интерфейса нельзя.`, action: "В архив", onConfirm: () => remove.mutate(task.id) })}>В архив</button></div></div>
       <form className="prompt-tags-form" onSubmit={(event) => { event.preventDefault(); const value = String(new FormData(event.currentTarget).get("tags") ?? ""); saveTags.mutate({ id: task.id, name: task.currentRevision.name, tags: value.split(",").map((tag) => tag.trim()).filter(Boolean) }); }}>
         <label>Теги<input name="tags" defaultValue={task.tags.join(", ")} placeholder="код, текст" /></label>

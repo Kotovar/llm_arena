@@ -551,8 +551,8 @@ describe("сводка повторов", () => {
 
 describe("пик VRAM", () => {
   it("переводит мегабайты в гигабайты и не тянет длинный хвост", () => {
-    expect(formatVram(15846)).toBe("15,5 ГиБ");
-    expect(formatVram(512)).toBe("512 МиБ");
+    expect(formatVram(15846)).toBe("15,5 Гб");
+    expect(formatVram(512)).toBe("512 Мб");
   });
 });
 

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { classifyTaskRun, representativeThreshold } from "@llm-arena/shared";
 import type { FastifyInstance } from "fastify";
 import type { ArenaConfig } from "../config.js";
+import { readGgufFacts } from "../gguf.js";
 import { aggregateModelStats, attemptMetrics, mean, median, type MetricRow, resultMetric, reviewCriteria, round, scoreShare } from "../metrics.js";
 import type { ArenaStore } from "../store.js";
 import { type LeaderboardSlice, leaderboardSliceSchema, passesCompletion, type SliceQuery } from "./slice.js";
@@ -12,8 +13,14 @@ type EnrichedRow = { row: DecisionRow; metricRow: Omit<MetricRow, "key"> };
 
 type PointMeta = {
   modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; profileId: string | null; profileName: string | null;
-  tag: string | null; peakVramMiB: number | null; estimatedCostPerRun: number | null;
+  tag: string | null; peakVramMiB: number | null; modelSizeBytes: number | null; estimatedCostPerRun: number | null;
 };
+
+/** Размер GGUF-файла на диске — не то же самое, что пик VRAM за прогон, и в аналитике это разные колонки. */
+function modelSizeBytes(path: string | null | undefined): number | null {
+  if (!path) return null;
+  try { return readGgufFacts(path).sizeBytes; } catch { return null; }
+}
 
 /**
  * Разбор строк выборки, общий для всех аналитических ответов: срез, фильтр полноты, исход и замеры
@@ -97,6 +104,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
           profileName: (row.execution_profile_id ? store.getExecutionProfile(row.execution_profile_id) : undefined)?.name ?? null,
           tag: slice.tag ?? null,
           peakVramMiB: null,
+          modelSizeBytes: modelSizeBytes(model?.path),
           estimatedCostPerRun: model?.economics ? model.economics.monthlyCost / model.economics.includedRunEstimate : null,
         });
       }
@@ -108,11 +116,12 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
     return aggregateModelStats(rows)
       .map((stats) => {
         // Пик VRAM и цена идут после счётчика промптов — порядок полей в ответе прежний.
-        const { peakVramMiB, estimatedCostPerRun, ...meta } = points.get(stats.key)!;
+        const { peakVramMiB, modelSizeBytes: sizeBytes, estimatedCostPerRun, ...meta } = points.get(stats.key)!;
         return {
           ...meta,
           sampleCount: stats.attempted,
           peakVramMiB,
+          modelSizeBytes: sizeBytes,
           estimatedCostPerRun,
           runCount: stats.runIds.size,
           interruptedRunCount: stats.interruptedRunIds.size,

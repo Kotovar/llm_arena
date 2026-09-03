@@ -1,3 +1,5 @@
+import type { TaskOutcome } from "@llm-arena/shared";
+
 export type Task = {
   id: string;
   // Заметка «для себя»: не уходит в модель и не привязана к версии промпта.
@@ -265,8 +267,32 @@ export type DecisionPoint = {
   medianTokensPerSecond: number | null;
   averageDurationMs: number | null;
   peakVramMiB: number | null;
+  /** Размер GGUF-файла на диске: у облачных моделей его нет. */
+  modelSizeBytes: number | null;
   failureRate: number;
   estimatedCostPerRun: number | null;
+};
+
+/** Исходы и метрики по модели без разбивки по профилям: источник вкладок «Итог» и «Успешность». */
+export type ModelStats = {
+  modelId: string;
+  modelName: string;
+  modelKind: "local-gguf" | "cloud";
+  /** Успехи и неудачи модели; ручные остановки в знаменатель не входят. */
+  attempted: number;
+  outcomes: Record<TaskOutcome, number>;
+  successCount: number;
+  successPercent: number | null;
+  failureCount: number;
+  failurePercent: number | null;
+  userAbortCount: number;
+  reviewedCount: number;
+  scorePercent: number | null;
+  criteria: { correctness: number | null; codeQuality: number | null; uiQuality: number | null; instructionFollowing: number | null };
+  medianTokensPerSecond: number | null;
+  averageDurationMs: number | null;
+  representative: boolean;
+  representativeThreshold: number;
 };
 
 /** Сводка слепых вердиктов по модели. winPercent = null — решённых пар слишком мало для процента. */

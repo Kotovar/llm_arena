@@ -3,7 +3,7 @@ import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderInApp } from "../test-harness.js";
-import type { DecisionPoint } from "../types.js";
+import type { DecisionPoint, ModelStats } from "../types.js";
 import { AnalyticsPage, labelPlacer, paretoShortlist, seriesColor } from "./analytics.js";
 
 function point(overrides: Partial<DecisionPoint & { averageDurationMs: number | null }> = {}): DecisionPoint & { averageDurationMs: number | null } {
@@ -21,10 +21,40 @@ function point(overrides: Partial<DecisionPoint & { averageDurationMs: number | 
     medianTokensPerSecond: 42,
     averageDurationMs: 1000,
     peakVramMiB: 15846,
+    modelSizeBytes: 24 * 1024 ** 3,
     failureRate: 0,
     estimatedCostPerRun: null,
     ...overrides,
   };
+}
+
+function modelStats(overrides: Partial<ModelStats> = {}): ModelStats {
+  return {
+    modelId: "model-1",
+    modelName: "Локальная",
+    modelKind: "local-gguf",
+    attempted: 12,
+    outcomes: { full: 8, partial: 1, completed: 1, check_failed: 1, error: 1, watchdog: 0, broken: 0, aborted_auto: 0, aborted_user: 2, pending: 0, running: 0 },
+    successCount: 10,
+    successPercent: 83.3,
+    failureCount: 2,
+    failurePercent: 16.7,
+    userAbortCount: 2,
+    reviewedCount: 9,
+    scorePercent: 80,
+    criteria: { correctness: 8, codeQuality: 8, uiQuality: 8, instructionFollowing: 8 },
+    medianTokensPerSecond: 42,
+    averageDurationMs: 1000,
+    representative: true,
+    representativeThreshold: 10,
+    ...overrides,
+  };
+}
+
+/** Вкладка по умолчанию теперь сводная, а этим проверкам нужны графики и таблица связок. */
+async function renderAnalytics() {
+  await renderInApp(<AnalyticsPage />, "/analytics");
+  await userEvent.setup().click(await screen.findByRole("tab", { name: "Качество и скорость" }));
 }
 
 let requested: string[];
@@ -34,7 +64,10 @@ beforeEach(() => {
   const all = [point(), point({ modelId: "model-2", modelName: "Медленная", profileId: null, profileName: null, qualityPercent: 60, medianTokensPerSecond: 20, peakVramMiB: 20000 })];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     requested.push(url);
-    const body = url.startsWith("/api/tasks")
+    const filtered = url.includes("completion=full") || url.includes("completion=partial");
+    const body = url.includes("/model-stats")
+      ? [modelStats(filtered ? { outcomes: { ...modelStats().outcomes, completed: 0 } } : {}), modelStats({ modelId: "model-2", modelName: "Медленная", successCount: 4, attempted: 6, failureCount: 2, scorePercent: 60, representative: false })]
+      : url.startsWith("/api/tasks")
       ? [{ id: "task-1", tags: ["web"], currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["web"], images: [] } }]
       : url.includes("tag=web") ? [point({ qualityPercent: 90 })]
       : all;
@@ -70,7 +103,7 @@ describe("раскладка подписей", () => {
 describe("доля неудач", () => {
   it("не заливает ячейку теплокарты гуще, чем выдерживает текст", async () => {
     const user = userEvent.setup();
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
     await user.click(await screen.findByRole("tab", { name: "Срезы нагрузки" }));
 
     const heatmap = await screen.findByRole("table", { name: /Доля баллов по срезам/u });
@@ -83,8 +116,8 @@ describe("доля неудач", () => {
 
   it("не округляет редкую неудачу в ноль", async () => {
     const all = [point({ failureRate: 0.004 }), point({ modelId: "model-2", modelName: "Медленная", failureRate: 0 })];
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(all), { status: 200, headers: { "content-type": "application/json" } })));
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.includes("/model-stats") ? [modelStats()] : all), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderAnalytics();
 
     expect(await screen.findByText("<1%")).toBeTruthy();
   });
@@ -106,7 +139,7 @@ describe("короткий список", () => {
 
 describe("аналитика решений", () => {
   it("рисует точки разными цветами, подписывает их и повторяет таблицей", async () => {
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
 
     expect(await screen.findByRole("img", { name: "Качество и скорость" })).toBeTruthy();
     expect(screen.getByText("Pareto: 1 связка")).toBeTruthy();
@@ -116,18 +149,18 @@ describe("аналитика решений", () => {
     expect([...document.querySelectorAll(".scatter-point-label")].map((label) => label.textContent)).toEqual(["Локальная · Скорость", "Медленная"]);
     const table = screen.getByRole("table", { name: "Те же связки числами" });
     expect(within(table).getByText("Локальная · Скорость")).toBeTruthy();
-    expect(within(table).getByText("15,5 ГиБ")).toBeTruthy();
+    expect(within(table).getByText("15,5 Гб")).toBeTruthy();
     expect(within(table).getByText("42 токенов/с")).toBeTruthy();
     expect(within(table).queryByRole("columnheader", { name: "Время промпта" })).toBeNull();
   });
 
   it("строит зависимость баллов от времени промпта", async () => {
     const user = userEvent.setup();
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : [
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : url.includes("/model-stats") ? [modelStats()] : [
       point({ modelId: "slow", modelName: "Долгая", medianTokensPerSecond: null, averageDurationMs: 614_612 }),
       point({ modelId: "fast", modelName: "Быстрая", medianTokensPerSecond: null, averageDurationMs: 60_000 }),
     ]), { status: 200, headers: { "content-type": "application/json" } })));
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
 
     await user.click(await screen.findByRole("tab", { name: "Баллы и время" }));
 
@@ -147,7 +180,7 @@ describe("аналитика решений", () => {
 
   it("показывает подробности точки при наведении и приглушает недоминирующие", async () => {
     const user = userEvent.setup();
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     // Точка вне короткого списка приглушена: щит и график должны говорить одно и то же.
@@ -161,7 +194,7 @@ describe("аналитика решений", () => {
 
   it("раскладывает виды по вкладкам", async () => {
     const user = userEvent.setup();
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     expect(screen.queryByRole("table", { name: /Доля баллов по срезам нагрузки/u })).toBeNull();
@@ -173,14 +206,14 @@ describe("аналитика решений", () => {
   });
 
   it("не рисует неизмеренное нулём, но показывает связку в таблице", async () => {
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     expect(document.querySelectorAll(".scatter .scatter-dot")).toHaveLength(2);
 
     cleanup();
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : [point({ medianTokensPerSecond: null })]), { status: 200, headers: { "content-type": "application/json" } })));
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : url.includes("/model-stats") ? [modelStats()] : [point({ medianTokensPerSecond: null })]), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderAnalytics();
 
     const table = await screen.findByRole("table", { name: "Те же связки числами" });
     expect(document.querySelectorAll(".scatter .scatter-dot")).toHaveLength(0);
@@ -189,7 +222,7 @@ describe("аналитика решений", () => {
 
   it("переключает срез нагрузки во всех видах", async () => {
     const user = userEvent.setup();
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     await user.click(screen.getByRole("button", { name: "web" }));
@@ -200,7 +233,7 @@ describe("аналитика решений", () => {
   });
 
   it("показывает сорванные прогоны отдельно от неудачных промптов", async () => {
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
 
     const table = await screen.findByRole("table", { name: "Те же связки числами" });
     const row = within(table).getByText("Локальная · Скорость").closest("tr")!;
@@ -210,7 +243,7 @@ describe("аналитика решений", () => {
   });
 
   it("подписывает сетку по обеим осям", async () => {
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
     const chart = await screen.findByRole("img", { name: "Качество и скорость" });
 
     const ticks = [...chart.querySelectorAll(".scatter-tick")].map((tick) => tick.textContent);
@@ -221,8 +254,8 @@ describe("аналитика решений", () => {
   });
 
   it("прячет срезы целиком, пока тегов нет", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : [point()]), { status: 200, headers: { "content-type": "application/json" } })));
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : url.includes("/model-stats") ? [modelStats()] : [point()]), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     // Без тегов срез ровно один, поэтому ни вкладки, ни чипсов «Вся нагрузка / Без тегов» быть не должно.
@@ -241,8 +274,8 @@ describe("различение связок", () => {
 
   it("красит каждую точку и повторяет цвет в легенде", async () => {
     const all = ["a", "b", "c", "d", "e", "f", "g"].map((id, index) => point({ modelId: id, modelName: `Модель ${id}`, profileId: null, profileName: null, qualityPercent: 20 + index * 10, medianTokensPerSecond: 20 + index * 15 }));
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : all), { status: 200, headers: { "content-type": "application/json" } })));
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : url.includes("/model-stats") ? [modelStats()] : all), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     const fills = [...document.querySelectorAll(".scatter .scatter-dot")].map((node) => node.getAttribute("fill"));
@@ -256,8 +289,8 @@ describe("различение связок", () => {
 describe("подписи точек", () => {
   it("убирает профиль по умолчанию и обрезает длинное имя", async () => {
     const all = [point({ modelId: "long", modelName: "NVIDIA-Nemotron-3.5-Lightning-30B", profileName: "Automatic" })];
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : all), { status: 200, headers: { "content-type": "application/json" } })));
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : url.includes("/model-stats") ? [modelStats()] : all), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     expect([...document.querySelectorAll(".scatter-point-label")].map((label) => label.textContent)).toEqual(["NVIDIA-Nemotron-3.5…"]);
@@ -275,8 +308,8 @@ describe("подписи точек", () => {
       // Две длинные подписи на одной высоте: левая тянется вправо, правая — влево, точки при этом далеко друг от друга.
       point({ modelId: "e", modelName: "Qwen3-Coder-30B-A3B", qualityPercent: 26, medianTokensPerSecond: 127 }),
     ];
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : all), { status: 200, headers: { "content-type": "application/json" } })));
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/tasks") ? [] : url.includes("/model-stats") ? [modelStats()] : all), { status: 200, headers: { "content-type": "application/json" } })));
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     // jsdom не считает метрики текста, поэтому границы оцениваем так же, как их оценивает раскладка.
@@ -302,14 +335,14 @@ describe("разделение локальных и подписочных мо
       point({ modelId: "cloud-1", modelName: "Подписочная", modelKind: "cloud", profileId: null, profileName: null, qualityPercent: 90, medianTokensPerSecond: 80 }),
     ];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-      const body = url.startsWith("/api/tasks") ? [] : all;
+      const body = url.startsWith("/api/tasks") ? [] : url.includes("/model-stats") ? [modelStats()] : all;
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }));
   });
 
   it("оставляет на графике и в коротком списке только выбранный тип моделей", async () => {
     const user = userEvent.setup();
-    await renderInApp(<AnalyticsPage />, "/analytics");
+    await renderAnalytics();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     // Без фильтра локальная модель доминируется подписочной и вылетает из короткого списка.
@@ -322,5 +355,52 @@ describe("разделение локальных и подписочных мо
     await user.click(screen.getByRole("tab", { name: "Короткий список" }));
     expect(screen.getByText("Локальная · Скорость")).toBeTruthy();
     expect(screen.queryByText("Подписочная")).toBeNull();
+  });
+});
+
+describe("сводная таблица и успешность", () => {
+  it("открывается сводкой, сортируется по столбцу и не даёт нерепрезентативной модели место в ранжировании", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<AnalyticsPage />, "/analytics");
+
+    const summary = await screen.findByRole("table");
+    const names = () => within(summary).getAllByRole("rowheader").map((cell) => cell.textContent);
+    // Нерепрезентативная модель показана, но всегда ниже — даже если по столбцу должна быть выше.
+    expect(names()[0]).toContain("Локальная");
+    expect(names()[1]).toContain("нерепрезентативно: 4 из 10");
+
+    await user.click(within(summary).getByRole("button", { name: /Промптов/u }));
+    expect(within(summary).getByRole("columnheader", { name: /Промптов/u }).getAttribute("aria-sort")).toBe("descending");
+    expect(names()[1]).toContain("Медленная");
+  });
+
+  it("разбирает неудачи, не повторяя успехи из сводки", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await user.click(await screen.findByRole("tab", { name: "Разбор неудач" }));
+
+    const table = await screen.findByRole("table");
+    const cells = within(table).getAllByRole("row")[1]!.querySelectorAll("td");
+    // Неудач: 2 из 12 учтённых; ручные остановки — голым числом, вне процентов.
+    expect(cells[0]!.textContent).toBe("2 · 17%");
+    expect(cells[cells.length - 1]!.textContent).toBe("2");
+    // Успехи здесь не повторяются: для них есть сводка.
+    expect(within(table).queryByRole("columnheader", { name: /Выполнено/u })).toBeNull();
+  });
+
+  it("прокидывает фильтр полноты в запросы и предупреждает о результатах без отметки", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("table");
+
+    // Выбор в SelectMenu — это два клика: по кнопке списка и по нужному пункту.
+    await user.click(await screen.findByLabelText("Учитывать", { selector: "summary" }));
+    await user.click(await screen.findByRole("button", { name: "Только полностью рабочие" }));
+
+    await waitFor(() => expect(requested.some((url) => url.includes("/model-stats?completion=full"))).toBe(true));
+    expect(requested.some((url) => url.includes("/decision-points?completion=full"))).toBe(true);
+    // Отфильтрованный ответ таких записей уже не содержит, поэтому счётчик берётся из нефильтрованного среза.
+    expect(await screen.findByText(/Без отметки полноты: 2 результата/u)).toBeTruthy();
+    expect(requested.filter((url) => url.includes("/model-stats") && !url.includes("completion="))).not.toHaveLength(0);
   });
 });

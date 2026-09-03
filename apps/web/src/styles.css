@@ -233,8 +233,8 @@ button:where(:has(.icon)), a:where(:has(.icon)) { display: inline-flex; align-it
 .compare-pickers { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }.compare-pickers .select-menu { margin-top: 0; }.compare-pickers .select-menu > summary { min-width: 300px; }.compare-pickers span { color: var(--muted); }.compare-grid { display: grid; grid-template-columns: 160px 1fr 1fr; border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }.compare-grid > * { padding: 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }.compare-grid div { display: grid; gap: 8px; }.compare-grid b { font: 15px var(--font-mono); }.compare-grid small { color: var(--muted); }
 .leaderboard-scroll { overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); }.leaderboard-table { width: 100%; min-width: 520px; border-collapse: collapse; background: var(--surface-2); }.leaderboard-table th, .leaderboard-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--line); }.leaderboard-table tbody tr:last-child > * { border-bottom: 0; }.leaderboard-table tbody tr, .analytics-table tbody tr { transition: background-color .15s ease; }.leaderboard-table tbody tr:hover, .analytics-table tbody tr:hover { background: var(--surface-hover); }@media (prefers-reduced-motion: reduce) { .leaderboard-table tbody tr, .analytics-table tbody tr { transition: none; } }.leaderboard-table thead { background: var(--surface-3); }.leaderboard-table thead th { color: #d9e1ed; font-size: 13px; }.leaderboard-score { color: var(--good); font: 600 13px var(--font-mono); }.leaderboard-unranked { color: var(--muted); }
 /* Класс mono размечает и надзаголовки, и числа в таблицах: в таблице цифра — содержимое, и бледнее заголовка быть не должна. */
-td.mono, .pareto-list .mono { color: #d9e1ed; font-size: 13px; }
-.leaderboard-table td, .analytics-table td, .heatmap td, .pareto-list .mono { font-variant-numeric: tabular-nums; }
+td.mono { color: #d9e1ed; font-size: 13px; }
+.leaderboard-table td, .analytics-table td, .heatmap td { font-variant-numeric: tabular-nums; }
 .leaderboard-thin { display: block; margin-top: 3px; color: var(--warn); font: 400 10px var(--font-ui); }
 .leaderboard-note { color: var(--muted); font-size: 11px; }
 .sampling-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
@@ -273,8 +273,6 @@ td.mono, .pareto-list .mono { color: #d9e1ed; font-size: 13px; }
 .heatmap th[scope="col"]:not(:first-child) { width: 110px; text-align: right; }
 .slice-hint { margin: -8px 0 16px; color: var(--muted); font-size: 12px; }
 .analytics-table th[scope="row"], .heatmap th[scope="row"] { font-weight: 600; }
-.pareto-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.pareto-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-md); }
 .compare-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
 .compare-tabs button { padding: 8px 16px; border-radius: 999px; font-size: 13px; }
 .compare-tabs button.active { color: var(--surface-0); border-color: var(--signal); background: var(--signal); }
@@ -495,6 +493,13 @@ textarea { min-height: 96px; line-height: 1.55; resize: vertical; }
 /* Заливка набирает насыщенность к десятке: строку видно как силу оценки, а не как сплошную полосу. */
 .score-cell.on, .score-cell.hovered { color: var(--surface-0); font-weight: 600; background: color-mix(in oklab, var(--signal) calc(58% + var(--step) * 4.2%), #cfe0fb); border-color: color-mix(in oklab, var(--signal) calc(70% + var(--step) * 3%), #cfe0fb); }
 .score-cell.hovered { background: color-mix(in oklab, #b1cdf7 calc(58% + var(--step) * 4.2%), #e6eefc); border-color: #b1cdf7; }
+.untagged-note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0 0 12px; padding: 8px 12px; color: var(--warn); border: 1px solid var(--warn); border-radius: var(--r-md); font-size: 12px; }
+.link-button { padding: 0; color: inherit; border: 0; background: none; font: inherit; text-decoration: underline; cursor: pointer; }
+.panel-actions .select-menu { margin-top: 0; }
+.panel-actions .select-menu > summary { min-width: 210px; padding: 6px 10px; font-size: 12px; }
+.sort-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; color: inherit; border: 0; background: none; font: inherit; cursor: pointer; }
+.analytics-table .aside-column { border-left: 1px solid var(--line); color: var(--muted); }
+.unranked-note { display: block; color: var(--muted); font-size: 10px; font-style: normal; }
 .not-applied { padding: 0 6px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .not-applied.on { color: var(--surface-0); background: var(--muted); border-color: var(--muted); }
 .score-control:disabled { opacity: .5; }

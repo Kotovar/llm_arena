@@ -340,9 +340,24 @@ export function formatCost(value: number) {
   return `≈ $${value < 1 ? value.toFixed(2) : value.toFixed(1)}`;
 }
 
+/**
+ * Компактная подпись к GGUF: размер файла и тип архитектуры. Единицы те же, что у `formatVram`, —
+ * `/models` и `/analytics` должны печатать размеры одинаково, иначе их читают как разные величины.
+ */
+export function ggufSummary(sizeBytes?: number, expertCount?: number): string {
+  const parts: string[] = [];
+  if (sizeBytes) parts.push(formatBytes(sizeBytes));
+  if (expertCount !== undefined) parts.push(expertCount > 0 ? `MoE, ${expertCount} экспертов` : "dense");
+  return parts.join(" · ");
+}
+
+export function formatBytes(sizeBytes: number) {
+  return `${String(oneDecimal(sizeBytes / 1024 ** 3)).replace(".", ",")} Гб`;
+}
+
 /** Пик VRAM человеческими числами: мегабайты гигабайтами, без хвоста из десятка цифр. */
 export function formatVram(mebibytes: number) {
-  return mebibytes >= 1024 ? `${String(oneDecimal(mebibytes / 1024)).replace(".", ",")} ГиБ` : `${Math.round(mebibytes)} МиБ`;
+  return mebibytes >= 1024 ? `${String(oneDecimal(mebibytes / 1024)).replace(".", ",")} Гб` : `${Math.round(mebibytes)} Мб`;
 }
 
 export function formatMeasuredMetric(name: string, item?: { value: number | null; source?: string }) {
