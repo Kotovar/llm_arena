@@ -6,10 +6,9 @@ import type { DecisionPoint, Task } from "../types.js";
 import { DEFAULT_PROFILE_NAME, formatDuration, formatMetricValue, formatVram, modelKindFilters, plural } from "../ui.js";
 import type { ModelKindFilter } from "../ui.js";
 
-type Slice = { kind: "all" } | { kind: "untagged" } | { kind: "tag"; tag: string };
+type Slice = { kind: "all" } | { kind: "tag"; tag: string };
 
 function sliceQuery(slice: Slice) {
-  if (slice.kind === "untagged") return "?untagged=1";
   return slice.kind === "tag" ? `?tag=${encodeURIComponent(slice.tag)}` : "";
 }
 
@@ -223,7 +222,7 @@ function Heatmap({ slices }: { slices: Array<{ label: string; points: DecisionPo
   if (!keys.size) return <Empty>Пока нет ни одного замера по срезам нагрузки.</Empty>;
   const quality = (points: DecisionPoint[], key: string) => points.find((point) => pointKey(point) === key)?.qualityPercent ?? null;
   return <div className="analytics-scroll"><table className="heatmap">
-    <caption>Доля баллов по срезам нагрузки. Столбец «Без тегов» — промпты, которым тег не проставлен.</caption>
+    <caption>Доля баллов по срезам нагрузки: столбец на тег плюс общий.</caption>
     <thead><tr><th scope="col">Связка</th>{slices.map((slice) => <th scope="col" key={slice.label}>{slice.label}</th>)}</tr></thead>
     <tbody>{[...keys].map(([key, label]) => <tr key={key}>
       <th scope="row">{label}</th>
@@ -260,8 +259,7 @@ export function AnalyticsPage() {
   const query = sliceQuery(slice);
   // Ключ той же формы, что у запросов тепловой карты: иначе общий срез грузится дважды.
   const points = useQuery({ queryKey: ["decision-points", query], queryFn: () => api<DecisionPoint[]>(`/analytics/decision-points${query}`) });
-  // Общий столбец есть всегда, «Без тегов» — только когда теги вообще заведены: иначе он его повторяет.
-  const heatmapColumns = [{ label: "Вся нагрузка", query: "" }, ...tags.map((tag) => ({ label: tag, query: `?tag=${encodeURIComponent(tag)}` })), ...(tags.length ? [{ label: "Без тегов", query: "?untagged=1" }] : [])];
+  const heatmapColumns = [{ label: "Вся нагрузка", query: "" }, ...tags.map((tag) => ({ label: tag, query: `?tag=${encodeURIComponent(tag)}` }))];
   const sliceQueries = useQueries({
     queries: heatmapColumns.map((column) => ({
       queryKey: ["decision-points", column.query],
@@ -289,9 +287,8 @@ export function AnalyticsPage() {
             <div className="leaderboard-filters" role="group" aria-label="Срез нагрузки">
               <button type="button" className={slice.kind === "all" ? "active" : ""} aria-pressed={slice.kind === "all"} onClick={() => setSlice({ kind: "all" })}>Вся нагрузка</button>
               {tags.map((tag) => <button type="button" key={tag} className={slice.kind === "tag" && slice.tag === tag ? "active" : ""} aria-pressed={slice.kind === "tag" && slice.tag === tag} onClick={() => setSlice({ kind: "tag", tag })}>{tag}</button>)}
-              <button type="button" className={slice.kind === "untagged" ? "active" : ""} aria-pressed={slice.kind === "untagged"} onClick={() => setSlice({ kind: "untagged" })}>Без тегов</button>
             </div>
-            <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, «Без тегов» — только по тем, которым тег не проставлен.</p>
+            <p className="slice-hint">Срез — это тег промпта: «Вся нагрузка» считает по всем промптам, остальные — только по промптам с этим тегом.</p>
           </> : null}
           {view === "scatter" || view === "duration"
             ? shown.length ? <Scatter points={shown} color={color} shortlist={shortlist} metric={scatterMetric} /> : <Empty>В этом срезе ещё нет завершённых прогонов.</Empty>

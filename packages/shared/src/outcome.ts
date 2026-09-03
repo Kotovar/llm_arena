@@ -97,3 +97,15 @@ export const outcomeOrder: TaskOutcome[] = [
   "pending",
   "running",
 ];
+
+/**
+ * Порог репрезентативности: сколько успешных промптов нужно, чтобы модель занимала место в
+ * ранжировании. Абсолютный минимум защищает от маленького каталога, доля — от большого:
+ * «выполнил 10 из 100» перестаёт считаться репрезентативным само собой.
+ */
+export const REPRESENTATIVE_MIN = 10;
+export const REPRESENTATIVE_SHARE = 0.25;
+
+export function representativeThreshold(activeTaskCount: number): number {
+  return Math.max(REPRESENTATIVE_MIN, Math.ceil(activeTaskCount * REPRESENTATIVE_SHARE));
+}

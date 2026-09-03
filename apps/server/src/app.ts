@@ -34,7 +34,7 @@ import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
-import { leaderboardSliceSchema, type SliceQuery } from "./routes/slice.js";
+import { type SliceQuery, tagSliceSchema } from "./routes/slice.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 import { readGpuInfo } from "./system-metrics.js";
 import { loadOwnerId, stopOwnedLlamaServers } from "./lifecycle.js";
@@ -735,8 +735,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
    * Сводка слепых вердиктов: сколько раз модель побеждала, проигрывала и сводила вничью.
    * Долю побед показываем только от порога уверенности — две пары процентом называть нечестно.
    */
-  app.get<{ Querystring: SliceQuery }>("/api/reviews/pair/summary", async (request) => {
-    const slice = leaderboardSliceSchema.parse(request.query);
+  app.get<{ Querystring: Pick<SliceQuery, "tag"> }>("/api/reviews/pair/summary", async (request) => {
+    const slice = tagSliceSchema.parse(request.query);
     type Record_ = { wins: number; losses: number; ties: number; decided: number };
     const empty = (): Record_ => ({ wins: 0, losses: 0, ties: 0, decided: 0 });
     const totals = new Map<string, Record_ & { opponents: Map<string, Record_> }>();
@@ -749,7 +749,6 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     for (const verdict of store.listPairVerdicts()) {
       const tags = JSON.parse(verdict.tags_json) as string[];
       if (slice.tag !== undefined && !tags.includes(slice.tag)) continue;
-      if (slice.untagged && tags.length !== 0) continue;
       for (const [modelId, opponentId] of [[verdict.first_model_id, verdict.second_model_id], [verdict.second_model_id, verdict.first_model_id]] as const) {
         const entry = totals.get(modelId) ?? { ...empty(), opponents: new Map<string, Record_>() };
         // Ничья не достаётся никому, но парой быть не перестаёт.
@@ -774,8 +773,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         .sort((left, right) => right.decided - left.decided),
     })).sort((left, right) => right.wins - left.wins || right.decided - left.decided);
   });
-  app.get<{ Querystring: SliceQuery }>("/api/reviews/pair/next", async (request) => {
-    const slice = leaderboardSliceSchema.parse(request.query);
+  app.get<{ Querystring: Pick<SliceQuery, "tag"> }>("/api/reviews/pair/next", async (request) => {
+    const slice = tagSliceSchema.parse(request.query);
     const judged = new Set(store.listPairReviews().map((review) => [review.first_task_run_id, review.second_task_run_id].join("|")));
     type Candidate = {
       taskRunId: string; revisionId: string; modelId: string; modelKind: "local-gguf" | "cloud"; taskName: string;
@@ -787,7 +786,6 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       if (!taskRun) continue;
       const tags = store.taskTagsByRevision(row.task_revision_id);
       if (slice.tag !== undefined && !tags.includes(slice.tag)) continue;
-      if (slice.untagged && tags.length !== 0) continue;
       const snapshot = parseGallerySnapshot(row.snapshot_json);
       const selected = selectedResultVersionRecord(taskRun);
       const previewable = Boolean(snapshot?.fixture?.preview) && Boolean(selected) && checksPassed(selected!.resultJson);

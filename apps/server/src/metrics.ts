@@ -1,3 +1,4 @@
+import { isCounted, isModelFailure, isSuccess, isUserAbort, outcomeOrder, type TaskOutcome } from "@llm-arena/shared";
 import type { ArenaStore } from "./store.js";
 
 export type AttemptMetric = "generationTokensPerSecond" | "totalDurationMs";
@@ -90,9 +91,10 @@ export type MetricRow = {
   /** По чему группируем: модель на лидерборде, модель + профиль в аналитике. */
   key: string;
   runId: string;
+  /** Исход промпта — единственный источник успехов, неудач и знаменателя процентов. */
+  outcome: TaskOutcome;
   /** Прогон оборвался целиком, а не доиграл: это не то же самое, что неудача промпта. */
   runInterrupted?: boolean;
-  failed?: boolean;
   review?: ReviewScores | null;
   /** Итог по промпту: медиана повторов или единственный замер. */
   speed?: number | null;
@@ -103,8 +105,12 @@ export type MetricRow = {
 
 export type ModelStats = {
   key: string;
-  sampleCount: number;
-  failedCount: number;
+  outcomes: Record<TaskOutcome, number>;
+  /** Знаменатель процентов: успехи и неудачи модели, без ручных остановок. */
+  attempted: number;
+  successCount: number;
+  failureCount: number;
+  userAbortCount: number;
   runIds: Set<string>;
   interruptedRunIds: Set<string>;
   reviews: ReviewScores[];
@@ -123,8 +129,11 @@ export function aggregateModelStats(rows: Iterable<MetricRow>): ModelStats[] {
   for (const row of rows) {
     const stats = groups.get(row.key) ?? {
       key: row.key,
-      sampleCount: 0,
-      failedCount: 0,
+      outcomes: Object.fromEntries(outcomeOrder.map((outcome) => [outcome, 0])) as Record<TaskOutcome, number>,
+      attempted: 0,
+      successCount: 0,
+      failureCount: 0,
+      userAbortCount: 0,
       runIds: new Set<string>(),
       interruptedRunIds: new Set<string>(),
       reviews: [],
@@ -132,8 +141,11 @@ export function aggregateModelStats(rows: Iterable<MetricRow>): ModelStats[] {
       speedSamples: [],
       durations: [],
     };
-    stats.sampleCount += 1;
-    if (row.failed) stats.failedCount += 1;
+    stats.outcomes[row.outcome] += 1;
+    if (isCounted(row.outcome)) stats.attempted += 1;
+    if (isSuccess(row.outcome)) stats.successCount += 1;
+    if (isModelFailure(row.outcome)) stats.failureCount += 1;
+    if (isUserAbort(row.outcome)) stats.userAbortCount += 1;
     stats.runIds.add(row.runId);
     // Последняя строка прогона решает: статус у него один на все промпты.
     if (row.runInterrupted) stats.interruptedRunIds.add(row.runId);

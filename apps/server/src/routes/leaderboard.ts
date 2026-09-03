@@ -1,19 +1,28 @@
+import { classifyTaskRun, representativeThreshold } from "@llm-arena/shared";
 import type { FastifyInstance } from "fastify";
 import { aggregateModelStats, attemptMetrics, mean, median, type MetricRow, reviewCriteria, round, scoreShare } from "../metrics.js";
 import type { ArenaStore } from "../store.js";
-import { leaderboardSliceSchema, type SliceQuery } from "./slice.js";
+import { leaderboardSliceSchema, passesCompletion, type SliceQuery } from "./slice.js";
 
 type ModelMeta = { modelName: string; modelKind: "local-gguf" | "cloud"; estimatedCostPerRun: number | null };
 
 export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStore): void {
   app.get<{ Querystring: SliceQuery }>("/api/leaderboard", async (request) => {
     const slice = leaderboardSliceSchema.parse(request.query);
+    const threshold = representativeThreshold(store.listTasks().length);
     const models = new Map<string, ModelMeta>();
     const rows: MetricRow[] = [];
     for (const row of store.listLeaderboardTaskRuns()) {
       const tags = row.tags_json === null ? undefined : JSON.parse(row.tags_json) as string[];
       if (slice.tag !== undefined && !tags?.includes(slice.tag)) continue;
-      if (slice.untagged && tags?.length !== 0) continue;
+      const outcome = classifyTaskRun({
+        status: row.task_run_status ?? "pending",
+        brokenAt: row.task_run_broken_at,
+        completion: row.task_run_completion,
+        stopReason: row.task_run_stop_reason,
+        resultJson: row.task_run_result_json,
+      });
+      if (!passesCompletion(outcome, slice.completion)) continue;
       if (!models.has(row.model_id)) {
         const model = store.getModel(row.model_id);
         models.set(row.model_id, {
@@ -24,13 +33,17 @@ export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStor
         });
       }
       // Учитываем только завершённые результаты: отменённый промпт с нулевой метрикой не должен занижать среднее.
-      const measured = row.task_run_status === "completed" || row.task_run_status === "failed" || row.task_run_status === "agent_loop";
+      // «Не работает» тоже не измеряем — оценивать нечего, но в исходах он остаётся неудачей.
+      const measured = outcome !== "broken"
+        && (row.task_run_status === "completed" || row.task_run_status === "failed" || row.task_run_status === "agent_loop");
       // Где промпт прогоняли повторно, скорость и время берём медианой попыток — так же, как аналитика.
       const attempts = measured && row.task_run_id !== null ? attemptMetrics(store, row.task_run_id) : undefined;
       rows.push({
         key: row.model_id,
         runId: row.run_id,
-        review: row.correctness === null ? null : {
+        outcome,
+        // Оценка «неработающего» результата в долю баллов не идёт: он уже посчитан неудачей.
+        review: row.correctness === null || outcome === "broken" ? null : {
           correctness: row.correctness,
           codeQuality: row.code_quality!,
           uiQuality: row.ui_quality!,
@@ -46,6 +59,16 @@ export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStor
         ...models.get(stats.key)!,
         reviewedTaskRunCount: stats.reviews.length,
         runCount: stats.runIds.size,
+        attempted: stats.attempted,
+        outcomes: stats.outcomes,
+        successCount: stats.successCount,
+        successPercent: stats.attempted ? round((stats.successCount / stats.attempted) * 100) : null,
+        failureCount: stats.failureCount,
+        failurePercent: stats.attempted ? round((stats.failureCount / stats.attempted) * 100) : null,
+        // Ручные остановки идут отдельной цифрой и в проценты не входят: человек передумал, модель не виновата.
+        userAbortCount: stats.userAbortCount,
+        representative: stats.successCount >= threshold,
+        representativeThreshold: threshold,
         // Максимум за промпт зависит от типа задачи, поэтому сравниваем долю набранного, а не сырую сумму.
         scorePercent: scoreShare(stats.reviews),
         // Средняя по замерам всех промптов модели: контекст и профиль у них разные, поэтому цифра ориентировочная.

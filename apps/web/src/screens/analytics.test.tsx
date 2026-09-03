@@ -14,7 +14,6 @@ function point(overrides: Partial<DecisionPoint & { averageDurationMs: number | 
     profileId: "speed",
     profileName: "Скорость",
     tag: null,
-    untagged: false,
     sampleCount: 3,
     runCount: 2,
     interruptedRunCount: 1,
@@ -38,7 +37,6 @@ beforeEach(() => {
     const body = url.startsWith("/api/tasks")
       ? [{ id: "task-1", tags: ["web"], currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["web"], images: [] } }]
       : url.includes("tag=web") ? [point({ qualityPercent: 90 })]
-      : url.includes("untagged=1") ? []
       : all;
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   }));

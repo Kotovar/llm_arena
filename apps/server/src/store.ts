@@ -108,6 +108,10 @@ type LeaderboardTaskRunRow = {
   run_id: string;
   task_run_id: string | null;
   task_run_status: string | null;
+  task_run_broken_at: string | null;
+  task_run_completion: "full" | "partial" | null;
+  task_run_stop_reason: StopReason | null;
+  task_run_result_json: string | null;
   model_id: string;
   model_ref: string | null;
   tags_json: string | null;
@@ -132,7 +136,10 @@ type CompletedResultRow = {
 
 type DecisionRow = {
   id: string;
-  status: "completed" | "failed" | "agent_loop";
+  status: "completed" | "failed" | "agent_loop" | "cancelled";
+  broken_at: string | null;
+  completion: "full" | "partial" | null;
+  stop_reason: StopReason | null;
   result_json: string | null;
   run_id: string;
   run_status: RunStatus;
@@ -838,7 +845,10 @@ export function createStore(filename: string) {
      */
     listLeaderboardTaskRuns() {
       return all<LeaderboardTaskRunRow>(`
-        SELECT benchmark_runs.id AS run_id, task_runs.id AS task_run_id, task_runs.status AS task_run_status, benchmark_runs.model_id, benchmark_runs.model_ref,
+        SELECT benchmark_runs.id AS run_id, task_runs.id AS task_run_id, task_runs.status AS task_run_status,
+               task_runs.broken_at AS task_run_broken_at, task_runs.completion AS task_run_completion,
+               task_runs.stop_reason AS task_run_stop_reason, task_runs.result_json AS task_run_result_json,
+               benchmark_runs.model_id, benchmark_runs.model_ref,
                tasks.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following,
                json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value') AS generation_tps,
@@ -848,7 +858,6 @@ export function createStore(filename: string) {
         LEFT JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
         LEFT JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
-        WHERE task_runs.id IS NULL OR task_runs.broken_at IS NULL
         ORDER BY benchmark_runs.sequence
       `);
     },
@@ -935,7 +944,7 @@ export function createStore(filename: string) {
     /** Терминальные результаты с профилем, тегами версии промпта и оценкой: сырьё для точек решения. */
     listDecisionRows() {
       return all<DecisionRow>(`
-        SELECT task_runs.id, task_runs.status, task_runs.result_json,
+        SELECT task_runs.id, task_runs.status, task_runs.broken_at, task_runs.completion, task_runs.stop_reason, task_runs.result_json,
                benchmark_runs.id AS run_id, benchmark_runs.status AS run_status, benchmark_runs.model_id, benchmark_runs.execution_profile_id,
                tasks.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following
@@ -944,7 +953,7 @@ export function createStore(filename: string) {
         JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
         JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
-        WHERE task_runs.status IN ('completed', 'failed', 'agent_loop') AND task_runs.broken_at IS NULL
+        WHERE task_runs.status IN ('completed', 'failed', 'agent_loop', 'cancelled')
         ORDER BY task_runs.created_at
       `);
     },

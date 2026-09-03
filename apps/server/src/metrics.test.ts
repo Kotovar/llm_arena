@@ -100,10 +100,10 @@ describe("баллы", () => {
 
 describe("группировка", () => {
   const rows: MetricRow[] = [
-    { key: "b", runId: "run-1", review: review(10), speed: 10, speedSamples: [8, 12], duration: 100 },
-    { key: "a", runId: "run-2", failed: true, runInterrupted: true, speed: null, duration: null },
-    { key: "b", runId: "run-1", review: null, speed: 20, speedSamples: [20], duration: 300 },
-    { key: "b", runId: "run-3", review: review(4), speed: null, duration: 200 },
+    { key: "b", runId: "run-1", outcome: "full", review: review(10), speed: 10, speedSamples: [8, 12], duration: 100 },
+    { key: "a", runId: "run-2", outcome: "error", runInterrupted: true, speed: null, duration: null },
+    { key: "b", runId: "run-1", outcome: "completed", review: null, speed: 20, speedSamples: [20], duration: 300 },
+    { key: "b", runId: "run-3", outcome: "partial", review: review(4), speed: null, duration: 200 },
   ];
 
   it("сохраняет порядок первого появления группы", () => {
@@ -114,8 +114,10 @@ describe("группировка", () => {
     const [first, second] = aggregateModelStats(rows);
 
     expect(first).toMatchObject({
-      sampleCount: 3,
-      failedCount: 0,
+      attempted: 3,
+      successCount: 3,
+      failureCount: 0,
+      userAbortCount: 0,
       reviews: [review(10), review(4)],
       speeds: [10, 20],
       speedSamples: [8, 12, 20],
@@ -123,16 +125,30 @@ describe("группировка", () => {
     });
     expect(first?.runIds.size).toBe(2);
     expect(first?.interruptedRunIds.size).toBe(0);
-    expect(second).toMatchObject({ sampleCount: 1, failedCount: 1 });
+    expect(second).toMatchObject({ attempted: 1, successCount: 0, failureCount: 1 });
     expect(second?.interruptedRunIds.size).toBe(1);
   });
 
   it("оставляет за прогоном последний известный статус, а не первый", () => {
     const [stats] = aggregateModelStats([
-      { key: "a", runId: "run", runInterrupted: true },
-      { key: "a", runId: "run", runInterrupted: false },
+      { key: "a", runId: "run", outcome: "error", runInterrupted: true },
+      { key: "a", runId: "run", outcome: "full", runInterrupted: false },
     ]);
 
     expect(stats?.interruptedRunIds.size).toBe(0);
+  });
+});
+
+describe("исходы в группировке", () => {
+  it("держит ручные остановки вне знаменателя, а незавершённое — вне обеих цифр", () => {
+    const [stats] = aggregateModelStats([
+      { key: "a", runId: "run", outcome: "full" },
+      { key: "a", runId: "run", outcome: "broken" },
+      { key: "a", runId: "run", outcome: "aborted_user" },
+      { key: "a", runId: "run", outcome: "running" },
+    ]);
+
+    expect(stats).toMatchObject({ attempted: 2, successCount: 1, failureCount: 1, userAbortCount: 1 });
+    expect(stats?.outcomes).toMatchObject({ full: 1, broken: 1, aborted_user: 1, running: 1, error: 0 });
   });
 });

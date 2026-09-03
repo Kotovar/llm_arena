@@ -257,7 +257,6 @@ export type DecisionPoint = {
   profileId: string | null;
   profileName: string | null;
   tag: string | null;
-  untagged: boolean;
   sampleCount: number;
   runCount: number;
   /** Прогоны, оборванные целиком: упавшие на старте или остановленные вручную. */

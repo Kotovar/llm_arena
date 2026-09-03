@@ -1083,7 +1083,8 @@ describe("REST API", () => {
     const brokenGallery = (await app.inject({ method: "GET", url: "/api/gallery" })).json();
     expect(brokenGallery).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskRunId: duplicateTaskRun.id })]));
     expect((await app.inject({ method: "PUT", url: "/api/gallery/featured", payload: { taskRunId: duplicateTaskRun.id } })).statusCode).toBe(404);
-    expect((store.listLeaderboardTaskRuns()).some((row) => row.task_run_id === duplicateTaskRun.id)).toBe(false);
+    // Из выборки лидерборда «Не работает» больше не выпадает: это неудача модели, а не отсутствие результата.
+    expect((store.listLeaderboardTaskRuns()).find((row) => row.task_run_id === duplicateTaskRun.id)?.task_run_broken_at).toEqual(expect.any(String));
 
     const restored = await app.inject({ method: "PUT", url: `/api/task-runs/${duplicateTaskRun.id}/completion`, payload: { completion: "partial" } });
     expect(restored.json()).toMatchObject({ broken_at: null, completion: "partial" });
@@ -1405,7 +1406,9 @@ describe("REST API", () => {
     expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?tag=%D0%BA%D0%BE%D0%B4" })).json() as { remaining: number }).remaining).toBe(0);
     store.setTaskTags(task.id, ["код"]);
     expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?tag=%D0%BA%D0%BE%D0%B4" })).json() as { remaining: number }).remaining).toBe(2);
-    expect((( await app.inject({ method: "GET", url: "/api/reviews/pair/next?untagged=1" })).json() as { remaining: number }).remaining).toBe(0);
+    // Слепая оценка знает только тег: и убранный срез «без тегов», и фильтр полноты для неё — чужие параметры.
+    expect((await app.inject({ method: "GET", url: "/api/reviews/pair/next?untagged=1" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/reviews/pair/summary?completion=full" })).statusCode).toBe(400);
 
     const queued = await app.inject({ method: "GET", url: "/api/reviews/pair/next" });
     const body = queued.json() as { remaining: number; pair: { taskName: string; description: string | null; modelKind: string; sides: Array<{ taskRunId: string; answer: string; resultSha: string | null }> } };
@@ -1599,8 +1602,11 @@ describe("REST API", () => {
     expect((await app.inject({ method: "GET", url: "/api/leaderboard" })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points" })).statusCode).toBe(200);
     // Схема среза общая: невозможная комбинация отклоняется одинаково в обоих модулях.
-    expect((await app.inject({ method: "GET", url: "/api/leaderboard?tag=a&untagged=1" })).statusCode).toBe(400);
-    expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points?tag=a&untagged=1" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/analytics/model-stats" })).statusCode).toBe(200);
+    // Схема среза общая: убранный срез «без тегов» отклоняется одинаково во всех модулях.
+    expect((await app.inject({ method: "GET", url: "/api/leaderboard?untagged=1" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points?untagged=1" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/leaderboard?completion=broken" })).statusCode).toBe(400);
     await app.close();
     store.close();
   });
@@ -1647,7 +1653,6 @@ describe("REST API", () => {
       profileId: profile.id,
       profileName: "Скорость",
       tag: "coding-agent",
-      untagged: false,
       sampleCount: 5,
       qualityPercent: 80,
       medianTokensPerSecond: 42,
@@ -1660,10 +1665,72 @@ describe("REST API", () => {
     })]);
 
     const all = await app.inject({ method: "GET", url: "/api/analytics/decision-points" });
-    expect((all.json() as Array<{ sampleCount: number; tag: string | null; untagged: boolean }>)[0]).toMatchObject({ sampleCount: 6, tag: null, untagged: false });
+    expect((all.json() as Array<{ sampleCount: number; tag: string | null }>)[0]).toMatchObject({ sampleCount: 6, tag: null });
+    await app.close();
+    store.close();
+  });
 
-    const untagged = await app.inject({ method: "GET", url: "/api/analytics/decision-points?untagged=1" });
-    expect((untagged.json() as Array<{ sampleCount: number; untagged: boolean; qualityPercent: number | null }>)[0]).toMatchObject({ sampleCount: 1, untagged: true, qualityPercent: 20 });
+  it("раскладывает исходы по моделям, режет успехи фильтром полноты и держит порог репрезентативности", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-model-stats-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Промпт", kind: "prompt", prompt: "Answer", tags: ["web"] });
+    const model = store.createModel({ name: "Модель", kind: "cloud", provider: "openai", modelRef: "m" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    let position = 0;
+    const record = (status: "completed" | "failed" | "agent_loop" | "cancelled", options: { completion?: "full" | "partial" | "broken"; stopReason?: "user" | "overheat"; checkFailed?: boolean } = {}) => {
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, position, join(directory, `t${position}`), { task: { id: task.currentRevision.id } });
+      position += 1;
+      const result = options.checkFailed ? { finalAnswer: "A", checks: [{ label: "build", status: "fail" }] } : { finalAnswer: "A" };
+      store.saveTaskRunResult(taskRun.id, result, status, undefined, options.stopReason ?? null);
+      if (options.completion) store.setTaskRunCompletion(taskRun.id, options.completion);
+      return taskRun;
+    };
+    record("completed", { completion: "full" });
+    record("completed", { completion: "partial" });
+    record("completed");
+    record("completed", { completion: "full" });
+    store.setTaskRunCompletion(record("completed", { completion: "full" }).id, "broken");
+    record("failed", { checkFailed: true });
+    record("failed");
+    record("agent_loop");
+    record("cancelled", { stopReason: "overheat" });
+    record("cancelled", { stopReason: "user" });
+
+    const stats = (await app.inject({ method: "GET", url: "/api/analytics/model-stats" })).json() as Array<Record<string, unknown>>;
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      modelId: model.id,
+      // Девять учтённых: четыре успеха и пять неудач; ручная остановка вне знаменателя.
+      attempted: 9,
+      successCount: 4,
+      failureCount: 5,
+      userAbortCount: 1,
+      successPercent: expect.closeTo(44.4, 1),
+      // Каталог из одного промпта: порог держит абсолютный минимум.
+      representativeThreshold: 10,
+      representative: false,
+    });
+    expect(stats[0]?.outcomes).toMatchObject({ full: 2, partial: 1, completed: 1, broken: 1, check_failed: 1, error: 1, watchdog: 1, aborted_auto: 1, aborted_user: 1 });
+
+    // Фильтр полноты режет только успехи: неудачи остаются в знаменателе, иначе процент теряет смысл.
+    const full = (await app.inject({ method: "GET", url: "/api/analytics/model-stats?completion=full" })).json() as Array<Record<string, unknown>>;
+    expect(full[0]).toMatchObject({ attempted: 7, successCount: 2, failureCount: 5, userAbortCount: 1 });
+    const partial = (await app.inject({ method: "GET", url: "/api/analytics/model-stats?completion=partial" })).json() as Array<Record<string, unknown>>;
+    expect(partial[0]).toMatchObject({ attempted: 8, successCount: 3, failureCount: 5 });
+
+    // Лидерборд считает те же исходы по той же выборке.
+    const board = (await app.inject({ method: "GET", url: "/api/leaderboard" })).json() as Array<Record<string, unknown>>;
+    expect(board[0]).toMatchObject({ modelId: model.id, attempted: 9, successCount: 4, failureCount: 5, userAbortCount: 1, representative: false });
+
+    // Порог перестаёт мешать, когда успехов набралось достаточно.
+    for (let index = 0; index < 6; index += 1) record("completed", { completion: "full" });
+    const grown = (await app.inject({ method: "GET", url: "/api/analytics/model-stats" })).json() as Array<Record<string, unknown>>;
+    expect(grown[0]).toMatchObject({ successCount: 10, representative: true });
     await app.close();
     store.close();
   });
@@ -1694,11 +1761,6 @@ describe("REST API", () => {
 
     const tagged = await app.inject({ method: "GET", url: "/api/leaderboard?tag=coding-agent" });
     expect(tagged.json()).toEqual([expect.objectContaining({ modelName: "Agent Model", reviewedTaskRunCount: 2, scorePercent: 80 })]);
-
-    // Промпты без тегов — такой же явный срез, а не «всё остальное вперемешку».
-    const untagged = await app.inject({ method: "GET", url: "/api/leaderboard?untagged=1" });
-    expect((untagged.json() as Array<{ modelName: string; reviewedTaskRunCount: number }>).map((entry) => [entry.modelName, entry.reviewedTaskRunCount]))
-      .toEqual([["Plain Model", 1], ["Agent Model", 1]]);
 
     const all = await app.inject({ method: "GET", url: "/api/leaderboard" });
     expect((all.json() as Array<{ modelName: string; reviewedTaskRunCount: number }>).find((entry) => entry.modelName === "Agent Model")?.reviewedTaskRunCount).toBe(3);
