@@ -149,6 +149,85 @@ describe("REST API", () => {
     store.close();
   });
 
+  // Одна кнопка активации готовит обе обвязки: сервер модели и порт у них общие.
+  it("экспортирует файлы обеих обвязок и убирает их при сбросе", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-pi-local-export-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/models/local.gguf", alias: "local" });
+    const parameters = { context: 32_000, nGpuLayers: "auto" as const, cacheTypeK: "q8_0" as const, cacheTypeV: "q8_0" as const, batchSize: 1024, ubatchSize: 512, flashAttention: "auto" as const, cacheReuse: 256 };
+    const profile = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, ggufSha256: null, calibrated: false });
+    const app = buildApp({ store, config });
+
+    expect((await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId: model.id, profileName: "Automatic", port: 8080 } })).statusCode).toBe(200);
+
+    const exports = join(directory, "exports");
+    const alias = `local-${profile.id.slice(0, 8)}`;
+    for (const filename of ["active-model.fish", "active-omp.fish", "omp-local.kdl", "active-pi.fish", "pi-local.kdl", join("pi-local", "models.json"), join("pi-local", "sync-context.mjs")]) {
+      expect(existsSync(join(exports, filename)), filename).toBe(true);
+    }
+    // Интерактивный сеанс — те же флаги чистоты, но с историей: без --print и --mode json.
+    const piFish = readFileSync(join(exports, "active-pi.fish"), "utf8");
+    expect(piFish).toContain("PI_CODING_AGENT_DIR");
+    expect(piFish).toContain(`'--model' 'arena/${alias}'`);
+    expect(piFish).toContain("'--no-extensions'");
+    expect(piFish).not.toContain("'--print'");
+    expect(piFish).not.toContain("'--mode'");
+    // models.json собирается той же функцией, что и у раннера, но с внешним портом и псевдонимом.
+    const models = JSON.parse(readFileSync(join(exports, "pi-local", "models.json"), "utf8")) as { providers: { arena: { baseUrl: string; models: Array<{ id: string; contextWindow: number }> } } };
+    expect(models.providers.arena.baseUrl).toBe("http://127.0.0.1:8080/v1");
+    expect(models.providers.arena.models[0]).toMatchObject({ id: alias, contextWindow: 32_000 });
+    expect(readFileSync(join(exports, "pi-local.kdl"), "utf8")).toContain("active-pi.fish");
+
+    // Отключение модели снимает выбор и уносит экспорты обеих обвязок, а не только OMP.
+    expect((await app.inject({ method: "DELETE", url: `/api/models/${model.id}` })).statusCode).toBe(204);
+    for (const filename of ["active-model.fish", "active-omp.fish", "omp-local.kdl", "active-pi.fish", "pi-local.kdl", join("pi-local", "models.json"), join("pi-local", "sync-context.mjs")]) {
+      expect(existsSync(join(exports, filename)), filename).toBe(false);
+    }
+
+    await app.close();
+    store.close();
+  });
+
+  // Сервер модели у обвязок общий, поэтому «выгрузить» гасит оба сеанса — и сбой на первом не
+  // должен оставить второй жить: иначе в VRAM остаётся модель, о которой человек уже забыл.
+  it("гасит вторую обвязку, даже когда первая не остановилась", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-unload-partial-"));
+    directories.push(directory);
+    const bin = join(directory, "bin");
+    mkdirSync(bin);
+    const zellij = join(bin, "zellij");
+    writeFileSync(zellij, "#!/bin/sh\nexit 0\n");
+    chmodSync(zellij, 0o755);
+    mkdirSync(join(directory, "exports"));
+    // Испорченное имя сеанса: остановка OMP бросит, но pi обязан быть погашен.
+    writeFileSync(join(directory, "exports", "omp-local.session"), "не-имя-сеанса\n");
+    writeFileSync(join(directory, "exports", "pi-local.session"), "pi-local-100-200\n");
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${bin}:${originalPath}`;
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const app = buildApp({ store, config });
+
+    try {
+      const unloaded = await app.inject({ method: "POST", url: "/api/external-launcher/unload" });
+
+      expect(unloaded.statusCode).toBe(400);
+      expect(unloaded.json().error).toMatch(/omp-local/u);
+      // Сообщение говорит и о том, что всё-таки погашено: без этого человек не знает состояния.
+      expect(unloaded.json().error).toMatch(/stopped: pi-local/u);
+      expect(existsSync(join(directory, "exports", "pi-local.session"))).toBe(false);
+      expect(existsSync(join(directory, "exports", "omp-local.session"))).toBe(true);
+    } finally {
+      process.env.PATH = originalPath;
+      await app.close();
+      store.close();
+    }
+  });
+
   it("deletes a named execution profile but preserves the last one", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-delete-profile-"));
     directories.push(directory);
@@ -336,7 +415,8 @@ describe("REST API", () => {
       const unloaded = await app.inject({ method: "POST", url: "/api/external-launcher/unload" });
 
       expect(unloaded.statusCode).toBe(200);
-      expect(unloaded.json()).toEqual({ stopped: false, stoppedLlamaServers: 0, stoppedOmp: true });
+      // Поля раздельные: «остановлен OMP» и «остановлен pi» — разные факты для внешнего клиента.
+      expect(unloaded.json()).toEqual({ stopped: false, stoppedLlamaServers: 0, stoppedOmp: true, stoppedPi: false });
       expect(readFileSync(log, "utf8").trim()).toBe("delete-session --force omp-local-100-200");
       expect(existsSync(join(directory, "exports", "omp-local.session"))).toBe(false);
     } finally {

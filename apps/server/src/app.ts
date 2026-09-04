@@ -21,7 +21,7 @@ import {
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
-import { activeExportPath, renderFishCommand, renderFishLauncher, renderOmpLayout, stopOmpLocalSession, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
+import { activeExportPath, renderAgentLayout, renderFishCommand, renderFishLauncher, renderPiContextSync, renderPiLauncher, stopAgentLocalSession, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 import { describeGenerationError } from "./generation-error.js";
 import { assertWorkspaceCommit, workspaceVersionDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
@@ -35,6 +35,8 @@ import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVer
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { harnessKey } from "@llm-arena/shared/harness";
 import { registerBatchRoutes } from "./routes/batches.js";
+import { PI_CLEAN_FLAGS } from "./runners/commands.js";
+import { buildPiModelsConfig } from "./runners/pi-provider.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { type SliceQuery, tagSliceSchema } from "./routes/slice.js";
 import { parseOmpOutput } from "./runners/parsers.js";
@@ -182,6 +184,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     );
     const omp = config.runners.find((runner) => runner.kind === "omp");
     if (!omp) throw new Error("OMP runner is not configured");
+    const pi = config.runners.find((runner) => runner.kind === "pi");
+    // Интерактивный сеанс — те же флаги чистоты, что у раннера, но без `--print`/`--mode json`/
+    // `--no-session`: человеку нужны диалог и история, а не один машинный ответ.
+    const piArgv = pi ? [...pi.exec, ...PI_CLEAN_FLAGS, "--model", `arena/${externalAlias}`] : [];
     return {
       modelId,
       profileName,
@@ -191,7 +197,20 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       command: renderFishCommand(argv),
       fish: renderFishLauncher(argv),
       ompFish: renderFishLauncher([...omp.exec, "--model", `llama.cpp/${externalAlias}`]),
-      layout: renderOmpLayout(config.dataDir, port, externalAlias),
+      layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "OMP", launcher: "active-omp.fish" }),
+      // pi берёт модель из своего `models.json`, поэтому у него есть и второй экспортируемый файл.
+      pi: pi ? {
+        fish: renderPiLauncher(join(config.dataDir, "exports", "pi-local"), piArgv),
+        contextSync: renderPiContextSync(`http://127.0.0.1:${port}`, externalAlias),
+        models: `${JSON.stringify(buildPiModelsConfig({
+          baseUrl: `http://127.0.0.1:${port}`,
+          modelAlias: externalAlias,
+          // `context: "auto"` означает «сколько выйдет»: тогда pi берёт своё значение по умолчанию.
+          ...(typeof profile.parameters.context === "number" ? { contextTokens: profile.parameters.context } : {}),
+          ...(model.capabilities.vision && model.mmprojPath ? { vision: true } : {}),
+        }), null, 2)}\n`,
+        layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "pi", launcher: "active-pi.fish" }),
+      } : null,
     };
   };
   const exportExternalLauncher = (launcher: ReturnType<typeof buildExternalLauncher>) => {
@@ -200,12 +219,18 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       path: writeActiveLauncher(config.dataDir, launcher.fish),
       ompPath: writeExportFile(config.dataDir, "active-omp.fish", launcher.ompFish, true),
       layoutPath: writeExportFile(config.dataDir, "omp-local.kdl", launcher.layout),
+      ...(launcher.pi ? {
+        piPath: writeExportFile(config.dataDir, "active-pi.fish", launcher.pi.fish, true),
+        piModelsPath: writeExportFile(config.dataDir, join("pi-local", "models.json"), launcher.pi.models),
+        piContextSyncPath: writeExportFile(config.dataDir, join("pi-local", "sync-context.mjs"), launcher.pi.contextSync),
+        piLayoutPath: writeExportFile(config.dataDir, "pi-local.kdl", launcher.pi.layout),
+      } : {}),
     };
   };
   const clearExternalLauncher = () => {
     store.setSetting("externalModelId", "");
     store.setSetting("externalProfileName", "");
-    for (const filename of ["active-model.fish", "active-omp.fish", "omp-local.kdl"]) {
+    for (const filename of ["active-model.fish", "active-omp.fish", "omp-local.kdl", "active-pi.fish", "pi-local.kdl", join("pi-local", "models.json"), join("pi-local", "sync-context.mjs")]) {
       rmSync(activeExportPath(config.dataDir, filename), { force: true });
     }
   };
@@ -420,8 +445,28 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   app.post("/api/external-launcher/unload", async () => {
     const stoppedLlamaServers = await stopOwnedLlamaServers(loadOwnerId(config.dataDir));
-    const stoppedOmp = stopOmpLocalSession(config.dataDir);
-    return { stopped: stoppedLlamaServers > 0, stoppedLlamaServers, stoppedOmp };
+    // Гасим сеансы обеих обвязок: сервер модели у них общий, и «выгрузить» значит выгрузить совсем.
+    // Каждый сеанс останавливается независимо — сбой на одном не должен оставить второй жить.
+    const stops = (["omp-local", "pi-local"] as const).map((flavor) => {
+      try {
+        return { flavor, stopped: stopAgentLocalSession(config.dataDir, flavor), error: null as Error | null };
+      } catch (error) {
+        return { flavor, stopped: false, error: error as Error };
+      }
+    });
+    // Сообщаем обо всех сбоях сразу и после того, как обе попытки сделаны: иначе вторая обвязка
+    // осталась бы жить, а человек не узнал бы, что именно не погасло.
+    const failures = stops.filter((stop) => stop.error);
+    if (failures.length) {
+      const stoppedNames = stops.filter((stop) => stop.stopped).map((stop) => stop.flavor);
+      throw new Error(`Failed to stop ${failures.map((stop) => `${stop.flavor} (${stop.error!.message})`).join(", ")}; stopped: ${stoppedNames.join(", ") || "none"}`);
+    }
+    return {
+      stopped: stoppedLlamaServers > 0,
+      stoppedLlamaServers,
+      stoppedOmp: stops[0]!.stopped,
+      stoppedPi: stops[1]!.stopped,
+    };
   });
   app.get<{ Querystring: { modelId?: string } }>("/api/profiles", async (request) => store.listExecutionProfiles(request.query.modelId));
   app.post("/api/profiles", async (request, reply) => {

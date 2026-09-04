@@ -143,10 +143,10 @@ function HostCard() {
   const toast = useToast();
   const gpu = useQuery({ queryKey: ["gpu"], queryFn: () => api<GpuInfo | null>("/gpu"), refetchInterval: 20_000, staleTime: 15_000 });
   const unload = useMutation({
-    mutationFn: () => api<{ stopped: boolean; stoppedOmp: boolean }>("/external-launcher/unload", { method: "POST" }),
-    onSuccess: async ({ stopped, stoppedOmp }) => {
+    mutationFn: () => api<{ stopped: boolean; stoppedOmp: boolean; stoppedPi: boolean }>("/external-launcher/unload", { method: "POST" }),
+    onSuccess: async ({ stopped, stoppedOmp, stoppedPi }) => {
       await gpu.refetch();
-      toast(stopped ? "Выгрузка модели подтверждена" : stoppedOmp ? "Сеанс omp-local остановлен; проверьте VRAM" : "Запущенной модели Arena не найдено", stopped ? "success" : "error");
+      toast(stopped ? "Выгрузка модели подтверждена" : stoppedOmp || stoppedPi ? "Сеанс в терминале остановлен; проверьте VRAM" : "Запущенной модели Arena не найдено", stopped ? "success" : "error");
     },
     onError: (error) => toast(error.message, "error"),
   });

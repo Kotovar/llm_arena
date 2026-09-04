@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { activeExportPath, activeLauncherPath, renderFishCommand, renderFishLauncher, renderOmpLayout, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
+import { activeExportPath, activeLauncherPath, renderAgentLayout, renderFishCommand, renderFishLauncher, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 
 const directories: string[] = [];
 
@@ -35,13 +35,30 @@ describe("external local-model launcher", () => {
     expect(statSync(path).mode & 0o111).not.toBe(0);
   });
 
-  it("renders a Zellij layout that waits for the selected server and starts OMP", () => {
-    const rendered = renderOmpLayout("/arena/.data", 8181, "my-model-profile-1");
+  it("renders a Zellij layout that waits for the selected server and starts the agent", () => {
+    const rendered = renderAgentLayout("/arena/.data", 8181, "my-model-profile-1", { pane: "OMP", launcher: "active-omp.fish" });
 
     expect(rendered).toContain('command="/arena/.data/exports/active-model.fish"');
     expect(rendered).toContain("http://127.0.0.1:8181/v1/models");
     expect(rendered).toContain('\\\"id\\\":\\\"my-model-profile-1\\\"');
     expect(rendered).toContain("exec '/arena/.data/exports/active-omp.fish'");
+    expect(rendered).toContain('pane name="OMP"');
+  });
+
+  // Функция экспортируемая: без проверки `..` в имени запись ушла бы за пределы каталога экспортов.
+  it("refuses an export path that escapes the exports directory", () => {
+    expect(() => activeExportPath("/arena/.data", join("..", "..", "etc", "passwd"))).toThrow(/escapes the exports directory/u);
+    expect(() => writeExportFile("/arena/.data", "/etc/passwd", "x")).toThrow(/escapes the exports directory/u);
+    expect(activeExportPath("/arena/.data", join("pi-local", "models.json"))).toBe("/arena/.data/exports/pi-local/models.json");
+  });
+
+  // Обвязки различаются только правой панелью: сервер модели и порт у них общие.
+  it("renders the same layout for pi with its own pane and launcher", () => {
+    const rendered = renderAgentLayout("/arena/.data", 8181, "my-model-profile-1", { pane: "pi", launcher: "active-pi.fish" });
+
+    expect(rendered).toContain('command="/arena/.data/exports/active-model.fish"');
+    expect(rendered).toContain('pane name="pi"');
+    expect(rendered).toContain("exec '/arena/.data/exports/active-pi.fish'");
   });
 
   it("writes additional export files with the requested permissions", () => {

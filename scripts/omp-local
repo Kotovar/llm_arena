@@ -5,13 +5,31 @@ set -l arena_root (path resolve (path dirname "$script_path")/..)
 set -l exports "$arena_root/.data/exports"
 
 if not test -x "$exports/active-model.fish"; or not test -x "$exports/active-omp.fish"; or not test -f "$exports/omp-local.kdl"
-    echo "omp-local: сначала выберите модель и нажмите «Использовать с omp-local» в LLM Arena." >&2
+    echo "omp-local: сначала выберите модель и нажмите «Использовать в терминале» в LLM Arena." >&2
     exit 1
 end
 
 if not command -q zellij
     echo "omp-local: команда zellij не найдена." >&2
     exit 1
+end
+
+# Обе обвязки делят один llama-server и один порт: второй сеанс поднял бы сервер на занятом
+# порту и молча остался бы без своей левой панели.
+set -l other_session_file "$exports/pi-local.session"
+if test -f "$other_session_file"
+    set -l other_session (string trim < "$other_session_file")
+    # Живой сеанс отличаем от завершённого: zellij перечисляет и мёртвые, помечая их EXITED.
+    set -l other_line (zellij list-sessions --no-formatting 2>/dev/null | string match -- "$other_session *")
+    if test -n "$other_session"; and test -n "$other_line"; and not string match -q '*EXITED*' -- "$other_line"
+        # Мешает не сам сеанс, а занятый им сервер модели: отсоединённый пустой сеанс не помеха.
+        set -l port (string match -rg 'http://127\.0\.0\.1:([0-9]+)/v1/models' < "$exports/omp-local.kdl")
+        if test -n "$port"; and curl -fsS --max-time 1 "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1
+            echo "omp-local: сеанс pi-local ($other_session) держит сервер модели на порту $port — обвязки делят один llama-server." >&2
+            echo "omp-local: закрытие окна лишь отсоединяет сеанс; завершите его: zellij delete-session --force $other_session" >&2
+            exit 1
+        end
+    end
 end
 
 set -l session_file "$exports/omp-local.session"

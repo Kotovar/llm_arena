@@ -18,23 +18,31 @@ export function buildOmpCommand(exec: readonly string[], workspace: string, mode
 }
 
 /**
- * Чистый pi: флаги снимают всё, что он подхватил бы из системы и репозитория — расширения,
+ * Флаги чистоты pi: снимают всё, что он подхватил бы из системы и репозитория — расширения,
  * скиллы, шаблоны промптов, AGENTS.md/CLAUDE.md рабочего каталога, темы, доверие к проектным
  * настройкам. Остаются четыре встроенных инструмента и системный промпт.
+ *
+ * Общие для раннера и для интерактивного скрипта `pi-local`: замер и ручной сеанс должны идти
+ * в одних и тех же условиях, иначе сравнивать их бессмысленно.
  */
+export const PI_CLEAN_FLAGS = [
+  "--no-extensions",
+  "--no-skills",
+  "--no-prompt-templates",
+  "--no-context-files",
+  "--no-themes",
+  "--no-approve",
+] as const;
+
 export function buildPiCommand(exec: readonly string[], modelAlias: string, prompt: string, imagePaths: readonly string[] = []): string[] {
   return [
     ...exec,
+    // Неинтерактивный разбор: у скрипта этих трёх флагов нет — там нужны диалог и история.
     "--mode",
     "json",
     "--print",
     "--no-session",
-    "--no-extensions",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-context-files",
-    "--no-themes",
-    "--no-approve",
+    ...PI_CLEAN_FLAGS,
     "--model",
     `arena/${modelAlias}`,
     ...imagePaths.map((path) => `@${path}`),
