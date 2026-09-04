@@ -36,7 +36,7 @@ export async function renderInApp(ui: ReactNode, path = "/"): Promise<RenderResu
   // иначе useSearch({ from }) не найдёт совпавшего маршрута.
   const stub = (routePath: string) => createRoute({ getParentRoute: () => rootRoute, path: routePath, component: () => (path.split("?")[0] === routePath ? ui : null), validateSearch: (search: Record<string, unknown>) => search });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, stub("/runs"), stub("/compare"), stub("/analytics"), stub("/tasks"), stub("/models")]),
+    routeTree: rootRoute.addChildren([indexRoute, stub("/runs"), stub("/runs/$runId"), stub("/compare"), stub("/analytics"), stub("/tasks"), stub("/models"), stub("/gallery"), stub("/batch")]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

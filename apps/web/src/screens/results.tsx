@@ -8,7 +8,7 @@ import { useConfirm } from "../confirm.js";
 import { ArrowRightIcon, CloseIcon, ExternalIcon } from "../icons.js";
 import { Empty, NumberField, Page, Panel, SelectMenu, Status, useData, useHotkey } from "../shell.js";
 import { useToast } from "../toast.js";
-import type { Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
+import type { BatchSummary, Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
 import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, formatWatchdogDiagnostics, measurementConditions, ompModeLabel, promptCountLabel, reviewMissingLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
@@ -18,13 +18,34 @@ function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[];
   const runnerName = runners.find((runner) => runner.id === run.runner_id)?.name;
   return <div className="run-row-wrap"><Link className="run-row" to="/runs/$runId" params={{ runId: run.id }}>
     <Status value={visibleStatus} />
-    <span className="run-row-copy"><strong>{modelName}</strong><small>{runListMeta(run, runnerName, ompModeLabel(run.use_omp_agent))}</small></span>
+    {/* Прогон батча — обычный прогон с меткой, поэтому в общем списке он отличается только значком. */}
+    <span className="run-row-copy"><strong>{modelName}{run.batch_id ? <em className="batch-mark" title="Часть массового прогона">батч</em> : null}</strong><small>{runListMeta(run, runnerName, ompModeLabel(run.use_omp_agent))}</small></span>
     <span className={run.reviewed_count ? "run-row-score" : "run-row-score run-row-score-none"}>{runListScore(run)}</span>
     <time dateTime={run.created_at} title={new Date(run.created_at).toLocaleString("ru-RU")}>{formatRelativeTime(run.created_at)}</time>
   </Link>{onDelete && terminal ? <button className="row-delete" title="Удалить результат" aria-label={`Удалить запуск ${modelName}`} onClick={() => onDelete(run)}><CloseIcon /></button> : null}</div>;
 }
 
 const runStatusOptions = ["pending", "running", "running-followup", "completed", "partial", "failed", "cancelled"];
+
+/**
+ * Массовые прогоны отдельной вкладкой: в общем списке они неотличимы от одиночных запусков,
+ * а смысл батча — вернуться к нему целиком и сравнить его модели на его промптах.
+ */
+function BatchList() {
+  const batches = useQuery({
+    queryKey: ["batches"],
+    queryFn: () => api<BatchSummary[]>("/batches"),
+    refetchInterval: (query) => query.state.data?.some((batch) => !batch.finished) ? 2_000 : 10_000,
+  });
+  if (batches.error) return <p className="error">{batches.error.message}</p>;
+  if (!batches.data?.length) return <Empty action={<Link to="/batch">Собрать массовый запуск</Link>}>Массовых прогонов пока нет.</Empty>;
+  return <div className="run-list">{batches.data.map((batch) => <Link className="run-row" key={batch.id} to="/batch" search={{ id: batch.id }}>
+    <Status value={batch.finished ? "completed" : batch.active ? "running" : "pending"} />
+    <span className="run-row-copy"><strong>{batch.title}</strong><small>{batch.active ? `${batch.active.modelName} · ${batch.active.taskName}` : batch.modelNames.join(", ")}</small></span>
+    <span className="run-row-score run-row-score-none">{batch.resultMode === "web" ? "Web" : "Текст"}</span>
+    <time dateTime={batch.createdAt} title={new Date(batch.createdAt).toLocaleString("ru-RU")}>{new Date(batch.createdAt).toLocaleString("ru-RU")}</time>
+  </Link>)}</div>;
+}
 
 export function RunsPage() {
   const client = useQueryClient();
@@ -46,7 +67,14 @@ export function RunsPage() {
   const modelFilterOptions = [...new Map((runs.data ?? []).map((run) => [run.model_id, runModelName(run, models.data ?? [])] as const)).entries()].sort((a, b) => a[1].localeCompare(b[1], "ru"));
   const filtered = (runs.data ?? []).filter((run) => (!modelFilter || run.model_id === modelFilter) && (!statusFilter || (run.activityStatus ?? run.status) === statusFilter));
   function deleteRun(run: Run) { confirm({ title: "Удалить результат?", body: `Запуск ${run.id.slice(0, 8)} и все его файлы будут удалены без возможности вернуть.`, action: "Удалить", onConfirm: () => remove.mutate(run.id) }); }
-  return <Page title="Результаты запусков" eyebrow="История" intro="Здесь сохраняются ответы, изменения файлов, проверки и метрики каждого запуска."><Panel title={`Запусков: ${filtered.length} из ${runs.data?.length ?? 0}`} action={<button className="danger" disabled={!terminalIds.length || clear.isPending} onClick={() => confirm({ title: "Очистить историю?", body: `Будут удалены все завершённые результаты (${terminalIds.length}) вместе с их файлами.`, action: "Очистить", onConfirm: () => clear.mutate(terminalIds) })}>{clear.isPending ? "Очищаем…" : "Очистить все"}</button>}>
+  // Вкладка живёт в адресе рядом с фильтрами, поэтому ссылка на массовые прогоны остаётся ссылкой.
+  const withTab = (tab?: "batches") => ({ ...(filters.model ? { model: filters.model } : {}), ...(filters.status ? { status: filters.status } : {}), ...(tab ? { tab } : {}) });
+  const tabs = <div className="tab-row" role="tablist" aria-label="Вид истории">
+    <button type="button" role="tab" aria-selected={!filters.tab} className={filters.tab ? "" : "active"} onClick={() => void navigate({ to: "/runs", search: withTab() })}>Все запуски</button>
+    <button type="button" role="tab" aria-selected={filters.tab === "batches"} className={filters.tab === "batches" ? "active" : ""} onClick={() => void navigate({ to: "/runs", search: withTab("batches") })}>Массовые прогоны</button>
+  </div>;
+  if (filters.tab === "batches") return <Page title="Результаты запусков" eyebrow="История" intro="Здесь сохраняются ответы, изменения файлов, проверки и метрики каждого запуска.">{tabs}<Panel title="Массовые прогоны"><BatchList /></Panel></Page>;
+  return <Page title="Результаты запусков" eyebrow="История" intro="Здесь сохраняются ответы, изменения файлов, проверки и метрики каждого запуска.">{tabs}<Panel title={`Запусков: ${filtered.length} из ${runs.data?.length ?? 0}`} action={<button className="danger" disabled={!terminalIds.length || clear.isPending} onClick={() => confirm({ title: "Очистить историю?", body: `Будут удалены все завершённые результаты (${terminalIds.length}) вместе с их файлами.`, action: "Очистить", onConfirm: () => clear.mutate(terminalIds) })}>{clear.isPending ? "Очищаем…" : "Очистить все"}</button>}>
     <div className="run-filters"><SelectMenu label="Фильтр по модели" value={modelFilter} options={[{ value: "", label: "Все модели" }, ...modelFilterOptions.map(([id, name]) => ({ value: id, label: name }))]} onSelect={setFilter("model")} /><SelectMenu label="Фильтр по статусу" value={statusFilter} options={[{ value: "", label: "Любой статус" }, ...runStatusOptions.map((status) => ({ value: status, label: statusLabel(status) }))]} onSelect={setFilter("status")} /></div>
     <div className="run-list">{filtered.toReversed().map((run) => <RunRow key={run.id} run={run} models={models.data ?? []} runners={runners.data ?? []} onDelete={deleteRun} />)}{runs.data?.length && !filtered.length ? <Empty>Нет запусков по выбранному фильтру.</Empty> : null}{!runs.data?.length ? <Empty action={<Link to="/">Выбрать модель и промпт</Link>}>Запусков пока нет.</Empty> : null}</div>{remove.error || clear.error ? <p className="error">{(remove.error ?? clear.error)?.message}</p> : null}</Panel>{confirmView}</Page>;
 }

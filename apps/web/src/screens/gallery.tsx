@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { ArrowRightIcon, CloseIcon } from "../icons.js";
@@ -116,15 +116,21 @@ function toggled<T>(set: ReadonlySet<T>, value: T) {
 
 export function GalleryPage() {
   const gallery = useData<GalleryResult[]>("gallery", "/gallery");
+  // Ссылка «Сравнить» из батча приводит сюда с его промптами и моделями: матрица модель × промпт
+  // и есть сравнение, но только по тому, что в батче на самом деле запускалось.
+  const { prompts: promptFilter, models: modelFilter } = useSearch({ strict: false }) as { prompts?: string; models?: string };
+  const batchPromptIds = promptFilter ? new Set(promptFilter.split(",")) : undefined;
+  const batchModelIds = modelFilter ? new Set(modelFilter.split(",")) : undefined;
   const [opened, setOpened] = useState<GalleryResult>();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [hiddenModelIds, setHiddenModelIds] = useState<ReadonlySet<string>>(new Set());
   const [collapsedKinds, setCollapsedKinds] = useState<ReadonlySet<Model["kind"]>>(new Set());
-  const tags = [...new Set((gallery.data ?? []).flatMap((result) => result.prompt.tags ?? []))].sort((left, right) => left.localeCompare(right, "ru"));
+  const all = (gallery.data ?? []).filter((result) => (!batchPromptIds || batchPromptIds.has(result.prompt.id)) && (!batchModelIds || batchModelIds.has(result.model.id)));
+  const tags = [...new Set(all.flatMap((result) => result.prompt.tags ?? []))].sort((left, right) => left.localeCompare(right, "ru"));
   // Промпт без тегов не принадлежит ни одному срезу, поэтому под выбранным фильтром его не показываем.
   const visible = selectedTags.length
-    ? (gallery.data ?? []).filter((result) => (result.prompt.tags ?? []).some((tag) => selectedTags.includes(tag)))
-    : gallery.data ?? [];
+    ? all.filter((result) => (result.prompt.tags ?? []).some((tag) => selectedTags.includes(tag)))
+    : all;
   const toggleTag = (tag: string) => setSelectedTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]);
   const matrix = galleryMatrix(visible);
   // Подписочные и локальные модели идут отдельными группами: сравнивать их между собой смысла нет.
@@ -135,6 +141,7 @@ export function GalleryPage() {
     {gallery.isPending ? <Skeleton rows={4} /> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
     {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty action={<Link to="/">Запустить web-задачу</Link>}>Пока нет успешных web-результатов с выбранной версией. Итоговую версию выбирают на странице результата.</Empty> : null}
+    {batchPromptIds || batchModelIds ? <p className="batch-active">Срез батча: {batchModelIds ? `${batchModelIds.size} ${plural(batchModelIds.size, "модель", "модели", "моделей")}` : "все модели"} × {batchPromptIds ? `${batchPromptIds.size} ${plural(batchPromptIds.size, "промпт", "промпта", "промптов")}` : "все промпты"}. <Link to="/gallery">Показать все</Link></p> : null}
     {tags.length ? <div className="gallery-tags" role="group" aria-label="Теги промптов">
       <button type="button" className={selectedTags.length ? "" : "active"} aria-pressed={selectedTags.length === 0} onClick={() => setSelectedTags([])}>Все промпты</button>
       {tags.map((tag) => <button type="button" key={tag} className={selectedTags.includes(tag) ? "active" : ""} aria-pressed={selectedTags.includes(tag)} onClick={() => toggleTag(tag)}>{tag}</button>)}

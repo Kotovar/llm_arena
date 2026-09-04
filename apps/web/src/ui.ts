@@ -1,5 +1,5 @@
 import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared/constants";
-import type { WatchdogDiagnostics } from "@llm-arena/shared";
+import type { TaskOutcome, WatchdogDiagnostics } from "@llm-arena/shared";
 import type { GalleryResult, Model, Runner, Task, TaskRun } from "./types.js";
 
 const statusLabels: Record<string, string> = {
@@ -607,3 +607,22 @@ export function gpuLayerSplit(nGpuLayers: string | number, layerCount: number | 
   const gpu = Math.min(onGpu, total);
   return `Всего слоёв: ${total} — ${gpu} на GPU, ${total - gpu} на CPU.`;
 }
+
+/**
+ * Подписи исходов промпта. Копия карты из `@llm-arena/shared`, а не реэкспорт: рантайм-импорт
+ * из корня пакета утаскивает в браузерный бандл zod ради одиннадцати строк. Тип держит набор
+ * ключей в согласии со `TaskOutcome`.
+ */
+export const outcomeLabels: Record<TaskOutcome, string> = {
+  full: "Выполнен полностью",
+  partial: "Выполнен частично",
+  completed: "Завершён без отметки",
+  check_failed: "Проверки не прошли",
+  error: "Ошибка",
+  watchdog: "Зациклился",
+  broken: "Не работает",
+  aborted_auto: "Остановлен автоматически",
+  aborted_user: "Остановлен вручную",
+  pending: "В очереди",
+  running: "Выполняется",
+};

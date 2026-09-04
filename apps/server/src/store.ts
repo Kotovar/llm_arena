@@ -56,6 +56,9 @@ type RunRow = {
   use_omp_agent: number;
   /** Почему прогон остановлен; заполняется только при status = 'cancelled'. */
   stop_reason: StopReason | null;
+  /** Общая метка массового запуска; null у одиночных прогонов. */
+  batch_id: string | null;
+  batch_position: number | null;
   model_ref: string | null;
   reasoning_effort: string | null;
   /** Сколько раз прогнать каждый промпт; 1 — обычный однократный прогон. */
@@ -340,6 +343,15 @@ function migrate(sqlite: DatabaseSync): void {
   if (!runColumns.some((column) => column.name === "stop_reason")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN stop_reason TEXT");
   }
+  // Метка батча на прогонах вместо отдельной таблицы: у батча нет своего состояния,
+  // его статус целиком выводится из статусов прогонов.
+  if (!runColumns.some((column) => column.name === "batch_id")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN batch_id TEXT");
+  }
+  if (!runColumns.some((column) => column.name === "batch_position")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN batch_position INTEGER");
+  }
+  sqlite.exec("CREATE INDEX IF NOT EXISTS idx_runs_batch ON benchmark_runs(batch_id)");
   if (!runColumns.some((column) => column.name === "use_omp_agent")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN use_omp_agent INTEGER NOT NULL DEFAULT 0");
     sqlite.exec("UPDATE benchmark_runs SET use_omp_agent = CASE WHEN result_mode = 'text' THEN 1 ELSE 0 END");
@@ -459,6 +471,23 @@ export function createStore(filename: string) {
       sqlite.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  /** Тело createRun без транзакции: батч кладёт несколько прогонов в одну. */
+  function insertRun(input: CreateRun, batch?: { id: string; position: number }): RunRow {
+    const model = store.getModel(input.modelId);
+    if (!model) throw new Error("Model not found");
+    for (const taskRevisionId of input.taskRevisionIds) {
+      if (!getTaskRevision(taskRevisionId)) throw new Error(`Task revision ${taskRevisionId} not found`);
+    }
+    const modelRef = model.kind === "cloud" ? input.modelRef ?? model.modelRef : model.modelRef;
+    const id = randomUUID();
+    sqlite
+      .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, repeat_count, warmup_attempt, batch_id, batch_position, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+      .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, input.repeatCount ?? 1, input.warmupAttempt ? 1 : 0, batch?.id ?? null, batch?.position ?? null, now());
+    const insertTask = sqlite.prepare("INSERT INTO run_tasks (run_id, task_revision_id, position) VALUES (?, ?, ?)");
+    input.taskRevisionIds.forEach((taskRevisionId, position) => insertTask.run(id, taskRevisionId, position));
+    return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
   }
 
   function getTaskRevision(id: string): TaskRevision | undefined {
@@ -776,22 +805,23 @@ export function createStore(filename: string) {
       return profile;
     },
     createRun(input: CreateRun) {
-      const model = this.getModel(input.modelId);
-      if (!model) throw new Error("Model not found");
-      for (const taskRevisionId of input.taskRevisionIds) {
-        if (!getTaskRevision(taskRevisionId)) throw new Error(`Task revision ${taskRevisionId} not found`);
-      }
-      const modelRef = model.kind === "cloud" ? input.modelRef ?? model.modelRef : model.modelRef;
-      return transaction(() => {
-        const id = randomUUID();
-        const createdAt = now();
-        sqlite
-          .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, repeat_count, warmup_attempt, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
-          .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, input.repeatCount ?? 1, input.warmupAttempt ? 1 : 0, createdAt);
-        const insertTask = sqlite.prepare("INSERT INTO run_tasks (run_id, task_revision_id, position) VALUES (?, ?, ?)");
-        input.taskRevisionIds.forEach((taskRevisionId, position) => insertTask.run(id, taskRevisionId, position));
-        return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
-      });
+      return transaction(() => insertRun(input));
+    },
+    /**
+     * Массовый запуск: по одному обычному прогону на элемент, всем проставляется общий `batch_id`.
+     * Очередь исполняет их подряд сама — движку про батчи знать нечего.
+     */
+    createBatch(inputs: CreateRun[]) {
+      const batchId = randomUUID();
+      return transaction(() => inputs.map((input, position) => insertRun(input, { id: batchId, position })));
+    },
+    /** Батчи от новых к старым: порядок задаёт первый прогон каждого. */
+    listBatchIds() {
+      return all<{ batch_id: string }>("SELECT batch_id FROM benchmark_runs WHERE batch_id IS NOT NULL GROUP BY batch_id ORDER BY MIN(sequence) DESC")
+        .map((row) => row.batch_id);
+    },
+    listBatchRuns(batchId: string) {
+      return all<RunRow>("SELECT * FROM benchmark_runs WHERE batch_id = ? ORDER BY batch_position", batchId);
     },
     getRun(id: string) {
       return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id);

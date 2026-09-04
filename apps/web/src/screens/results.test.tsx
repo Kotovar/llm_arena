@@ -126,6 +126,48 @@ describe("фильтры списка запусков", () => {
   });
 });
 
+// В общем списке батч неотличим от одиночных запусков: у него своя вкладка.
+describe("вкладка массовых прогонов", () => {
+  const run = (id: string, modelId: string, name: string) => ({ id, model_id: modelId, runner_id: "runner-1", status: "completed", created_at: "2026-01-01T00:00:00.000Z", snapshot_json: JSON.stringify({ model: { name } }), use_omp_agent: 0 });
+  const batch = { id: "batch-1", createdAt: "2026-09-02T14:30:00.000Z", title: "2 × 3, 2 сентября 14:30", modelNames: ["Alpha", "Beta"], promptCount: 3, resultMode: "web", finished: true, counts: { full: 6 }, active: null };
+
+  beforeEach(() => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = String(url);
+      const body = path.includes("/batches") ? [batch] : path.includes("/runs") ? [run("run-a", "model-1", "hy3")] : [];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+  });
+
+  it("помечает значком строки батча в общем списке", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = String(url);
+      const body = path.includes("/batches") ? [batch] : path.includes("/runs") ? [run("run-a", "model-1", "hy3"), { ...run("run-b", "model-2", "Claude"), batch_id: "batch-1" }] : [];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await renderInApp(<RunsPage />, "/runs");
+    await screen.findByText("Запусков: 2 из 2");
+
+    const marks = document.querySelectorAll(".batch-mark");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.closest(".run-row")!.textContent).toContain("Claude");
+  });
+
+  it("переключается на батчи и ведёт на страницу конкретного прогона", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<RunsPage />, "/runs");
+    await screen.findByText("Запусков: 1 из 1");
+
+    await user.click(screen.getByRole("tab", { name: "Массовые прогоны" }));
+
+    const row = await screen.findByRole("link", { name: /2 × 3/u });
+    expect(row.getAttribute("href")).toContain("id=batch-1");
+    expect(within(row).getByText("Alpha, Beta")).toBeTruthy();
+    // Одиночные запуски на этой вкладке не показываются.
+    expect(screen.queryByText("Запусков: 1 из 1")).toBeNull();
+  });
+});
+
 describe("критерии оценки", () => {
   it("убирает визуал у текстового ответа", () => {
     expect(criteriaForKind("coding").map(([key]) => key)).toEqual(["correctness", "codeQuality", "uiQuality", "instructionFollowing"]);

@@ -184,6 +184,25 @@ export const createRunSchema = z.object({
   warmupAttempt: z.boolean().default(false),
 });
 
+/**
+ * Батч — те же прогоны, только с общей меткой: по одному `benchmark_run` на модель.
+ * Собственной записи в базе у батча нет, поэтому и своих параметров тут нет —
+ * только то, что нужно разложить в обычные прогоны.
+ */
+export const createBatchSchema = z.object({
+  taskRevisionIds: createRunSchema.shape.taskRevisionIds,
+  models: z.array(z.object({
+    modelId: z.string().uuid(),
+    executionProfileId: z.string().uuid().nullable().default(null),
+    runnerId: z.string().trim().min(1),
+    useOmpAgent: z.boolean().default(false),
+    modelRef: z.string().trim().min(1).optional(),
+    reasoningEffort: createRunSchema.shape.reasoningEffort,
+  })).min(1),
+  resultMode: z.enum(["text", "web"]),
+  repeatCount: createRunSchema.shape.repeatCount,
+});
+
 const measuredSources = z.enum([
   "llama.cpp",
   "runner",
@@ -295,6 +314,7 @@ export type CreateExecutionProfile = z.infer<typeof createExecutionProfileSchema
 export type ModelEconomics = z.infer<typeof modelEconomicsSchema>;
 export type LlamaProfile = z.infer<typeof llamaProfileSchema>;
 export type CreateRun = z.input<typeof createRunSchema>;
+export type CreateBatch = z.infer<typeof createBatchSchema>;
 export type RunStatus = z.infer<typeof runStatusSchema>;
 export type RunnerKind = z.infer<typeof runnerKindSchema>;
 export type RunnerDefinition = z.infer<typeof runnerDefinitionSchema>;

@@ -6,6 +6,7 @@ import { api } from "./api.js";
 import { useConfirm } from "./confirm.js";
 import { Launcher } from "./screens/launcher.js";
 import { AnalyticsPage } from "./screens/analytics.js";
+import { BatchPage } from "./screens/batch.js";
 import { ComparePage } from "./screens/compare.js";
 import { GalleryPage } from "./screens/gallery.js";
 import { LeaderboardPage } from "./screens/leaderboard.js";
@@ -150,7 +151,8 @@ const runsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     ...(typeof search.model === "string" ? { model: search.model } : {}),
     ...(typeof search.status === "string" ? { status: search.status } : {}),
-  } as { model?: string; status?: string }),
+    ...(search.tab === "batches" ? { tab: search.tab } : {}),
+  } as { model?: string; status?: string; tab?: "batches" }),
 });
 function RunDetailRoute() { const { runId } = runRoute.useParams(); return <RunDetail runId={runId} />; }
 const runRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs/$runId", component: RunDetailRoute });
@@ -165,9 +167,25 @@ const compareRoute = createRoute({
   } as { left?: string; right?: string }),
 });
 const analyticsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/analytics", component: AnalyticsPage });
-const galleryRoute = createRoute({ getParentRoute: () => rootRoute, path: "/gallery", component: GalleryPage });
+const galleryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/gallery",
+  component: GalleryPage,
+  // `prompts` — список ревизий промптов через запятую: так батч показывает свой срез матрицы.
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.prompts === "string" ? { prompts: search.prompts } : {}),
+    ...(typeof search.models === "string" ? { models: search.models } : {}),
+  } as { prompts?: string; models?: string }),
+});
+const batchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/batch",
+  component: BatchPage,
+  // Без `id` страница показывает форму, с ним — прогресс уже созданного батча.
+  validateSearch: (search: Record<string, unknown>) => ({ ...(typeof search.id === "string" ? { id: search.id } : {}) } as { id?: string }),
+});
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, analyticsRoute, galleryRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, analyticsRoute, galleryRoute, batchRoute, settingsRoute]);
 const router = createRouter({ routeTree, defaultPreload: "intent" });
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }
 

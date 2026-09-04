@@ -236,6 +236,8 @@ export type Run = {
   reasoning_effort: string | null;
   repeat_count: number;
   warmup_attempt: number;
+  /** Метка массового запуска; null у одиночных прогонов. */
+  batch_id?: string | null;
   status: string;
   activityStatus?: string;
   activeTaskName?: string | null;
@@ -323,4 +325,34 @@ export type PairSummary = {
   decided: number;
   winPercent: number | null;
   opponents: Array<{ modelId: string; modelName: string; wins: number; losses: number; ties: number; decided: number }>;
+};
+
+export type BatchCreated = { batchId: string; runIds: string[] };
+export type BatchPrompt = { taskRunId: string; taskRevisionId: string; name: string; outcome: TaskOutcome };
+export type BatchProgress = {
+  id: string;
+  createdAt: string;
+  title: string;
+  modelCount: number;
+  promptCount: number;
+  resultMode: "text" | "web";
+  taskRevisionIds: string[];
+  modelIds: string[];
+  failedCount: number;
+  finished: boolean;
+  models: { runId: string; modelId: string; modelName: string; status: string; planned: number; prompts: BatchPrompt[] }[];
+  counts: Partial<Record<TaskOutcome, number>>;
+  active: { modelName: string; taskName: string } | null;
+};
+
+export type BatchSummary = {
+  id: string;
+  createdAt: string;
+  title: string;
+  modelNames: string[];
+  promptCount: number;
+  resultMode: "text" | "web";
+  finished: boolean;
+  counts: Partial<Record<TaskOutcome, number>>;
+  active: { modelName: string; taskName: string } | null;
 };

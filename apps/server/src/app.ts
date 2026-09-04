@@ -33,6 +33,7 @@ import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
+import { registerBatchRoutes } from "./routes/batches.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { type SliceQuery, tagSliceSchema } from "./routes/slice.js";
 import { parseOmpOutput } from "./runners/parsers.js";
@@ -583,18 +584,27 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     for (const run of runs) rmSync(resolve(config.dataDir, "runs", run.id), { recursive: true, force: true });
     return { deleted: store.deleteRuns(runs.map((run) => run.id)) };
   });
-  app.post<{ Params: { id: string } }>("/api/runs/:id/cancel", async (request, reply) => {
-    const run = store.getRun(request.params.id);
+  const cancelRun = async (runId: string) => {
+    const run = store.getRun(runId);
     if (!run) throw new Error("Run not found");
     const followup = store.listTaskRuns(run.id).flatMap((taskRun) => taskRun.followups)
       .find((item) => item.status === "pending" || item.status === "running");
     const cancelled = engine ? await engine.cancel(followup?.id ?? run.id) : false;
     if (!cancelled && followup) store.saveFollowupResult(followup.id, {}, "cancelled");
     // Движок доводит уже запущенный прогон сам и там же проставляет причину; сюда попадает
-    // только прогон, до которого очередь ещё не дошла.
-    if (!cancelled && !followup) store.updateRunStatus(run.id, "cancelled", undefined, "user");
+    // только прогон, до которого очередь ещё не дошла. Статус перечитываем прямо перед записью:
+    // пока шёл await, прогон мог завершиться сам, и «cancelled» затёр бы настоящий исход.
+    const current = store.getRun(run.id);
+    if (!cancelled && !followup && (current?.status === "pending" || current?.status === "running")) {
+      store.updateRunStatus(run.id, "cancelled", undefined, "user");
+    }
+  };
+  app.post<{ Params: { id: string } }>("/api/runs/:id/cancel", async (request, reply) => {
+    await cancelRun(request.params.id);
     return reply.code(202).send({ status: "cancelled" });
   });
+  // Регистрация здесь, а не рядом с остальными: батчам нужна та же отмена, что и одиночному прогону.
+  registerBatchRoutes(app, store, { wake: () => engine?.wake(), cancelRun, taskRunName });
   // Прогон, упавший на середине группы, доигрывается с первого промпта без результата.
   // Состояние перечитываем прямо перед записью: между проверкой и мутацией мог быть await, а движок работает параллельно.
   /** Температура задаётся на один перезапуск: любое другое продолжение прогона возвращает профиль. */

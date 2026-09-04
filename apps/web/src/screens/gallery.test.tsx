@@ -77,6 +77,40 @@ describe("галерея по тегам", () => {
   });
 });
 
+// Ссылка «Сравнить» из батча приводит в галерею с его промптами.
+describe("срез батча в адресе", () => {
+  it("оставляет только промпты из ?prompts= и даёт вернуться ко всем", async () => {
+    await renderInApp(<GalleryPage />, "/gallery?prompts=p1,p3");
+    const table = await screen.findByRole("table");
+
+    expect(within(table).getByText("Аквариум")).toBeTruthy();
+    expect(within(table).getByText("Без тега")).toBeTruthy();
+    expect(within(table).queryByText("Часы")).toBeNull();
+    expect(screen.getByText(/Срез батча: все модели × 2 промпта/u)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Показать все" })).toBeTruthy();
+  });
+
+  it("оставляет только модели из ?models=", async () => {
+    gallery = [
+      { ...result("p1", "Аквариум", ["код"]), taskRunId: "run-a", model: { id: "model-1", name: "Alpha" } },
+      { ...result("p1", "Аквариум", ["код"]), taskRunId: "run-b", model: { id: "model-2", name: "Beta" } },
+    ] as GalleryResult[];
+    await renderInApp(<GalleryPage />, "/gallery?prompts=p1&models=model-1");
+    const table = await screen.findByRole("table");
+
+    expect([...table.querySelectorAll("tbody th.gallery-model")].map((cell) => cell.textContent)).toEqual(["Alpha"]);
+    expect(screen.getByText(/Срез батча: 1 модель × 1 промпт/u)).toBeTruthy();
+  });
+
+  it("без параметра показывает всю матрицу", async () => {
+    await renderInApp(<GalleryPage />, "/gallery");
+    const table = await screen.findByRole("table");
+
+    expect(within(table).getByText("Часы")).toBeTruthy();
+    expect(screen.queryByText(/Срез батча/u)).toBeNull();
+  });
+});
+
 describe("preview в подробностях результата", () => {
   beforeEach(() => {
     gallery = [{ ...result("p1", "Аквариум", ["код"]), screenshotUrl: "/api/shot.png" }];

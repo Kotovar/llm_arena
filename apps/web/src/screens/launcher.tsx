@@ -5,7 +5,8 @@ import { api } from "../api.js";
 import { ArrowRightIcon } from "../icons.js";
 import { Page, Panel, SelectMenu, Status, useData, useHotkey, requestNotifications } from "../shell.js";
 import type { GalleryResult, Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
-import { chooseRunner, cloudProviderCatalogKind, galleryCoverage, initializeTaskSelection, matchesPromptQuery, promptCoverageNote, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel, updateTaskSelection } from "../ui.js";
+import { chooseRunner, cloudProviderCatalogKind, galleryCoverage, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel } from "../ui.js";
+import { PromptPicker } from "./prompt-picker.js";
 
 export function Launcher() {
   const tasks = useData<Task[]>("tasks", "/tasks");
@@ -28,9 +29,6 @@ export function Launcher() {
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [repeatCount, setRepeatCount] = useState(1);
   const [warmupAttempt, setWarmupAttempt] = useState(false);
-  const [promptQuery, setPromptQuery] = useState("");
-  const [promptTag, setPromptTag] = useState("");
-  const search = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!tasks.data) return;
     // Приходим из результата с «повторить»: оставляем ровно те промпты, что были в исходном запуске
@@ -74,9 +72,6 @@ export function Launcher() {
   const selectedProfile = modelProfiles.find((profile) => profile.id === profileId) ?? modelProfiles[0];
   const selected = new Set(selectedTaskIds ?? []);
   const selectedTasks = (tasks.data ?? []).filter((task) => selected.has(task.currentRevision.id));
-  // Поиск прячет строки, но не снимает выбор: отфильтрованный промпт всё равно уйдёт в запуск.
-  const visibleTasks = (tasks.data ?? []).filter((task) => matchesPromptQuery(task, promptQuery) && (!promptTag || task.tags.includes(promptTag)));
-  const promptTags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   // Галерея — единственный источник «успешных» результатов, и её ответ уже кеширован react-query.
   const coverage = galleryCoverage(gallery.data ?? []);
   const isLocalModel = selectedModel?.kind === "local-gguf";
@@ -115,14 +110,13 @@ export function Launcher() {
   // браузеров такой запрос отклоняет молча.
   const startRun = () => { void requestNotifications(); launch.mutate(); };
   useHotkey("ctrl+Enter", canLaunch ? startRun : undefined);
-  useHotkey("/", () => search.current?.focus());
   const summary = launchSummary({ modelName: selectedModel?.name, taskCount: selectedTasks.length, runnerName: selectedRunner?.name, resultMode });
   const modeNote = launchModeNote({ kind: selectedModel?.kind, resultMode, usingOmpAgent, ompUnavailable });
 
   return <Page title="Запустить проверку модели" eyebrow="Новый запуск" intro="Выберите модель, один или несколько промптов. Остальные параметры приложение подберёт автоматически.">
     <section className="launch-card" data-empty-models={models.data?.length === 0}>
       <div className="launch-step" data-ready={Boolean(selectedModel)}><span>1</span><div className="launch-fields"><label>Подключение<SelectMenu label="Подключение" value={selectedModelId} disabled={!models.data?.length} placeholder="Выберите модель" onSelect={(value) => { setModelId(value); setCloudModelRef(""); setProfileId(""); setRunnerOverride(""); setUseOmpAgent(true); setReasoningEffort(""); }} options={[{ value: "", label: "Выберите модель" }, ...(models.data ?? []).map((model) => ({ value: model.id, label: `${model.name} · ${model.provider}` }))]} /></label>{selectedModel?.kind === "local-gguf" ? <label>Профиль запуска<SelectMenu label="Профиль запуска" value={selectedProfile?.id ?? ""} onSelect={setProfileId} options={modelProfiles.map((profile) => ({ value: profile.id, label: `${profile.name} · версия ${profile.revision}` }))} /></label> : null}{selectedModel?.kind === "cloud" ? <label>Конкретная модель<SelectMenu label="Конкретная модель" value={effectiveModelRef} onSelect={(value) => { setCloudModelRef(value); setReasoningEffort(""); }} options={[...(providerCatalog?.models.some((option) => option.id === selectedModel.modelRef) ? [] : [{ value: selectedModel.modelRef ?? "", label: selectedModel.modelRef ?? "" }]), ...(providerCatalog?.models ?? []).map((option) => ({ value: option.id, label: modelOptionLabel(option) }))]} /></label> : null}{reasoningOptions.length ? <label>Уровень обдумывания<SelectMenu label="Уровень обдумывания" value={effectiveEffort} onSelect={setReasoningEffort} options={[{ value: "", label: "По умолчанию" }, ...reasoningOptions.map((effort) => ({ value: effort, label: effort }))]} /><small>Показывается только для моделей с отмеченной поддержкой reasoning.</small></label> : null}</div><Link to="/models">Подключить модель</Link></div>
-      <div className="launch-step prompt-step" data-ready={selectedTasks.length > 0}><span>2</span><fieldset className="prompt-picker"><legend><strong>Какие промпты запустить</strong><small>{selectedTasks.length} из {tasks.data?.length ?? 0}</small></legend><div className="picker-actions"><input ref={search} type="search" value={promptQuery} onChange={(event) => setPromptQuery(event.currentTarget.value)} placeholder="Поиск" title="/" aria-label="Поиск промптов" /><button type="button" onClick={() => setSelectedTaskIds(visibleTasks.map((task) => task.currentRevision.id))}>{promptTag || promptQuery ? "Выбрать показанные" : "Выбрать все"}</button><button type="button" onClick={() => setSelectedTaskIds([])}>Снять все</button><Link to="/tasks">Добавить промпт</Link></div>{promptTags.length ? <div className="prompt-tags" role="group" aria-label="Теги промптов"><button type="button" className={promptTag ? "" : "active"} aria-pressed={!promptTag} onClick={() => setPromptTag("")}>Все</button>{promptTags.map((tag) => <button type="button" key={tag} className={promptTag === tag ? "active" : ""} aria-pressed={promptTag === tag} onClick={() => setPromptTag(promptTag === tag ? "" : tag)}>{tag}</button>)}</div> : null}<div className="prompt-options">{visibleTasks.map((task) => <label key={task.id} className={selected.has(task.currentRevision.id) ? "selected" : ""}><input type="checkbox" checked={selected.has(task.currentRevision.id)} onChange={(event) => { const checked = event.currentTarget.checked; setSelectedTaskIds((current) => updateTaskSelection(current, task.currentRevision.id, checked)); }} /><span><strong>{task.currentRevision.name}</strong><small title={task.description || task.currentRevision.prompt}>{task.description || task.currentRevision.prompt}</small>{task.tags.length ? <span className="prompt-tag-list">{task.tags.map((tag) => <em key={tag}>{tag}</em>)}</span> : null}</span>{(() => { const note = promptCoverageNote(coverage, task, selectedModelId); return note ? <em className={`prompt-covered ${note.state}`}>{note.text}</em> : null; })()}</label>)}</div>{!tasks.data?.length ? <p className="empty">Сначала добавьте промпт.</p> : null}{tasks.data?.length && !visibleTasks.length ? <p className="empty">Ничего не нашлось по запросу.</p> : null}</fieldset></div>
+      <div className="launch-step prompt-step" data-ready={selectedTasks.length > 0}><span>2</span><PromptPicker tasks={tasks.data} selectedIds={selectedTaskIds} setSelectedIds={setSelectedTaskIds} coverage={coverage} modelId={selectedModelId} /></div>
       <div className="launch-step" data-ready={Boolean(selectedRunner)}>
         <span>3</span>
         <div className="launch-fields">
