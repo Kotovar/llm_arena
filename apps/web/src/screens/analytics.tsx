@@ -298,6 +298,8 @@ function SummaryTable({ stats }: { stats: ModelStats[] }) {
     failureCount: (row) => row.failureCount,
     averageDurationMs: (row) => row.averageDurationMs,
     medianTokensPerSecond: (row) => row.medianTokensPerSecond,
+    medianWallTokensPerSecond: (row) => row.medianWallTokensPerSecond,
+    medianHarnessPromptTokens: (row) => row.medianHarnessPromptTokens,
     scorePercent: (row) => row.scorePercent,
   }, { key: "scorePercent", dir: "desc" });
   if (!stats.length) return <Empty>В этом срезе ещё нет завершённых промптов.</Empty>;
@@ -314,12 +316,17 @@ function SummaryTable({ stats }: { stats: ModelStats[] }) {
     ["medianTokensPerSecond", "Ток/с", "Медиана скорости генерации по всем замерам модели."],
     ["scorePercent", "Доля баллов", "Набрано от возможного по оценённым промптам."],
   ];
+  // Две колонки имеют смысл только на оси обвязок: сопоставимая скорость и цена обвязки в токенах.
+  if (stats.some((row) => row.harnessKey)) columns.splice(7, 0,
+    ["medianWallTokensPerSecond", "Ток/с общ.", "Выходные токены на стенное время. Считается одинаково для всех обвязок, поэтому сравнимо между ними."],
+    ["medianHarnessPromptTokens", "Цена обвязки", "Медиана входа первого обращения: системный промпт и схемы инструментов."],
+  );
   return <div className="analytics-scroll"><table className="analytics-table">
     <thead><tr>{columns.map(([key, label, hint]) => <th scope="col" key={key} aria-sort={sort.ariaSort(key)} title={hint}>
       <button type="button" className="sort-toggle" onClick={() => sort.toggle(key)}>{label}<span aria-hidden="true">{sort.arrow(key)}</span></button>
     </th>)}</tr></thead>
-    <tbody>{rows.map((row) => <tr key={row.modelId} className={row.representative ? undefined : "leaderboard-unranked"}>
-      <th scope="row">{row.modelName}{row.representative ? null : <em className="unranked-note" title="Место в ранжировании занимают только модели, прошедшие порог.">{`нерепрезентативно: ${row.successCount} из ${row.representativeThreshold}`}</em>}</th>
+    <tbody>{rows.map((row) => <tr key={`${row.modelId}|${row.harnessKey ?? ""}`} className={row.representative ? undefined : "leaderboard-unranked"}>
+      <th scope="row">{row.modelName}{row.harnessLabel ? <em className="row-harness">{row.harnessLabel}</em> : null}{row.representative ? null : <em className="unranked-note" title="Место в ранжировании занимают только модели, прошедшие порог.">{`нерепрезентативно: ${row.successCount} из ${row.representativeThreshold}`}</em>}</th>
       <td className="mono">{row.attempted}</td>
       <td className={`mono ${toneClass(shownPercent(row.successCount, row.attempted), scoreTone)}`}>{percentLabel(row.successCount, row.attempted)}</td>
       <td className="mono">{row.outcomes.full}</td>
@@ -327,6 +334,7 @@ function SummaryTable({ stats }: { stats: ModelStats[] }) {
       <td className={`mono ${toneClass(shownPercent(row.failureCount, row.attempted), failureTone, true)}`}>{percentLabel(row.failureCount, row.attempted)}</td>
       <td className="mono">{row.averageDurationMs === null ? "—" : formatDuration(row.averageDurationMs)}</td>
       <td className="mono">{row.medianTokensPerSecond ?? "—"}</td>
+      {row.harnessKey ? <><td className="mono">{row.medianWallTokensPerSecond === null ? "—" : Math.round(row.medianWallTokensPerSecond * 10) / 10}</td><td className="mono">{row.medianHarnessPromptTokens === null ? "—" : row.medianHarnessPromptTokens.toLocaleString("ru-RU")}</td></> : null}
       <td className={`mono ${toneClass(row.scorePercent === null ? null : Math.round(row.scorePercent), scoreTone)}`} title={`Оценено ${row.reviewedCount} из ${row.attempted}`}>{row.scorePercent === null ? "—" : `${row.scorePercent}%`}</td>
     </tr>)}</tbody>
   </table></div>;
@@ -352,8 +360,8 @@ function FailuresTable({ stats }: { stats: ModelStats[] }) {
       {cells.map(([label, hint]) => <th scope="col" key={label} title={hint}>{label}</th>)}
       <th scope="col" className="aside-column" title="Человек передумал: проблемой модели это не считается и в проценты не входит.">Ручных остановок</th>
     </tr></thead>
-    <tbody>{stats.map((row) => <tr key={row.modelId}>
-      <th scope="row">{row.modelName}</th>
+    <tbody>{stats.map((row) => <tr key={`${row.modelId}|${row.harnessKey ?? ""}`}>
+      <th scope="row">{row.modelName}{row.harnessLabel ? <em className="row-harness">{row.harnessLabel}</em> : null}</th>
       <td className={`mono ${toneClass(shownPercent(row.failureCount, row.attempted), failureTone, true)}`}>{percentLabel(row.failureCount, row.attempted)}</td>
       {cells.map(([label, , value]) => <td className="mono" key={label}>{value(row) || "—"}</td>)}
       <td className="mono aside-column">{row.userAbortCount || "—"}</td>
@@ -383,12 +391,15 @@ export function AnalyticsPage() {
   const [modelKind, setModelKind] = useState<ModelKindFilter>("all");
   const [view, setView] = useState<View>("summary");
   const [completion, setCompletion] = useState<Completion>("any");
+  // Ось «обвязка»: та же таблица, только строка на каждую пару «модель + обвязка».
+  const [byHarness, setByHarness] = useState(false);
   const tasks = useData<Task[]>("tasks", "/tasks");
   const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const query = sliceQuery(slice, completion);
   // Ключ той же формы, что у запросов тепловой карты: иначе общий срез грузится дважды.
   const points = useQuery({ queryKey: ["decision-points", query], queryFn: () => api<DecisionPoint[]>(`/analytics/decision-points${query}`) });
-  const modelStats = useQuery({ queryKey: ["model-stats", query], queryFn: () => api<ModelStats[]>(`/analytics/model-stats${query}`) });
+  const statsQuery = byHarness ? `${query}${query.startsWith("?") ? "&" : "?"}groupBy=model-harness` : query;
+  const modelStats = useQuery({ queryKey: ["model-stats", statsQuery], queryFn: () => api<ModelStats[]>(`/analytics/model-stats${statsQuery}`) });
   // Результаты без отметки полноты сам фильтр и отбрасывает, поэтому считать их надо по нефильтрованному
   // срезу. При «Все результаты» это тот же ключ, и лишнего запроса не возникает.
   const unfilteredQuery = sliceQuery(slice, "any");
@@ -420,6 +431,7 @@ export function AnalyticsPage() {
       </div>
       <Panel title={views.find(([value]) => value === view)![1]} action={<div className="panel-actions">
         {view === "scatter" ? <span className="mono">{`Парето: ${shortlist.length} ${plural(shortlist.length, "связка", "связки", "связок")}`}</span> : null}
+        {view === "summary" || view === "failures" ? <SelectMenu label="Группировать" value={byHarness ? "model-harness" : "model"} onSelect={(next) => setByHarness(next === "model-harness")} options={[{ value: "model", label: "По модели" }, { value: "model-harness", label: "Модель × обвязка" }]} /> : null}
         <SelectMenu label="Учитывать" value={completion} onSelect={(next) => setCompletion(next as Completion)} options={completionOptions.map(([value, label]) => ({ value, label }))} />
       </div>}>
         <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{modelKindFilters.map(([value, label]) => <button type="button" key={value} className={modelKind === value ? "active" : ""} aria-pressed={modelKind === value} onClick={() => setModelKind(value)}>{label}</button>)}</div>

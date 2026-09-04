@@ -171,6 +171,8 @@ export type GalleryResult = {
   model: { id: string; name: string; kind?: Model["kind"]; modelRef?: string };
   reasoningEffort?: string | null;
   profile?: { name: string; context: number | "auto" } | null;
+  /** Раннер и флаг агентной среды: из них выводится обвязка прогона. */
+  runnerId?: string;
   runnerKind?: string;
   useOmpAgent?: boolean;
   featured?: boolean;
@@ -298,6 +300,9 @@ export type ModelStats = {
   modelId: string;
   modelName: string;
   modelKind: "local-gguf" | "cloud";
+  /** Заполнены только при группировке «модель × обвязка»; иначе null. */
+  harnessKey: string | null;
+  harnessLabel: string | null;
   /** Успехи и неудачи модели; ручные остановки в знаменатель не входят. */
   attempted: number;
   outcomes: Record<TaskOutcome, number>;
@@ -310,6 +315,10 @@ export type ModelStats = {
   scorePercent: number | null;
   criteria: { correctness: number | null; codeQuality: number | null; uiQuality: number | null; instructionFollowing: number | null };
   medianTokensPerSecond: number | null;
+  /** Выходные токены на стенное время: единственная скорость, сравнимая между обвязками. */
+  medianWallTokensPerSecond: number | null;
+  /** Медиана входа первого обращения — измеренная цена обвязки. */
+  medianHarnessPromptTokens: number | null;
   averageDurationMs: number | null;
   representative: boolean;
   representativeThreshold: number;

@@ -10,6 +10,7 @@ import {
   reviewCriteria,
   round,
   scoreShare,
+  wallTokensPerSecond,
 } from "./metrics.js";
 import type { ArenaStore } from "./store.js";
 
@@ -58,20 +59,56 @@ describe("замеры повторов", () => {
       { attempt: 3, status: "completed", result_json: metrics(30, 300) },
     ]);
 
-    expect(attemptMetrics(store, "task")).toEqual({ count: 2, speed: [10, 30], duration: [100, 300] });
+    expect(attemptMetrics(store, "task")).toEqual({ count: 2, speed: [10, 30], duration: [100, 300], wallSpeed: [] });
   });
 
   it("отличает отсутствие повторов от повторов без замеров", () => {
     // На нулевом count аналитика падает обратно на единственный замер самого промпта.
-    expect(attemptMetrics(attemptStore([]), "task")).toEqual({ count: 0, speed: [], duration: [] });
+    expect(attemptMetrics(attemptStore([]), "task")).toEqual({ count: 0, speed: [], duration: [], wallSpeed: [] });
     expect(attemptMetrics(attemptStore([{ attempt: 0, status: "completed", result_json: metrics(9, 9) }]), "task"))
-      .toEqual({ count: 0, speed: [], duration: [] });
+      .toEqual({ count: 0, speed: [], duration: [], wallSpeed: [] });
+  });
+
+  // Повторы вытесняют единственный замер и для скорости по стенным часам — иначе ось обвязок
+  // сравнивала бы медиану повторов у одной обвязки с одиночным выбросом у другой.
+  it("собирает скорость по стенным часам с тех же завершённых повторов", () => {
+    const withTokens = (outputTokens: number, durationMs: number) => JSON.stringify({
+      metrics: { outputTokens: { value: outputTokens }, totalDurationMs: { value: durationMs } },
+    });
+    const store = attemptStore([
+      { attempt: 0, status: "completed", result_json: withTokens(9_999, 1_000) },
+      { attempt: 1, status: "completed", result_json: withTokens(600, 30_000) },
+      { attempt: 2, status: "failed", result_json: withTokens(9_999, 1_000) },
+      { attempt: 3, status: "completed", result_json: withTokens(300, 30_000) },
+    ]);
+
+    expect(attemptMetrics(store, "task").wallSpeed).toEqual([20, 10]);
   });
 
   it("считает попытки отдельно от их замеров: повтор мог ничего не измерить", () => {
     const store = attemptStore([{ attempt: 1, status: "completed", result_json: "{}" }]);
 
-    expect(attemptMetrics(store, "task")).toEqual({ count: 1, speed: [], duration: [] });
+    expect(attemptMetrics(store, "task")).toEqual({ count: 1, speed: [], duration: [], wallSpeed: [] });
+  });
+});
+
+// У OMP скорость приходит от раннера, у pi её приходится оценивать — те два числа несравнимы.
+// Эта считается одинаково для всех обвязок и потому годится для оси «обвязка».
+describe("скорость по стенным часам", () => {
+  const result = (outputTokens: number | null, totalDurationMs: number | null) => JSON.stringify({
+    metrics: { outputTokens: { value: outputTokens }, totalDurationMs: { value: totalDurationMs } },
+  });
+
+  it("делит выходные токены на стенное время прогона", () => {
+    expect(wallTokensPerSecond(result(600, 30_000))).toBe(20);
+  });
+
+  it("молчит там, где делить не на что", () => {
+    expect(wallTokensPerSecond(result(600, 0))).toBeNull();
+    expect(wallTokensPerSecond(result(0, 30_000))).toBeNull();
+    expect(wallTokensPerSecond(result(null, 30_000))).toBeNull();
+    expect(wallTokensPerSecond(null)).toBeNull();
+    expect(wallTokensPerSecond("{сломано")).toBeNull();
   });
 });
 

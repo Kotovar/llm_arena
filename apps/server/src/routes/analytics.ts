@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyTaskRun, representativeThreshold } from "@llm-arena/shared";
+import { harnessKey, harnessLabel } from "@llm-arena/shared/harness";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import type { ArenaConfig } from "../config.js";
 import { paramsFromPath } from "../gguf.js";
-import { aggregateModelStats, attemptMetrics, mean, median, type MetricRow, resultMetric, reviewCriteria, round, scoreShare } from "../metrics.js";
+import { aggregateModelStats, attemptMetrics, mean, median, type MetricRow, resultMetric, reviewCriteria, round, scoreShare, wallTokensPerSecond } from "../metrics.js";
 import type { ArenaStore } from "../store.js";
 import { type LeaderboardSlice, leaderboardSliceSchema, passesCompletion, type SliceQuery } from "./slice.js";
 
@@ -35,13 +37,15 @@ function* enrichedRows(store: ArenaStore, slice: LeaderboardSlice): Generator<En
     // Оборванный и неработающий результат не измеряем: мерить нечего, а в исходах они уже неудача.
     const measured = outcome !== "broken" && row.status !== "cancelled";
     // Повторы дают устойчивую цифру по промпту: если они есть, берём их, а не единственный замер.
-    const attempts = measured ? attemptMetrics(store, row.id) : { count: 0, speed: [], duration: [] };
+    const attempts = measured ? attemptMetrics(store, row.id) : { count: 0, speed: [], duration: [], wallSpeed: [] };
     const single = (metric: Parameters<typeof resultMetric>[1]) => {
       const value = measured ? resultMetric(row.result_json, metric) : null;
       return value === null ? [] : [value];
     };
     const speeds = attempts.count ? attempts.speed : single("generationTokensPerSecond");
     const durations = attempts.count ? attempts.duration : single("totalDurationMs");
+    const wallSingle = measured ? wallTokensPerSecond(row.result_json) : null;
+    const wallSpeeds = attempts.count ? attempts.wallSpeed : wallSingle === null ? [] : [wallSingle];
     yield {
       row,
       metricRow: {
@@ -58,11 +62,18 @@ function* enrichedRows(store: ArenaStore, slice: LeaderboardSlice): Generator<En
           instructionFollowing: row.instruction_following!,
         },
         speedSamples: speeds,
+        wallSpeedSamples: wallSpeeds,
+        harnessPromptTokens: measured ? resultMetric(row.result_json, "harnessPromptTokens") : null,
         duration: median(durations),
       },
     };
   }
 }
+
+/** Срез метрик плюс ось группировки: `.strict()` у среза иначе отвергает `groupBy`. */
+const modelStatsQuerySchema = leaderboardSliceSchema.extend({
+  groupBy: z.enum(["model", "model-harness"]).default("model"),
+}).strict();
 
 export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore, config: ArenaConfig): void {
   /**
@@ -134,21 +145,30 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
    * Статистика успешности по модели: те же строки, но группировка без профиля и полная раскладка
    * исходов. Проценты считаются от `attempted` — ручные остановки в него не входят.
    */
-  app.get<{ Querystring: SliceQuery }>("/api/analytics/model-stats", async (request) => {
-    const slice = leaderboardSliceSchema.parse(request.query);
+  app.get<{ Querystring: SliceQuery & { groupBy?: string } }>("/api/analytics/model-stats", async (request) => {
+    // Ось «обвязка» — не отдельный экран и не отдельная выборка: та же таблица, только ключ шире.
+    const { groupBy, ...slice } = modelStatsQuerySchema.parse(request.query);
+    const byHarness = groupBy === "model-harness";
     const threshold = representativeThreshold(store.listTasks().length);
-    const models = new Map<string, { modelName: string; modelKind: "local-gguf" | "cloud" }>();
+    const models = new Map<string, { modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; harnessKey: string | null; harnessLabel: string | null }>();
     const rows: MetricRow[] = [];
     for (const { row, metricRow } of enrichedRows(store, slice)) {
-      if (!models.has(row.model_id)) {
+      const harness = harnessKey(row.runner_id, row.use_omp_agent === 1);
+      const key = byHarness ? `${row.model_id}|${harness}` : row.model_id;
+      if (!models.has(key)) {
         const model = store.getModel(row.model_id);
-        models.set(row.model_id, { modelName: model?.name ?? row.model_id.slice(0, 8), modelKind: model?.kind ?? "cloud" });
+        models.set(key, {
+          modelId: row.model_id,
+          modelName: model?.name ?? row.model_id.slice(0, 8),
+          modelKind: model?.kind ?? "cloud",
+          harnessKey: byHarness ? harness : null,
+          harnessLabel: byHarness ? harnessLabel(config.runners.find((runner) => runner.id === row.runner_id)?.kind, row.use_omp_agent === 1) : null,
+        });
       }
-      rows.push({ key: row.model_id, ...metricRow });
+      rows.push({ key, ...metricRow });
     }
     return aggregateModelStats(rows)
       .map((stats) => ({
-        modelId: stats.key,
         ...models.get(stats.key)!,
         attempted: stats.attempted,
         outcomes: stats.outcomes,
@@ -161,6 +181,9 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
         scorePercent: scoreShare(stats.reviews),
         criteria: reviewCriteria(stats.reviews),
         medianTokensPerSecond: median(stats.speedSamples),
+        // Сопоставимая между обвязками скорость и измеренная цена обвязки в токенах.
+        medianWallTokensPerSecond: median(stats.wallSpeedSamples),
+        medianHarnessPromptTokens: median(stats.harnessPromptTokens),
         averageDurationMs: stats.durations.length ? Math.round(mean(stats.durations)!) : null,
         representative: stats.successCount >= threshold,
         representativeThreshold: threshold,

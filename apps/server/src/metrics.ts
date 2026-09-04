@@ -1,7 +1,7 @@
 import { isCounted, isModelFailure, isSuccess, isUserAbort, outcomeOrder, type TaskOutcome } from "@llm-arena/shared";
 import type { ArenaStore } from "./store.js";
 
-export type AttemptMetric = "generationTokensPerSecond" | "totalDurationMs";
+export type AttemptMetric = "generationTokensPerSecond" | "totalDurationMs" | "outputTokens" | "harnessPromptTokens";
 
 export type ReviewScores = {
   correctness: number;
@@ -48,10 +48,22 @@ export function resultMetric(resultJson: string | null, metric: AttemptMetric): 
  * нужен отдельно от списков: попытки могли быть, но ничего не измерить, и это не то же самое,
  * что «повторов не было».
  */
-export type AttemptMetrics = { count: number; speed: number[]; duration: number[] };
+export type AttemptMetrics = { count: number; speed: number[]; duration: number[]; wallSpeed: number[] };
+
+/**
+ * Скорость по стенным часам: `outputTokens / totalDurationMs`. У OMP скорость генерации приходит
+ * от раннера, у pi её приходится оценивать — сравнивать те два числа между собой нельзя.
+ * Эта считается одинаково для всех раннеров, поэтому только она годится для оси «обвязка».
+ */
+export function wallTokensPerSecond(resultJson: string | null): number | null {
+  const metrics = parseMetrics(resultJson);
+  const tokens = metricValue(metrics, "outputTokens");
+  const duration = metricValue(metrics, "totalDurationMs");
+  return tokens !== null && duration !== null && tokens > 0 && duration > 0 ? (tokens / duration) * 1_000 : null;
+}
 
 export function attemptMetrics(store: ArenaStore, taskRunId: string): AttemptMetrics {
-  const result: AttemptMetrics = { count: 0, speed: [], duration: [] };
+  const result: AttemptMetrics = { count: 0, speed: [], duration: [], wallSpeed: [] };
   for (const attempt of store.listTaskAttempts(taskRunId)) {
     if (attempt.attempt === 0 || attempt.status !== "completed") continue;
     result.count += 1;
@@ -59,8 +71,10 @@ export function attemptMetrics(store: ArenaStore, taskRunId: string): AttemptMet
     const metrics = parseMetrics(attempt.result_json);
     const speed = metricValue(metrics, "generationTokensPerSecond");
     const duration = metricValue(metrics, "totalDurationMs");
+    const wallSpeed = wallTokensPerSecond(attempt.result_json);
     if (speed !== null) result.speed.push(speed);
     if (duration !== null) result.duration.push(duration);
+    if (wallSpeed !== null) result.wallSpeed.push(wallSpeed);
   }
   return result;
 }
@@ -100,6 +114,10 @@ export type MetricRow = {
   speed?: number | null;
   /** Каждый отдельный замер скорости промпта, включая повторы. */
   speedSamples?: readonly number[];
+  /** Скорость по стенным часам — единственная, сопоставимая между обвязками. */
+  wallSpeedSamples?: readonly number[];
+  /** Цена обвязки в токенах: вход первого обращения к модели. */
+  harnessPromptTokens?: number | null;
   duration?: number | null;
 };
 
@@ -116,6 +134,8 @@ export type ModelStats = {
   reviews: ReviewScores[];
   speeds: number[];
   speedSamples: number[];
+  wallSpeedSamples: number[];
+  harnessPromptTokens: number[];
   durations: number[];
 };
 
@@ -139,6 +159,8 @@ export function aggregateModelStats(rows: Iterable<MetricRow>): ModelStats[] {
       reviews: [],
       speeds: [],
       speedSamples: [],
+      wallSpeedSamples: [],
+      harnessPromptTokens: [],
       durations: [],
     };
     stats.outcomes[row.outcome] += 1;
@@ -153,6 +175,8 @@ export function aggregateModelStats(rows: Iterable<MetricRow>): ModelStats[] {
     if (row.review) stats.reviews.push(row.review);
     if (typeof row.speed === "number") stats.speeds.push(row.speed);
     if (row.speedSamples?.length) stats.speedSamples.push(...row.speedSamples);
+    if (row.wallSpeedSamples?.length) stats.wallSpeedSamples.push(...row.wallSpeedSamples);
+    if (typeof row.harnessPromptTokens === "number") stats.harnessPromptTokens.push(row.harnessPromptTokens);
     if (typeof row.duration === "number") stats.durations.push(row.duration);
     groups.set(row.key, stats);
   }

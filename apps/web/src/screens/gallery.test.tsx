@@ -78,6 +78,40 @@ describe("галерея по тегам", () => {
 });
 
 // Ссылка «Сравнить» из батча приводит в галерею с его промптами.
+// Один промпт на pi и на OMP должен стоять двумя строками в одном столбце.
+describe("строка матрицы «модель + обвязка»", () => {
+  it("разводит один и тот же прогон по обвязкам и подписывает их", async () => {
+    gallery = [
+      { ...result("p1", "Аквариум", []), taskRunId: "run-omp", runnerId: "omp", runnerKind: "omp", useOmpAgent: true },
+      { ...result("p1", "Аквариум", []), taskRunId: "run-pi", runnerId: "pi-local", runnerKind: "pi", useOmpAgent: false },
+    ] as GalleryResult[];
+    await renderInApp(<GalleryPage />);
+    const table = await screen.findByRole("table");
+
+    const rows = [...table.querySelectorAll("tbody th.gallery-model")];
+    expect(rows).toHaveLength(2);
+    expect(rows.map((cell) => cell.querySelector(".gallery-harness")?.textContent)).toEqual(["OMP-среда", "pi-среда"]);
+  });
+
+  // Подпись на плитке и в диалоге должна совпадать с заголовком строки, а не звать pi «без обвязки».
+  it("подписывает плитку той же обвязкой, что и строку", async () => {
+    gallery = [{ ...result("p1", "Аквариум", []), model: { id: "model-1", name: "Ornith", kind: "local-gguf" }, runnerId: "pi-local", runnerKind: "pi", useOmpAgent: false }] as GalleryResult[];
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+
+    expect(screen.getByText("pi-среда")).toBeTruthy();
+    expect(screen.queryByText("без обвязки")).toBeNull();
+  });
+
+  it("не подписывает обвязку, когда она у модели одна", async () => {
+    gallery = [{ ...result("p1", "Аквариум", []), runnerId: "omp", runnerKind: "omp", useOmpAgent: true }] as GalleryResult[];
+    await renderInApp(<GalleryPage />);
+    const table = await screen.findByRole("table");
+
+    expect(table.querySelector(".gallery-harness")).toBeNull();
+  });
+});
+
 describe("срез батча в адресе", () => {
   it("оставляет только промпты из ?prompts= и даёт вернуться ко всем", async () => {
     await renderInApp(<GalleryPage />, "/gallery?prompts=p1,p3");

@@ -493,9 +493,12 @@ describe("Gallery", () => {
   it("собирает подписи о варианте модели, мышлении и обвязке", () => {
     expect(galleryResultTags({ model: { name: "GPT-5.6 Codex", kind: "cloud", modelRef: "gpt-5.6-spark" }, reasoningEffort: "high" })).toEqual(["gpt-5.6-spark", "мышление: high"]);
     expect(galleryResultTags({ model: { name: "GPT-5.6 Codex", kind: "cloud", modelRef: "GPT-5.6 Codex" } })).toEqual([]);
-    expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "omp", reasoningEffort: "medium" })).toEqual(["с обвязкой (OMP)", "мышление: medium"]);
-    expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "llama-chat" })).toEqual(["без обвязки"]);
-    expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "omp", useOmpAgent: false })).toEqual(["без обвязки"]);
+    // Словарь обвязок общий с заголовком строки матрицы и с /compare.
+    expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "pi", useOmpAgent: false })).toEqual(["pi-среда"]);
+    expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "llama-chat" })).toEqual(["без агента"]);
+    expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "omp", useOmpAgent: false })).toEqual(["OMP без расширений"]);
+    // У старых записей флага нет: тогда OMP всегда означал полную среду.
+    expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "omp", reasoningEffort: "medium" })).toEqual(["OMP-среда", "мышление: medium"]);
   });
 });
 

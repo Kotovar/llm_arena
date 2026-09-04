@@ -548,3 +548,5 @@ th[aria-sort="none"] .sort-toggle:hover > span, th[aria-sort="none"] .sort-toggl
 .tab-row button { padding: 8px 14px; border-radius: 999px; font-size: 13px; }
 .tab-row button.active { color: var(--surface-0); border-color: var(--signal); background: var(--signal); }
 .batch-mark { margin-left: 8px; padding: 1px 6px; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 999px; font: 600 9px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; vertical-align: middle; }
+.gallery-harness { display: block; margin-top: 2px; color: var(--muted); font: 10px var(--font-mono); }
+.row-harness { display: block; margin-top: 2px; color: var(--muted); font: 400 10px var(--font-mono); font-style: normal; }

@@ -33,6 +33,8 @@ function modelStats(overrides: Partial<ModelStats> = {}): ModelStats {
     modelId: "model-1",
     modelName: "Локальная",
     modelKind: "local-gguf",
+    harnessKey: null,
+    harnessLabel: null,
     attempted: 12,
     outcomes: { full: 8, partial: 1, completed: 1, check_failed: 1, error: 1, watchdog: 0, broken: 0, aborted_auto: 0, aborted_user: 2, pending: 0, running: 0 },
     successCount: 10,
@@ -44,6 +46,8 @@ function modelStats(overrides: Partial<ModelStats> = {}): ModelStats {
     scorePercent: 80,
     criteria: { correctness: 8, codeQuality: 8, uiQuality: 8, instructionFollowing: 8 },
     medianTokensPerSecond: 42,
+    medianWallTokensPerSecond: 20,
+    medianHarnessPromptTokens: 1_500,
     averageDurationMs: 1000,
     representative: true,
     representativeThreshold: 10,
@@ -402,5 +406,45 @@ describe("сводная таблица и успешность", () => {
     // Отфильтрованный ответ таких записей уже не содержит, поэтому счётчик берётся из нефильтрованного среза.
     expect(await screen.findByText(/Без отметки полноты: 2 результата/u)).toBeTruthy();
     expect(requested.filter((url) => url.includes("/model-stats") && !url.includes("completion="))).not.toHaveLength(0);
+  });
+});
+
+// Ось «обвязка»: та же таблица, только строка на каждую пару «модель + обвязка».
+describe("группировка по обвязке", () => {
+  it("переключает запрос и показывает подпись обвязки со своими колонками", async () => {
+    const user = userEvent.setup();
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      requested.push(url);
+      const byHarness = url.includes("groupBy=model-harness");
+      const body = url.startsWith("/api/tasks") ? []
+        : url.includes("/model-stats")
+          ? byHarness
+            ? [
+              modelStats({ harnessKey: "omp+agent", harnessLabel: "OMP-среда", medianWallTokensPerSecond: 20, medianHarnessPromptTokens: 23_000 }),
+              modelStats({ harnessKey: "pi-local", harnessLabel: "pi-среда", medianWallTokensPerSecond: 30, medianHarnessPromptTokens: 1_500 }),
+            ]
+            : [modelStats()]
+          : [];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+    await renderInApp(<AnalyticsPage />, "/analytics");
+    await screen.findByRole("table");
+
+    expect(document.querySelector(".row-harness")).toBeNull();
+    expect(screen.queryByText("Цена обвязки")).toBeNull();
+
+    await user.click(screen.getByLabelText("Группировать", { selector: "summary" }));
+    await user.click(await screen.findByRole("button", { name: "Модель × обвязка" }));
+
+    await waitFor(() => expect(requested.some((url) => url.includes("groupBy=model-harness"))).toBe(true));
+    await waitFor(() => expect([...document.querySelectorAll(".row-harness")].map((item) => item.textContent)).toEqual(["OMP-среда", "pi-среда"]));
+    // Обе колонки имеют смысл только на этой оси, поэтому и появляются только здесь.
+    expect(screen.getByText("Цена обвязки")).toBeTruthy();
+    expect(screen.getByText(/23\s000/u)).toBeTruthy();
+
+    // «Разбор неудач» смотрит те же строки: без подписи обвязки они там неразличимы.
+    await user.click(screen.getByRole("tab", { name: "Разбор неудач" }));
+    await waitFor(() => expect([...document.querySelectorAll(".row-harness")].map((item) => item.textContent)).toEqual(["OMP-среда", "pi-среда"]));
   });
 });

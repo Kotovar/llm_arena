@@ -1,4 +1,5 @@
 import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared/constants";
+import { harnessAxisLabel, harnessKey, harnessLabel as sharedHarnessLabel } from "@llm-arena/shared/harness";
 import type { TaskOutcome, WatchdogDiagnostics } from "@llm-arena/shared";
 import type { GalleryResult, Model, Runner, Task, TaskRun } from "./types.js";
 
@@ -176,27 +177,41 @@ function galleryLeaders(results: GalleryResult[]) {
   return leaders;
 }
 
+/**
+ * Ключ строки матрицы — «модель + обвязка»: один и тот же промпт на pi и на OMP должен стоять
+ * двумя строками в одном столбце, иначе сравнивать обвязки визуально нечем.
+ */
+export function galleryRowKey(result: Pick<GalleryResult, "model" | "runnerId" | "useOmpAgent">) {
+  return result.runnerId ? `${result.model.id}\0${harnessKey(result.runnerId, result.useOmpAgent === true)}` : result.model.id;
+}
+
 export function galleryMatrix(results: GalleryResult[]) {
   const prompts = new Map<string, GalleryResult["prompt"]>();
-  const models = new Map<string, GalleryResult["model"]>();
+  const models = new Map<string, GalleryResult & { rowKey: string }>();
   const cells = new Map<string, GalleryResult[]>();
   for (const result of results) {
     prompts.set(result.prompt.id, prompts.get(result.prompt.id) ?? result.prompt);
-    models.set(result.model.id, models.get(result.model.id) ?? result.model);
-    const key = `${result.prompt.id}\0${result.model.id}`;
+    const rowKey = galleryRowKey(result);
+    models.set(rowKey, models.get(rowKey) ?? { ...result, rowKey });
+    const key = `${result.prompt.id}\0${rowKey}`;
     cells.set(key, [...(cells.get(key) ?? []), result]);
   }
   // Промптов со временем становится много, поэтому они идут столбцами: моделей в строках заметно меньше.
   const promptList = [...prompts.values()];
+  const harnessCounts = new Map<string, number>();
+  for (const row of models.values()) harnessCounts.set(row.model.id, (harnessCounts.get(row.model.id) ?? 0) + 1);
   return {
     prompts: promptList,
     leaders: galleryLeaders(results),
     rows: [...models.values()]
-      .toSorted((left, right) => modelKindOrder.indexOf(modelKindOf(left)) - modelKindOrder.indexOf(modelKindOf(right)))
-      .map((model) => ({
-        model,
-        kind: modelKindOf(model),
-        cells: promptList.map((prompt) => ({ prompt, results: (cells.get(`${prompt.id}\0${model.id}`) ?? []).toSorted((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))) })),
+      .toSorted((left, right) => modelKindOrder.indexOf(modelKindOf(left.model)) - modelKindOrder.indexOf(modelKindOf(right.model)))
+      .map((row) => ({
+        model: row.model,
+        rowKey: row.rowKey,
+        // Подпись обвязки нужна только там, где у модели их несколько: иначе это шум в каждой строке.
+        harness: harnessCounts.get(row.model.id)! > 1 ? harnessAxisLabel(row.runnerKind, row.useOmpAgent === true) ?? row.runnerId ?? null : null,
+        kind: modelKindOf(row.model),
+        cells: promptList.map((prompt) => ({ prompt, results: (cells.get(`${prompt.id}\0${row.rowKey}`) ?? []).toSorted((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))) })),
       })),
   };
 }
@@ -209,9 +224,11 @@ export function galleryResultTags(result: {
 }) {
   const tags: string[] = [];
   if (result.model.kind === "local-gguf") {
-    if (result.useOmpAgent !== undefined) tags.push(result.useOmpAgent ? "с обвязкой (OMP)" : "без обвязки");
-    else if (result.runnerKind === "omp") tags.push("с обвязкой (OMP)");
-    else if (result.runnerKind === "llama-chat") tags.push("без обвязки");
+    // Та же подпись, что и в заголовке строки матрицы: иначе pi на плитке зовётся «без обвязки».
+    // У старых записей флага нет вовсе: тогда OMP означал полную среду, её и показываем.
+    const harness = harnessAxisLabel(result.runnerKind, result.useOmpAgent ?? result.runnerKind === "omp");
+    if (harness) tags.push(harness);
+    else if (result.useOmpAgent !== undefined) tags.push(result.useOmpAgent ? "с обвязкой (OMP)" : "без обвязки");
   } else if (result.model.modelRef && result.model.modelRef !== result.model.name) {
     tags.push(result.model.modelRef);
   }
@@ -584,10 +601,11 @@ export function runListScore(run: { review_score?: number | null; review_possibl
   return `${run.review_score ?? 0}/${run.review_possible ?? run.reviewed_count * 40}`;
 }
 
-/** Какая обвязка была у прогона: раннер плюс флаг агентной среды, отдельного поля в БД нет. */
+/** Подпись обвязки у прогона; ключ и подпись живут в общем модуле — их читают и сервер, и UI. */
+export { harnessAxisLabel, harnessKey };
+
 export function harnessLabel(runnerKind: string | undefined, useOmpAgent: number) {
-  if (runnerKind === "pi") return "pi-среда";
-  return useOmpAgent === 1 ? "с обвязкой (OMP)" : "без обвязки";
+  return sharedHarnessLabel(runnerKind, useOmpAgent === 1);
 }
 
 export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string; activityStatus?: string; activeTaskName?: string | null }, runnerName?: string, ompMode?: string) {

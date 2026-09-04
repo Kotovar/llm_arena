@@ -33,6 +33,7 @@ import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
+import { harnessKey } from "@llm-arena/shared/harness";
 import { registerBatchRoutes } from "./routes/batches.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { type SliceQuery, tagSliceSchema } from "./routes/slice.js";
@@ -476,6 +477,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           },
           reasoningEffort: snapshot.reasoningEffort ?? null,
           profile: snapshot.profile?.name ? { name: snapshot.profile.name, context: snapshot.profile.parameters?.context ?? "auto" } : null,
+          runnerId: run.runner_id,
           runnerKind: snapshot.runner?.kind,
           useOmpAgent: run.use_omp_agent === 1,
           featured: featured.has(taskRun.id),
@@ -789,7 +791,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const slice = tagSliceSchema.parse(request.query);
     const judged = new Set(store.listPairReviews().map((review) => [review.first_task_run_id, review.second_task_run_id].join("|")));
     type Candidate = {
-      taskRunId: string; revisionId: string; modelId: string; modelKind: "local-gguf" | "cloud"; taskName: string;
+      taskRunId: string; revisionId: string; modelId: string; modelKind: "local-gguf" | "cloud"; harnessKey: string; taskName: string;
       answer: string; previewSha: string | null;
     };
     const candidates: Candidate[] = [];
@@ -808,6 +810,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         revisionId: row.task_revision_id,
         modelId: row.model_id,
         modelKind: store.getModel(row.model_id)?.kind ?? "cloud",
+        harnessKey: harnessKey(row.runner_id, row.use_omp_agent === 1),
         taskName: row.task_name,
         answer,
         previewSha: previewable ? selected!.resultSha : null,
@@ -817,7 +820,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     for (const candidate of candidates) byRevision.set(candidate.revisionId, [...(byRevision.get(candidate.revisionId) ?? []), candidate]);
     const pairs = [...byRevision.values()].flatMap((results) => results.flatMap((left, index) => results
       .slice(index + 1)
-      .filter((right) => right.modelId !== left.modelId
+      // Одна модель на pi и на OMP — это тоже пара: иначе обвязки нечем судить вслепую, а знание
+      // «где богатая обвязка» неизбежно двигает оценку.
+      .filter((right) => (right.modelId !== left.modelId || right.harnessKey !== left.harnessKey)
         // Локальная модель против облачной — сравнение разных весовых категорий, в слепую очередь не берём.
         && right.modelKind === left.modelKind
         // Либо оба запускаемые web-результаты, либо оба текстовые: иначе судить нечего.

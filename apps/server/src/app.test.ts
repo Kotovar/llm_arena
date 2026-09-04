@@ -1383,6 +1383,37 @@ describe("REST API", () => {
     store.close();
   });
 
+  // Судить обвязки по подписи нельзя: человек знает, где богатая обвязка, и достраивает разницу.
+  it("берёт в слепую пару одну модель на разных обвязках, но не на одинаковых", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-blind-harness-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Аквариум", kind: "prompt", prompt: "Сделай аквариум", tags: [] });
+    const model = store.createModel({ name: "Локальная", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: join(directory, "local.gguf"), alias: "local" });
+    const result = (runnerId: string, useOmpAgent: boolean, answer: string) => {
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId, resultMode: "text", useOmpAgent });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, answer), { task: task.currentRevision, model: { name: "Локальная" } });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: answer });
+      return taskRun;
+    };
+    result("omp", true, "Ответ OMP");
+    result("pi-local", false, "Ответ pi");
+
+    const pair = (await app.inject({ method: "GET", url: "/api/reviews/pair/next" })).json() as { remaining: number };
+    expect(pair.remaining).toBe(1);
+
+    // Два прогона на одной и той же обвязке парой не становятся: сравнивать было бы нечего.
+    result("pi-local", false, "Ещё ответ pi");
+    const same = (await app.inject({ method: "GET", url: "/api/reviews/pair/next" })).json() as { remaining: number };
+    expect(same.remaining).toBe(2);
+
+    await app.close();
+    store.close();
+  });
+
   it("подбирает слепую пару из сопоставимых моделей и не отдаёт её опознавательных признаков", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-blind-queue-"));
     directories.push(directory);
@@ -1670,6 +1701,60 @@ describe("REST API", () => {
 
     const all = await app.inject({ method: "GET", url: "/api/analytics/decision-points" });
     expect((all.json() as Array<{ sampleCount: number; tag: string | null }>)[0]).toMatchObject({ sampleCount: 6, tag: null });
+    await app.close();
+    store.close();
+  });
+
+  // Одна и та же модель на разных обвязках — это разные строки: иначе pi и OMP усредняются в одну.
+  it("делит статистику модели по обвязкам и считает сопоставимую скорость", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-harness-stats-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Промпт", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Модель", kind: "local-gguf", provider: "llama.cpp", modelRef: "m" });
+    const record = (runnerId: string, useOmpAgent: boolean, outputTokens: number, durationMs: number, harnessTokens: number) => {
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId, resultMode: "text", useOmpAgent });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, runnerId + String(useOmpAgent)), { task: { id: task.currentRevision.id } });
+      store.saveTaskRunResult(taskRun.id, {
+        finalAnswer: "A",
+        metrics: { outputTokens: { value: outputTokens }, totalDurationMs: { value: durationMs }, harnessPromptTokens: { value: harnessTokens } },
+      }, "completed");
+      store.setTaskRunCompletion(taskRun.id, "full");
+    };
+    record("omp", true, 600, 30_000, 23_000);
+    record("pi-local", false, 300, 10_000, 1_500);
+    // У pi есть повторы: медиана должна считаться по ним, а не по единственному замеру промпта.
+    const piRun = store.listRuns().find((item) => item.runner_id === "pi-local")!;
+    const piTaskRun = store.listTaskRuns(piRun.id)[0]!;
+    for (const [attempt, tokens] of [[0, 9_999], [1, 1_200], [2, 900]] as const) {
+      store.recordTaskAttempt(piTaskRun.id, attempt, { metrics: { outputTokens: { value: tokens }, totalDurationMs: { value: 30_000 } } }, "completed");
+    }
+
+    const byModel = (await app.inject({ method: "GET", url: "/api/analytics/model-stats" })).json() as Array<Record<string, unknown>>;
+    expect(byModel).toHaveLength(1);
+    expect(byModel[0]).toMatchObject({ attempted: 2, harnessKey: null, harnessLabel: null });
+
+    const byHarness = (await app.inject({ method: "GET", url: "/api/analytics/model-stats?groupBy=model-harness" })).json() as Array<Record<string, unknown>>;
+    expect(byHarness).toHaveLength(2);
+    expect(byHarness.map((row) => row.harnessKey).toSorted()).toEqual(["omp+agent", "pi-local"]);
+    const pi = byHarness.find((row) => row.harnessKey === "pi-local")!;
+    const omp = byHarness.find((row) => row.harnessKey === "omp+agent")!;
+    expect(pi.harnessLabel).toBe("pi-среда");
+    expect(omp.harnessLabel).toBe("OMP-среда");
+    // Скорость по стенным часам считается одинаково для обеих обвязок, поэтому её и сравнивают.
+    // Считается по повторам (1200/30с и 900/30с), а не по одиночному замеру промпта (было бы 30);
+    // прогревочная попытка 0 в счёт не идёт.
+    expect(pi.medianWallTokensPerSecond).toBe(40);
+    expect(omp.medianWallTokensPerSecond).toBe(20);
+    // Цена обвязки в токенах — измеренная, а не оценённая на глаз.
+    expect(pi.medianHarnessPromptTokens).toBe(1_500);
+    expect(omp.medianHarnessPromptTokens).toBe(23_000);
+    expect(pi.modelId).toBe(model.id);
+
     await app.close();
     store.close();
   });

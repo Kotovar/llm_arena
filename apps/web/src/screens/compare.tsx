@@ -5,6 +5,7 @@ import { api } from "../api.js";
 import { ExternalIcon } from "../icons.js";
 import { Empty, Page, SelectMenu, Status, useData } from "../shell.js";
 import type { Model, PairReview, Run, Runner, Task, TaskRun } from "../types.js";
+import { harnessAxisLabel } from "@llm-arena/shared/harness";
 import { betterResult, formatRelativeTime, formatReviewSummary, matchTaskRuns, reviewPossible, reviewSummary, reviewTotal, runModelName } from "../ui.js";
 import { metric, ResultPreview, stopPreviewTarget, usePreviewHeartbeat, useStopPreviewOnUnmount } from "./results.js";
 
@@ -156,7 +157,16 @@ export function ComparePage() {
   const leftRun = useQuery({ queryKey: ["compare", left], queryFn: () => api<Run>(`/runs/${left}`), enabled: Boolean(left) });
   const rightRun = useQuery({ queryKey: ["compare", right], queryFn: () => api<Run>(`/runs/${right}`), enabled: Boolean(right) });
   const rows = matchTaskRuns(leftRun.data?.taskRuns ?? [], rightRun.data?.taskRuns ?? []);
-  const label = (run: Run) => `${runModelName(run, models.data ?? [])} · ${runners.data?.find((runner) => runner.id === run.runner_id)?.name ?? run.runner_id} · ${formatRelativeTime(run.created_at)}`;
+  // Обвязка в подписи обязательна: два прогона одной модели на pi и на OMP иначе неразличимы.
+  // У облачных CLI обвязки нет — там различает имя раннера, и терять его нельзя.
+  const label = (run: Run) => {
+    const runner = runners.data?.find((item) => item.id === run.runner_id);
+    return [
+      runModelName(run, models.data ?? []),
+      harnessAxisLabel(runner?.kind, run.use_omp_agent === 1) ?? runner?.name ?? run.runner_id,
+      formatRelativeTime(run.created_at),
+    ].join(" · ");
+  };
   const runScore = (run?: Run) => formatReviewSummary(run ? reviewSummary(run.taskRuns?.map((task) => task.review) ?? [], run.taskRuns?.length ?? 0) : undefined);
 
   return <Page title="Сравнение результатов" eyebrow="Сравнение" intro="Промпты сопоставляются по сохранённой версии — разный порядок и разные наборы сравнению не мешают.">

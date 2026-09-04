@@ -22,6 +22,7 @@ function taskRun(id: string) {
 const runs = [
   { id: "run-1", status: "completed", model_id: "model-1", runner_id: "codex", result_mode: "text", created_at: "2026-08-01T10:00:00.000Z", error: null },
   { id: "run-2", status: "completed", model_id: "model-2", runner_id: "codex", result_mode: "text", created_at: "2026-08-01T11:00:00.000Z", error: null },
+  { id: "run-3", status: "completed", model_id: "model-2", runner_id: "pi-local", use_omp_agent: 0, result_mode: "text", created_at: "2026-08-01T12:00:00.000Z", error: null },
 ];
 
 let posted: Array<{ url: string; body: unknown }>;
@@ -62,12 +63,13 @@ beforeEach(() => {
     }
     const body = url === "/api/runs" ? runs
       : url === "/api/models" ? [{ id: "model-1", name: "Кальмар", kind: "cloud", provider: "openai", modelRef: "squid" }, { id: "model-2", name: "Осьминог", kind: "cloud", provider: "openai", modelRef: "octopus" }]
-      : url === "/api/runners" ? [{ id: "codex", name: "Codex", kind: "codex", exec: ["codex"], default: true }]
+      : url === "/api/runners" ? [{ id: "codex", name: "Codex", kind: "codex", exec: ["codex"], default: true }, { id: "pi-local", name: "pi-среда", kind: "pi", exec: ["pi"] }]
       : url === "/api/reviews/pair" ? []
       : url.startsWith("/api/reviews/pair/next") ? blindPair
       : url === "/api/tasks" ? [{ id: "task-1", tags: ["код"], currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["код"], images: [] } }]
       : url === "/api/runs/run-1" ? { ...runs[0], taskRuns: [taskRun("task-run-1")] }
       : url === "/api/runs/run-2" ? { ...runs[1], taskRuns: [taskRun("task-run-2")] }
+      : url === "/api/runs/run-3" ? { ...runs[2], taskRuns: [taskRun("task-run-3")] }
       : [];
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   }));
@@ -159,6 +161,17 @@ describe("ручное сравнение запусков", () => {
 
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]!.body).toMatchObject({ leftTaskRunId: "task-run-1", rightTaskRunId: "task-run-2", winner: "tie" });
+  });
+
+  // Подпись прогона должна различать обвязки локальной модели и не терять имя облачного CLI.
+  it("подписывает прогон обвязкой, а облачный — именем раннера", async () => {
+    await renderInApp(<ComparePage />, "/compare?left=run-1&right=run-3");
+    await waitFor(() => expect(document.querySelector(".compare-table header")).toBeTruthy());
+
+    const header = document.querySelector(".compare-table header")!;
+    expect(header.textContent).toContain("Codex");
+    expect(header.textContent).toContain("pi-среда");
+    expect(header.textContent).not.toContain("без обвязки");
   });
 
   it("открывается сразу на ручном сравнении, когда запуск пришёл ссылкой", async () => {

@@ -117,6 +117,8 @@ type LeaderboardTaskRunRow = {
   task_run_result_json: string | null;
   model_id: string;
   model_ref: string | null;
+  runner_id: string;
+  use_omp_agent: number;
   tags_json: string | null;
   correctness: number | null;
   code_quality: number | null;
@@ -133,6 +135,8 @@ type CompletedResultRow = {
   snapshot_json: string;
   model_id: string;
   model_ref: string | null;
+  runner_id: string;
+  use_omp_agent: number;
   task_name: string;
   task_prompt: string;
 };
@@ -148,6 +152,9 @@ type DecisionRow = {
   run_status: RunStatus;
   model_id: string;
   execution_profile_id: string | null;
+  /** Обвязка выводится из этой пары: отдельной колонки под неё нет. */
+  runner_id: string;
+  use_omp_agent: number;
   tags_json: string;
   correctness: number | null;
   code_quality: number | null;
@@ -879,6 +886,7 @@ export function createStore(filename: string) {
                task_runs.broken_at AS task_run_broken_at, task_runs.completion AS task_run_completion,
                task_runs.stop_reason AS task_run_stop_reason, task_runs.result_json AS task_run_result_json,
                benchmark_runs.model_id, benchmark_runs.model_ref,
+               benchmark_runs.runner_id, benchmark_runs.use_omp_agent,
                tasks.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following,
                json_extract(task_runs.result_json, '$.metrics.generationTokensPerSecond.value') AS generation_tps,
@@ -963,6 +971,7 @@ export function createStore(filename: string) {
       return all<CompletedResultRow>(`
         SELECT task_runs.id, task_runs.task_revision_id, task_runs.result_json, task_runs.snapshot_json,
                benchmark_runs.model_id, benchmark_runs.model_ref,
+               benchmark_runs.runner_id, benchmark_runs.use_omp_agent,
                task_revisions.name AS task_name, task_revisions.prompt AS task_prompt
         FROM task_runs
         JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
@@ -976,6 +985,7 @@ export function createStore(filename: string) {
       return all<DecisionRow>(`
         SELECT task_runs.id, task_runs.status, task_runs.broken_at, task_runs.completion, task_runs.stop_reason, task_runs.result_json,
                benchmark_runs.id AS run_id, benchmark_runs.status AS run_status, benchmark_runs.model_id, benchmark_runs.execution_profile_id,
+               benchmark_runs.runner_id, benchmark_runs.use_omp_agent,
                tasks.tags_json,
                reviews.correctness, reviews.code_quality, reviews.ui_quality, reviews.instruction_following
         FROM task_runs
