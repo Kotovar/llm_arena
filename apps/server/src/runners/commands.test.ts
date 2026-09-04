@@ -1,9 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { buildClaudeCommand, buildCodexCommand, buildOmpCommand, buildOpenCodeCommand } from "./commands.js";
+import { buildClaudeCommand, buildCodexCommand, buildOmpCommand, buildOpenCodeCommand, buildPiCommand } from "./commands.js";
 
 const direct = ["agent"];
 
 describe("verified non-interactive commands", () => {
+  // Смысл раннера — в отсутствии обвязки: любой подхваченный из системы скилл ломает замер.
+  it("builds a clean pi command with nothing picked up from the system", () => {
+    expect(buildPiCommand(["pi"], "ornith", "Do it")).toEqual([
+      "pi",
+      "--mode",
+      "json",
+      "--print",
+      "--no-session",
+      "--no-extensions",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-context-files",
+      "--no-themes",
+      "--no-approve",
+      "--model",
+      "arena/ornith",
+      "Do it",
+    ]);
+    expect(buildPiCommand(["pi"], "ornith", "Do it", ["/tmp/shot.png"])).toContain("@/tmp/shot.png");
+  });
+
   it("builds OMP JSON mode with a dynamic llama.cpp model", () => {
     expect(buildOmpCommand(direct, "/tmp/work", "ornith", "Do it")).toEqual([
       "agent",

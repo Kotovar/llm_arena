@@ -1,7 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput, parseOpenCodeOutput } from "./parsers.js";
+import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput, parseOpenCodeOutput, parsePiOutput } from "./parsers.js";
 
 describe("runner output parsers", () => {
+  // pi отдаёт тот же словарь событий, что и OMP, но идентификатор сессии лежит в `session.id`,
+  // а `duration` у сообщений нет — скорость считается по стенным часам и помечается как оценка.
+  it("reads pi output with its own session key and wall-clock speed", () => {
+    const output = [
+      JSON.stringify({ type: "session", id: "pi-session" }),
+      JSON.stringify({
+        type: "agent_end",
+        messages: [
+          { role: "assistant", content: "Working", usage: { input: 10, cacheRead: 0, output: 5 } },
+          { role: "assistant", content: [{ type: "text", text: "Done" }], usage: { input: 8, cacheRead: 60, output: 15 }, responseId: "resp-1" },
+        ],
+      }),
+    ].join("\n");
+
+    const result = parsePiOutput(output, 4_000, 0);
+    expect(result.finalAnswer).toBe("Done");
+    expect(result.sessionId).toBe("pi-session");
+    expect(result.requestId).toBe("resp-1");
+    expect(result.metrics.outputTokens.value).toBe(20);
+    expect(result.metrics.modelRequests.value).toBe(2);
+    expect(result.metrics.generationTokensPerSecond).toMatchObject({ value: 5, source: "estimated" });
+    expect(result.metrics.ttftMs).toMatchObject({ value: null, source: "unavailable" });
+    expect(result.metrics.finalContextTokens.value).toBe(83);
+    // Цена обвязки — вход первого обращения, до того как в контекст попали результаты инструментов.
+    expect(result.metrics.harnessPromptTokens.value).toBe(10);
+  });
+
+  it("rejects a terminal pi provider error", () => {
+    const output = JSON.stringify({ type: "agent_end", errorMessage: "Server is not running", messages: [] });
+    expect(() => parsePiOutput(output, 1_000, 0)).toThrow(/Server is not running/u);
+  });
+
   it("extracts OMP final text and cumulative assistant usage", () => {
     const output = [
       JSON.stringify({ type: "session", sessionId: "omp-session" }),
@@ -21,6 +53,7 @@ describe("runner output parsers", () => {
     expect(result.metrics.cachedInputTokens.value).toBe(100);
     expect(result.metrics.modelRequests.value).toBe(2);
     expect(result.metrics.generationTokensPerSecond.value).toBe(10);
+    expect(result.metrics.harnessPromptTokens.value).toBe(20 - 8);
     // Контекст в финале — только последнее обращение (8 + 60 + 3), а не сумма по всем.
     expect(result.metrics.finalContextTokens.value).toBe(71);
   });

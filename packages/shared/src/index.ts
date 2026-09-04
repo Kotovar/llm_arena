@@ -19,7 +19,7 @@ export {
 
 export const taskKindSchema = z.enum(["prompt", "coding"]);
 export const runStatusSchema = z.enum(["pending", "running", "completed", "failed", "cancelled", "agent_loop"]);
-export const runnerKindSchema = z.enum(["llama-chat", "omp", "claude-code", "codex", "opencode"]);
+export const runnerKindSchema = z.enum(["llama-chat", "omp", "pi", "claude-code", "codex", "opencode"]);
 export const resultShaSchema = z.string().trim().regex(/^[0-9a-f]{40,64}$/i, "Invalid result SHA");
 export const selectResultVersionSchema = z.object({ resultSha: resultShaSchema }).strict();
 export const previewResultVersionSchema = z.object({ resultSha: resultShaSchema.optional() }).strict();
@@ -224,6 +224,9 @@ export const normalizedMetricsSchema = z.object({
   cachedInputTokens: measuredSchema,
   outputTokens: measuredSchema,
   modelRequests: measuredSchema,
+  // Цена обвязки: входные токены первого обращения к модели — системный промпт и схемы
+  // инструментов до того, как в контекст попало хоть что-то от самой задачи.
+  harnessPromptTokens: measuredSchema,
   // Сколько токенов держал контекст в последнем обращении к модели и какой он был длины.
   finalContextTokens: measuredSchema,
   contextWindowTokens: measuredSchema,

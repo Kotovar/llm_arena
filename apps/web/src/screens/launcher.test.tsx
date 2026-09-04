@@ -45,6 +45,78 @@ async function pick(user: ReturnType<typeof userEvent.setup>, label: string | Re
   await user.click(await screen.findByRole("button", { name: option }));
 }
 
+// Третья точка оси обвязок: та же модель и тот же промпт, но обвязки почти нет.
+describe("среда локальной модели", () => {
+  beforeEach(() => {
+    payloads["/api/models"] = [{ id: "local-1", name: "Ornith", kind: "local-gguf", provider: "llama.cpp", modelRef: "ornith", path: "/models/ornith.gguf", alias: "ornith", capabilities: { toolUse: true, vision: false, reasoning: false }, mmprojPath: null }];
+    payloads["/api/profiles"] = [{ id: "profile-1", modelId: "local-1", name: "Automatic", revision: 1, createdAt: "2026-09-01T00:00:00Z", parameters: {} }];
+    payloads["/api/runners"] = [
+      { id: "omp", name: "OMP", kind: "omp", exec: ["omp"], default: true },
+      { id: "pi-local", name: "pi-среда", kind: "pi", exec: ["pi"], default: true },
+      { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"] },
+    ];
+  });
+
+  // Успешный запуск уводит на страницу прогона, поэтому на каждую обвязку — свой рендер.
+  async function launchWith(harness?: string) {
+    const user = userEvent.setup();
+    await renderInApp(<Launcher />);
+    await screen.findByText("Среда локальной модели");
+    if (harness) await user.click(screen.getByRole("radio", { name: harness }));
+    await user.click(screen.getByRole("button", { name: /Запустить/u }));
+    await waitFor(() => expect(runBodies).toHaveLength(1));
+    return runBodies[0];
+  }
+
+  it("по умолчанию идёт в OMP с его агентной средой", async () => {
+    expect(await launchWith()).toMatchObject({ runnerId: "omp", useOmpAgent: true });
+  });
+
+  // pi — не агентная среда OMP: флаг должен остаться снятым, иначе обвязки в замере смешаются.
+  it("отправляет pi своим раннером и без флага агентной среды OMP", async () => {
+    expect(await launchWith("pi-среда")).toMatchObject({ runnerId: "pi-local", useOmpAgent: false });
+  });
+
+  it("оставляет «без обвязки» на OMP, но с выключенной средой", async () => {
+    expect(await launchWith("Без обвязки")).toMatchObject({ runnerId: "omp", useOmpAgent: false });
+  });
+
+  // Раннеры и модели грузятся независимо: если применить параметры повтора до прихода раннеров,
+  // pi-прогон молча уедет на другую обвязку — pi-local просто не найдётся в пустом списке.
+  it("восстанавливает обвязку pi при повторе, даже когда список раннеров пришёл позже", async () => {
+    const user = userEvent.setup();
+    let releaseRunners: () => void = () => {};
+    const runnersReady = new Promise<void>((resolve) => { releaseRunners = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/runs" && init?.method === "POST") {
+        runBodies.push(JSON.parse(String(init.body)));
+        return new Response(JSON.stringify({ id: "run-1" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url === "/api/runners") await runnersReady;
+      return new Response(JSON.stringify(payloads[url] ?? {}), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    await renderInApp(<Launcher />, "/?tasks=task-1&model=local-1&runner=pi-local&omp=false&mode=web");
+    await screen.findByText("Аквариум");
+    releaseRunners();
+
+    await waitFor(() => expect((screen.getByRole("radio", { name: "pi-среда" }) as HTMLInputElement).checked).toBe(true));
+    await user.click(screen.getByRole("button", { name: /Запустить/u }));
+
+    await waitFor(() => expect(runBodies).toHaveLength(1));
+    expect(runBodies[0]).toMatchObject({ runnerId: "pi-local", useOmpAgent: false });
+  });
+
+  it("не даёт выбрать обвязку модели без поддержки инструментов", async () => {
+    payloads["/api/models"] = [{ ...(payloads["/api/models"] as Record<string, unknown>[])[0]!, capabilities: { toolUse: false, vision: false, reasoning: false } }];
+    await renderInApp(<Launcher />);
+    await screen.findByText("Среда локальной модели");
+
+    expect(screen.getByRole("radio", { name: "pi-среда" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("radio", { name: "OMP-среда" }).hasAttribute("disabled")).toBe(true);
+  });
+});
+
 describe("отметки о готовых результатах", () => {
   it("показывает, что по промпту уже есть результат выбранной модели", async () => {
     const user = userEvent.setup();

@@ -12,7 +12,7 @@ import { PromptPicker } from "./prompt-picker.js";
 /** Параметры прогона одной модели в батче: те же, что подобрал бы лаунчер для неё одной. */
 function batchModelEntry(model: Model, runners: Runner[], profiles: Profile[], resultMode: "text" | "web") {
   const useOmpAgent = model.kind === "local-gguf" && model.capabilities.toolUse && runners.some((runner) => runner.kind === "omp");
-  const runner = chooseRunner(model, [resultMode === "web" ? "coding" : "prompt"], runners, useOmpAgent);
+  const runner = chooseRunner(model, [resultMode === "web" ? "coding" : "prompt"], runners, useOmpAgent ? "omp" : "bare");
   if (!runner) return undefined;
   return {
     modelId: model.id,

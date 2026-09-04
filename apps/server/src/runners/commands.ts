@@ -17,6 +17,31 @@ export function buildOmpCommand(exec: readonly string[], workspace: string, mode
   ];
 }
 
+/**
+ * Чистый pi: флаги снимают всё, что он подхватил бы из системы и репозитория — расширения,
+ * скиллы, шаблоны промптов, AGENTS.md/CLAUDE.md рабочего каталога, темы, доверие к проектным
+ * настройкам. Остаются четыре встроенных инструмента и системный промпт.
+ */
+export function buildPiCommand(exec: readonly string[], modelAlias: string, prompt: string, imagePaths: readonly string[] = []): string[] {
+  return [
+    ...exec,
+    "--mode",
+    "json",
+    "--print",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--no-themes",
+    "--no-approve",
+    "--model",
+    `arena/${modelAlias}`,
+    ...imagePaths.map((path) => `@${path}`),
+    prompt,
+  ];
+}
+
 export function buildClaudeCommand(exec: readonly string[], model: string, effort: string | null | undefined, prompt: string): string[] {
   return [
     ...exec,

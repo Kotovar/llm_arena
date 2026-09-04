@@ -40,14 +40,18 @@ export function cloudProviderCatalogKind(provider: string) {
   return undefined;
 }
 
+/** Обвязка локальной модели: OMP, минимальный агент pi или её отсутствие. */
+export type Harness = "omp" | "pi" | "bare";
+
 export function chooseRunner(
   model: Pick<Model, "kind" | "provider" | "capabilities">,
   taskKinds: Task["currentRevision"]["kind"][],
   runners: Runner[],
-  useOmpAgent = false,
+  harness: Harness = "bare",
 ) {
   const kind = model.kind === "local-gguf"
-    ? taskKinds.includes("coding") || useOmpAgent ? model.capabilities.toolUse ? "omp" : undefined : "llama-chat"
+    ? harness === "pi" ? model.capabilities.toolUse ? "pi" : undefined
+      : taskKinds.includes("coding") || harness === "omp" ? model.capabilities.toolUse ? "omp" : undefined : "llama-chat"
     : cloudProviderCatalogKind(model.provider) === "claude" ? "claude-code"
       : cloudProviderCatalogKind(model.provider) === "codex" ? "codex"
         : cloudProviderCatalogKind(model.provider) === "opencode" ? "opencode"
@@ -266,13 +270,15 @@ export function ompUnavailableReason(hasOmpRunner: boolean, supportsTools: boole
   return undefined;
 }
 
-export function launchModeNote({ kind, resultMode, usingOmpAgent, ompUnavailable }: {
+export function launchModeNote({ kind, resultMode, usingOmpAgent, usingPi = false, ompUnavailable }: {
   kind: Model["kind"] | undefined;
   resultMode: "text" | "web";
   usingOmpAgent: boolean;
+  usingPi?: boolean;
   ompUnavailable?: string | undefined;
 }) {
   if (kind === "cloud" && resultMode === "web") return "Готовое web-приложение будет создано выбранным CLI.";
+  if (usingPi) return "pi: четыре инструмента и системный промпт на 3 КБ — видно, что умеет сама модель.";
   if (usingOmpAgent) return "OMP: skills, расширения и настроенные MCP.";
   if (ompUnavailable) return ompUnavailable;
   return resultMode === "web" ? "Изолированный OMP: без skills, расширений и MCP." : "Ответ модели без рабочей директории";
@@ -578,7 +584,9 @@ export function runListScore(run: { review_score?: number | null; review_possibl
   return `${run.review_score ?? 0}/${run.review_possible ?? run.reviewed_count * 40}`;
 }
 
-export function ompModeLabel(useOmpAgent: number) {
+/** Какая обвязка была у прогона: раннер плюс флаг агентной среды, отдельного поля в БД нет. */
+export function harnessLabel(runnerKind: string | undefined, useOmpAgent: number) {
+  if (runnerKind === "pi") return "pi-среда";
   return useOmpAgent === 1 ? "с обвязкой (OMP)" : "без обвязки";
 }
 

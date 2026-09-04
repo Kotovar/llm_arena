@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import type { NormalizedRunResult, RunnerDefinition, RunnerKind, TaskImage } from "@llm-arena/shared";
 import { type OwnedProcess, ProcessSupervisor } from "../process-supervisor.js";
-import { buildClaudeCommand, buildCodexCommand, buildOmpCommand, buildOpenCodeCommand } from "./commands.js";
-import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput, parseOpenCodeOutput } from "./parsers.js";
+import { buildClaudeCommand, buildCodexCommand, buildOmpCommand, buildOpenCodeCommand, buildPiCommand } from "./commands.js";
+import { parseClaudeOutput, parseCodexOutput, parseLlamaResponse, parseOmpOutput, parseOpenCodeOutput, parsePiOutput } from "./parsers.js";
+import { buildPiModelsConfig, piAgentDir, writePiModelsConfig } from "./pi-provider.js";
 
 export type RunnerInput = {
   definition: RunnerDefinition;
@@ -14,6 +15,9 @@ export type RunnerInput = {
   taskKind?: "prompt" | "coding";
   useOmpAgent?: boolean;
   taskDataDir: string;
+  /** Окно контекста живого llama-server: pi должен знать его, иначе компактизует не вовремя. */
+  contextTokens?: number;
+  vision?: boolean;
   timeoutMs: number;
   signal: AbortSignal;
   baseUrl?: string;
@@ -80,10 +84,13 @@ class CliRunner implements ModelRunner {
     private readonly parser: Parser,
     private readonly promptOnStdin: boolean,
     private readonly extraEnv?: (input: RunnerInput) => NodeJS.ProcessEnv,
+    /** Подготовка до spawn: pi читает конфигурацию провайдера с диска, а не из аргументов. */
+    private readonly prepare?: (input: RunnerInput) => void,
   ) {}
 
   async run(input: RunnerInput): Promise<NormalizedRunResult> {
     if (input.signal.aborted) throw new Error("Run cancelled before process start");
+    this.prepare?.(input);
     const stdout = createStdoutBuffer();
     let stderr = "";
     let idleTimer: NodeJS.Timeout | undefined;
@@ -205,6 +212,27 @@ export function createRunner(kind: RunnerKind, supervisor: ProcessSupervisor): M
           LLAMA_CPP_BASE_URL: input.baseUrl,
           PI_CODING_AGENT_DIR: `${input.taskDataDir}/omp`,
         }),
+      );
+    case "pi":
+      return new CliRunner(
+        supervisor,
+        (input) => buildPiCommand(input.definition.exec, input.modelRef, input.prompt, input.images?.map((image) => image.path)),
+        parsePiOutput,
+        false,
+        (input) => ({
+          PI_CODING_AGENT_DIR: piAgentDir(input.taskDataDir),
+          // Без офлайна прогон зависит от сети: pi проверяет обновления на старте.
+          PI_OFFLINE: "1",
+        }),
+        (input) => {
+          if (!input.baseUrl) throw new Error("pi requires a running llama.cpp base URL");
+          writePiModelsConfig(input.taskDataDir, buildPiModelsConfig({
+            baseUrl: input.baseUrl,
+            modelAlias: input.modelRef,
+            ...(input.contextTokens ? { contextTokens: input.contextTokens } : {}),
+            ...(input.vision ? { vision: true } : {}),
+          }));
+        },
       );
     case "claude-code":
       return new CliRunner(

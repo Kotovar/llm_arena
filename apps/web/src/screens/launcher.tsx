@@ -5,7 +5,7 @@ import { api } from "../api.js";
 import { ArrowRightIcon } from "../icons.js";
 import { Page, Panel, SelectMenu, Status, useData, useHotkey, requestNotifications } from "../shell.js";
 import type { GalleryResult, Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
-import { chooseRunner, cloudProviderCatalogKind, galleryCoverage, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel } from "../ui.js";
+import { chooseRunner, cloudProviderCatalogKind, galleryCoverage, type Harness, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, promptCountLabel, reasoningEffortsForModel } from "../ui.js";
 import { PromptPicker } from "./prompt-picker.js";
 
 export function Launcher() {
@@ -23,7 +23,7 @@ export function Launcher() {
   const appliedTask = useRef<string | undefined>(undefined);
   const [resultMode, setResultMode] = useState<"text" | "web">(requested.mode === "text" ? "text" : "web");
   const [runnerOverride, setRunnerOverride] = useState("");
-  const [useOmpAgent, setUseOmpAgent] = useState(true);
+  const [harness, setHarness] = useState<Harness>("omp");
   const [cloudModelRef, setCloudModelRef] = useState("");
   const [profileId, setProfileId] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
@@ -46,7 +46,9 @@ export function Launcher() {
   const appliedRun = useRef(false);
   const [repeatWarning, setRepeatWarning] = useState("");
   useEffect(() => {
-    if (appliedRun.current || !requested.model || !models.data?.length) return;
+    // Раннеры ждём наравне с моделями: по ним восстанавливается обвязка, а запросы независимы —
+    // без ожидания повтор pi-прогона молча уезжал бы на другую обвязку.
+    if (appliedRun.current || !requested.model || !models.data?.length || !runners.data) return;
     appliedRun.current = true;
     // Модель могли отключить уже после того прогона. Её id нельзя оставлять в выборе: select встал бы
     // на несуществующую опцию, а кнопка запуска молча выключилась. Откатываемся на модель по умолчанию
@@ -58,12 +60,13 @@ export function Launcher() {
     setModelId(requested.model);
     setProfileId(requested.profile ?? "");
     setRunnerOverride(requested.runner ?? "");
-    setUseOmpAgent(requested.omp !== false);
+    // Обвязку восстанавливаем по раннеру прошлого прогона: флаг `omp` не отличает pi от голой модели.
+    setHarness(runners.data?.find((runner) => runner.id === requested.runner)?.kind === "pi" ? "pi" : requested.omp === false ? "bare" : "omp");
     setCloudModelRef(requested.ref ?? "");
     setReasoningEffort(requested.effort ?? "");
     setRepeatCount(requested.repeat ?? 1);
     setWarmupAttempt(requested.warmup === true);
-  }, [requested, models.data]);
+  }, [requested, models.data, runners.data]);
 
   const active = runs.data?.filter((run) => run.status === "running" || run.status === "pending") ?? [];
   const selectedModelId = modelId || models.data?.[0]?.id || "";
@@ -77,9 +80,12 @@ export function Launcher() {
   const isLocalModel = selectedModel?.kind === "local-gguf";
   const hasImages = selectedTasks.some((task) => task.currentRevision.images.length > 0);
   const ompRunner = runners.data?.find((runner) => runner.kind === "omp");
-  const usingOmpAgent = isLocalModel && useOmpAgent && Boolean(ompRunner) && Boolean(selectedModel?.capabilities.toolUse);
-  const ompUnavailable = isLocalModel ? ompUnavailableReason(Boolean(ompRunner), Boolean(selectedModel?.capabilities.toolUse)) : undefined;
-  const automaticRunner = selectedModel ? chooseRunner(selectedModel, [resultMode === "web" ? "coding" : "prompt"], runners.data ?? [], usingOmpAgent) : undefined;
+  const piRunner = runners.data?.find((runner) => runner.kind === "pi");
+  const toolUse = Boolean(selectedModel?.capabilities.toolUse);
+  const usingOmpAgent = isLocalModel && harness === "omp" && Boolean(ompRunner) && toolUse;
+  const usingPi = isLocalModel && harness === "pi" && Boolean(piRunner) && toolUse;
+  const ompUnavailable = isLocalModel ? ompUnavailableReason(Boolean(ompRunner), toolUse) : undefined;
+  const automaticRunner = selectedModel ? chooseRunner(selectedModel, [resultMode === "web" ? "coding" : "prompt"], runners.data ?? [], usingPi ? "pi" : usingOmpAgent ? "omp" : "bare") : undefined;
   const runnerChoices = automaticRunner && (!hasImages || automaticRunner.kind !== "claude-code")
     ? (runners.data ?? []).filter((runner) => runner.kind === automaticRunner.kind)
     : [];
@@ -111,11 +117,11 @@ export function Launcher() {
   const startRun = () => { void requestNotifications(); launch.mutate(); };
   useHotkey("ctrl+Enter", canLaunch ? startRun : undefined);
   const summary = launchSummary({ modelName: selectedModel?.name, taskCount: selectedTasks.length, runnerName: selectedRunner?.name, resultMode });
-  const modeNote = launchModeNote({ kind: selectedModel?.kind, resultMode, usingOmpAgent, ompUnavailable });
+  const modeNote = launchModeNote({ kind: selectedModel?.kind, resultMode, usingOmpAgent, usingPi, ompUnavailable });
 
   return <Page title="Запустить проверку модели" eyebrow="Новый запуск" intro="Выберите модель, один или несколько промптов. Остальные параметры приложение подберёт автоматически.">
     <section className="launch-card" data-empty-models={models.data?.length === 0}>
-      <div className="launch-step" data-ready={Boolean(selectedModel)}><span>1</span><div className="launch-fields"><label>Подключение<SelectMenu label="Подключение" value={selectedModelId} disabled={!models.data?.length} placeholder="Выберите модель" onSelect={(value) => { setModelId(value); setCloudModelRef(""); setProfileId(""); setRunnerOverride(""); setUseOmpAgent(true); setReasoningEffort(""); }} options={[{ value: "", label: "Выберите модель" }, ...(models.data ?? []).map((model) => ({ value: model.id, label: `${model.name} · ${model.provider}` }))]} /></label>{selectedModel?.kind === "local-gguf" ? <label>Профиль запуска<SelectMenu label="Профиль запуска" value={selectedProfile?.id ?? ""} onSelect={setProfileId} options={modelProfiles.map((profile) => ({ value: profile.id, label: `${profile.name} · версия ${profile.revision}` }))} /></label> : null}{selectedModel?.kind === "cloud" ? <label>Конкретная модель<SelectMenu label="Конкретная модель" value={effectiveModelRef} onSelect={(value) => { setCloudModelRef(value); setReasoningEffort(""); }} options={[...(providerCatalog?.models.some((option) => option.id === selectedModel.modelRef) ? [] : [{ value: selectedModel.modelRef ?? "", label: selectedModel.modelRef ?? "" }]), ...(providerCatalog?.models ?? []).map((option) => ({ value: option.id, label: modelOptionLabel(option) }))]} /></label> : null}{reasoningOptions.length ? <label>Уровень обдумывания<SelectMenu label="Уровень обдумывания" value={effectiveEffort} onSelect={setReasoningEffort} options={[{ value: "", label: "По умолчанию" }, ...reasoningOptions.map((effort) => ({ value: effort, label: effort }))]} /><small>Показывается только для моделей с отмеченной поддержкой reasoning.</small></label> : null}</div><Link to="/models">Подключить модель</Link></div>
+      <div className="launch-step" data-ready={Boolean(selectedModel)}><span>1</span><div className="launch-fields"><label>Подключение<SelectMenu label="Подключение" value={selectedModelId} disabled={!models.data?.length} placeholder="Выберите модель" onSelect={(value) => { setModelId(value); setCloudModelRef(""); setProfileId(""); setRunnerOverride(""); setHarness("omp"); setReasoningEffort(""); }} options={[{ value: "", label: "Выберите модель" }, ...(models.data ?? []).map((model) => ({ value: model.id, label: `${model.name} · ${model.provider}` }))]} /></label>{selectedModel?.kind === "local-gguf" ? <label>Профиль запуска<SelectMenu label="Профиль запуска" value={selectedProfile?.id ?? ""} onSelect={setProfileId} options={modelProfiles.map((profile) => ({ value: profile.id, label: `${profile.name} · версия ${profile.revision}` }))} /></label> : null}{selectedModel?.kind === "cloud" ? <label>Конкретная модель<SelectMenu label="Конкретная модель" value={effectiveModelRef} onSelect={(value) => { setCloudModelRef(value); setReasoningEffort(""); }} options={[...(providerCatalog?.models.some((option) => option.id === selectedModel.modelRef) ? [] : [{ value: selectedModel.modelRef ?? "", label: selectedModel.modelRef ?? "" }]), ...(providerCatalog?.models ?? []).map((option) => ({ value: option.id, label: modelOptionLabel(option) }))]} /></label> : null}{reasoningOptions.length ? <label>Уровень обдумывания<SelectMenu label="Уровень обдумывания" value={effectiveEffort} onSelect={setReasoningEffort} options={[{ value: "", label: "По умолчанию" }, ...reasoningOptions.map((effort) => ({ value: effort, label: effort }))]} /><small>Показывается только для моделей с отмеченной поддержкой reasoning.</small></label> : null}</div><Link to="/models">Подключить модель</Link></div>
       <div className="launch-step prompt-step" data-ready={selectedTasks.length > 0}><span>2</span><PromptPicker tasks={tasks.data} selectedIds={selectedTaskIds} setSelectedIds={setSelectedTaskIds} coverage={coverage} modelId={selectedModelId} /></div>
       <div className="launch-step" data-ready={Boolean(selectedRunner)}>
         <span>3</span>
@@ -127,13 +133,15 @@ export function Launcher() {
           </fieldset>
           {isLocalModel ? <fieldset className="result-mode">
             <legend>Среда локальной модели</legend>
-            <label><input type="radio" name="localPromptMode" checked={usingOmpAgent} onChange={() => { setUseOmpAgent(true); setRunnerOverride(""); }} disabled={!ompRunner || !selectedModel?.capabilities.toolUse} />OMP-среда</label>
-            <label><input type="radio" name="localPromptMode" checked={!usingOmpAgent} onChange={() => { setUseOmpAgent(false); setRunnerOverride(""); }} />{resultMode === "web" ? "Без обвязки" : "Голая модель"}</label>
+            <label><input type="radio" name="localPromptMode" checked={usingOmpAgent} onChange={() => { setHarness("omp"); setRunnerOverride(""); }} disabled={!ompRunner || !toolUse} />OMP-среда</label>
+            {/* Третья точка оси: тот же промпт и та же модель, но обвязки почти нет. */}
+            <label><input type="radio" name="localPromptMode" checked={usingPi} onChange={() => { setHarness("pi"); setRunnerOverride(""); }} disabled={!piRunner || !toolUse} />pi-среда</label>
+            <label><input type="radio" name="localPromptMode" checked={!usingOmpAgent && !usingPi} onChange={() => { setHarness("bare"); setRunnerOverride(""); }} />{resultMode === "web" ? "Без обвязки" : "Голая модель"}</label>
           </fieldset> : null}
         </div>
         <span className="launch-mode-note">{modeNote}</span>
       </div>
-      <details className="advanced"><summary>Дополнительные настройки</summary><label>Способ запуска<SelectMenu label="Способ запуска" value={runnerChoices.some((runner) => runner.id === runnerOverride) ? runnerOverride : ""} onSelect={(value) => { const runner = runnerChoices.find((item) => item.id === value); setUseOmpAgent(isLocalModel && runner?.kind === "omp"); setRunnerOverride(value); }} options={[{ value: "", label: `Автоматически: ${automaticRunner?.name ?? "не определён"}` }, ...runnerChoices.map((runner) => ({ value: runner.id, label: runner.name }))]} /></label><label>Повторов каждого промпта<SelectMenu label="Повторов каждого промпта" value={String(repeatCount)} onSelect={(value) => setRepeatCount(Number(value))} options={[1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: String(value) }))} /><small>Повторы измеряют разброс скорости: ответ и оценка остаются от первого прогона.</small></label>{repeatCount > 1 ? <label className="checkbox-row"><input type="checkbox" checked={warmupAttempt} onChange={(event) => setWarmupAttempt(event.currentTarget.checked)} />Прогревочный прогон перед замерами</label> : null}</details>
+      <details className="advanced"><summary>Дополнительные настройки</summary><label>Способ запуска<SelectMenu label="Способ запуска" value={runnerChoices.some((runner) => runner.id === runnerOverride) ? runnerOverride : ""} onSelect={(value) => { const runner = runnerChoices.find((item) => item.id === value); setHarness(!isLocalModel ? "bare" : runner?.kind === "omp" ? "omp" : runner?.kind === "pi" ? "pi" : "bare"); setRunnerOverride(value); }} options={[{ value: "", label: `Автоматически: ${automaticRunner?.name ?? "не определён"}` }, ...runnerChoices.map((runner) => ({ value: runner.id, label: runner.name }))]} /></label><label>Повторов каждого промпта<SelectMenu label="Повторов каждого промпта" value={String(repeatCount)} onSelect={(value) => setRepeatCount(Number(value))} options={[1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: String(value) }))} /><small>Повторы измеряют разброс скорости: ответ и оценка остаются от первого прогона.</small></label>{repeatCount > 1 ? <label className="checkbox-row"><input type="checkbox" checked={warmupAttempt} onChange={(event) => setWarmupAttempt(event.currentTarget.checked)} />Прогревочный прогон перед замерами</label> : null}</details>
       <div className="launch-footer"><dl className="launch-summary" aria-label="Параметры запуска">{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl><div className="launch-action"><div><strong>{selectedTasks.length ? promptCountLabel(selectedTasks.length) : "Выберите хотя бы один промпт"}</strong><small>{imageError ?? (selectedRunner ? `через ${selectedRunner.name}` : "Добавьте модель и промпт")}</small></div><button className="primary launch-button" title="Ctrl+Enter" onClick={startRun} disabled={!canLaunch}>{launch.isPending ? "Создаём запуск…" : "Запустить"}<ArrowRightIcon /></button></div></div>
       {repeatWarning ? <p className="error">{repeatWarning}</p> : null}
       {launch.error ? <p className="error">{launch.error.message}</p> : null}

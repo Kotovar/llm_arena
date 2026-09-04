@@ -51,7 +51,7 @@ function assertModelCapabilities(
   images: readonly TaskImage[],
 ): void {
   if (reasoningEffort !== null && !model.capabilities.reasoning) throw new Error(`${model.name} is not configured for reasoning`);
-  if (runnerKind === "omp" && !model.capabilities.toolUse) throw new Error(`${model.name} is not configured for tool use`);
+  if ((runnerKind === "omp" || runnerKind === "pi") && !model.capabilities.toolUse) throw new Error(`${model.name} is not configured for tool use`);
   if (!images.length) return;
   if (!model.capabilities.vision) throw new Error(`${model.name} is not configured for vision`);
   if (runnerKind === "claude-code") throw new Error("Claude Code image attachments are not supported yet");
@@ -221,7 +221,7 @@ export class BenchmarkEngine {
     if (!definition) throw new Error(`Runner ${run.runner_id} not found`);
     const profile = run.execution_profile_id ? this.store.getExecutionProfile(run.execution_profile_id) : undefined;
     if (model.kind === "local-gguf" && !profile) throw new Error("Local model requires an execution profile");
-    if (model.kind === "local-gguf" && definition.kind !== "omp" && definition.kind !== "llama-chat") {
+    if (model.kind === "local-gguf" && definition.kind !== "omp" && definition.kind !== "pi" && definition.kind !== "llama-chat") {
       throw new Error(`${definition.kind} cannot run a local GGUF model`);
     }
     const selectedModel = { ...model, modelRef: run.model_ref ?? model.modelRef };
@@ -319,6 +319,9 @@ export class BenchmarkEngine {
           timeoutMs: this.config.defaults.taskTimeoutMs,
           signal: taskSignal,
           ...(backend ? { baseUrl: backend.baseUrl } : {}),
+          // pi собирает описание модели сам, поэтому окно контекста и зрение должны доехать до него.
+          ...(backend?.contextTokens ? { contextTokens: backend.contextTokens } : {}),
+          ...(model.capabilities.vision && model.mmprojPath ? { vision: true } : {}),
           runId: run.id,
           taskRunId: taskRun.id,
           stdoutPath,
@@ -469,6 +472,10 @@ export class BenchmarkEngine {
         timeoutMs: this.config.defaults.taskTimeoutMs,
         signal,
         ...(backend ? { baseUrl: backend.baseUrl } : {}),
+        // Уточнение идёт тем же раннером, что и сам промпт: pi и здесь собирает описание модели
+        // сам, поэтому окно контекста и зрение должны доехать так же, как в основном запуске.
+        ...(backend?.contextTokens ? { contextTokens: backend.contextTokens } : {}),
+        ...(model.capabilities.vision && model.mmprojPath ? { vision: true } : {}),
         runId: run.id,
         taskRunId: taskRun.id,
         stdoutPath,
@@ -493,14 +500,14 @@ export class BenchmarkEngine {
 
   async #runAgent(input: {
     definition: ArenaConfig["runners"][number]; prompt: string; images: Array<{ path: string; mimeType: TaskImage["mimeType"] }>; workspace: string; modelRef: string; reasoningEffort: string | null;
-    taskKind: "prompt" | "coding"; useOmpAgent: boolean; taskDataDir: string; timeoutMs: number; signal: AbortSignal; baseUrl?: string; runId: string; taskRunId: string;
+    taskKind: "prompt" | "coding"; useOmpAgent: boolean; taskDataDir: string; timeoutMs: number; signal: AbortSignal; baseUrl?: string; contextTokens?: number; vision?: boolean; runId: string; taskRunId: string;
     stdoutPath: string; stderrPath: string; displayPath: string;
   }) {
     const secretValues = input.definition.envPassthrough.flatMap((name) => process.env[name] ? [process.env[name]!] : []);
     const redact = createRedactor([...Object.values(input.definition.env), ...secretValues]);
     const liveOutput = createLiveOutput(input.definition.kind);
     let stderrShown = false;
-    const watchdog = input.definition.kind === "omp" ? createWatchdog(this.config.defaults.watchdog) : undefined;
+    const watchdog = input.definition.kind === "omp" || input.definition.kind === "pi" ? createWatchdog(this.config.defaults.watchdog) : undefined;
     // args приходят только в tool_execution_start, результат — только в end: склеиваем их по toolCallId.
     const activeToolCalls = new Map<string, { toolName: string; args: unknown }>();
     let loop: WatchdogDiagnostics | undefined;
@@ -518,6 +525,8 @@ export class BenchmarkEngine {
         timeoutMs: input.timeoutMs,
         signal: input.signal,
         ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+        ...(input.contextTokens ? { contextTokens: input.contextTokens } : {}),
+        ...(input.vision ? { vision: true } : {}),
         ...(watchdog ? {
           onEvent: (event: Record<string, unknown>) => {
             const eventTool = typeof event.toolName === "string" ? event.toolName : undefined;

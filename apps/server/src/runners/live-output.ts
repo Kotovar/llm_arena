@@ -23,7 +23,8 @@ export function createLiveOutput(kind: RunnerKind) {
   }
 
   function normalize(event: Json): string {
-    if (kind === "omp") {
+    // pi — то же ядро агента: словарь событий совпадает с OMP.
+    if (kind === "omp" || kind === "pi") {
       if (event.type === "agent_start") return "Агент запущен\n";
       if (event.type === "turn_start") return "· Модель обрабатывает следующий шаг\n";
       if (event.type === "notice" && typeof event.message === "string") return `• ${event.message}\n`;

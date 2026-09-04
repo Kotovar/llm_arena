@@ -5,6 +5,7 @@ import type { Task, TaskRun } from "./types.js";
 const runners = [
   { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"], envPassthrough: [] },
   { id: "omp", name: "OMP", kind: "omp", exec: ["omp"], envPassthrough: [] },
+  { id: "pi-local", name: "pi-среда", kind: "pi", exec: ["pi"], envPassthrough: [] },
   { id: "claude", name: "Claude Code", kind: "claude-code", exec: ["claude"], envPassthrough: [] },
   { id: "codex", name: "Codex CLI", kind: "codex", exec: ["codex"], envPassthrough: [] },
   { id: "opencode", name: "OpenCode", kind: "opencode", exec: ["opencode"], envPassthrough: [] },
@@ -65,8 +66,12 @@ describe("интерфейс запуска", () => {
   it("автоматически выбирает runner по модели и типу задачи", () => {
     const local = { kind: "local-gguf" as const, provider: "llama.cpp", capabilities: { toolUse: true, vision: false, reasoning: false } };
     expect(chooseRunner(local, ["prompt"], runners)?.id).toBe("llama-chat");
-    expect(chooseRunner(local, ["prompt"], runners, true)?.id).toBe("omp");
+    expect(chooseRunner(local, ["prompt"], runners, "omp")?.id).toBe("omp");
     expect(chooseRunner(local, ["coding"], runners)?.id).toBe("omp");
+    // Минимальная обвязка выигрывает и у coding-задачи: иначе третью точку оси не выбрать.
+    expect(chooseRunner(local, ["prompt"], runners, "pi")?.id).toBe("pi-local");
+    expect(chooseRunner(local, ["coding"], runners, "pi")?.id).toBe("pi-local");
+    expect(chooseRunner({ ...local, capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners, "pi")).toBeUndefined();
     expect(chooseRunner({ kind: "local-gguf", provider: "llama.cpp", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["coding"], runners)).toBeUndefined();
     expect(chooseRunner({ kind: "cloud", provider: "anthropic", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["prompt"], runners)?.id).toBe("claude");
     expect(chooseRunner({ kind: "cloud", provider: "openai", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["coding"], runners)?.id).toBe("codex");

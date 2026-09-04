@@ -464,7 +464,7 @@ describe("полоса метрик", () => {
 
   it("показывает кеш подписью к входным токенам, а не отдельной ячейкой", async () => {
     await renderResult(taskRun({
-      result_json: JSON.stringify({ finalAnswer: "Готово", metrics: { inputTokens: { value: 49_627 }, cachedInputTokens: { value: 301_232 }, finalContextTokens: { value: 33_539 }, contextWindowTokens: { value: 100_096 } } }),
+      result_json: JSON.stringify({ finalAnswer: "Готово", metrics: { inputTokens: { value: 49_627 }, cachedInputTokens: { value: 301_232 }, harnessPromptTokens: { value: 1_200 }, finalContextTokens: { value: 33_539 }, contextWindowTokens: { value: 100_096 } } }),
     }));
     await screen.findByRole("heading", { level: 3, name: "Аквариум" });
 
@@ -472,6 +472,8 @@ describe("полоса метрик", () => {
     expect(cells.children).toHaveLength(6);
     expect(within(cells).queryByText("Из кеша")).toBeNull();
     expect(within(cells).getByText(/из кеша/u).textContent).toContain("301 232");
+    // Цена обвязки — подпись в той же ячейке: седьмая ячейка развалила бы сетку из трёх колонок.
+    expect(within(cells).getByText(/обвязка/u).textContent).toContain("1 200");
     expect(within(cells).getByText("34%")).toBeDefined();
   });
 });

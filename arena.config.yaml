@@ -44,6 +44,12 @@ runners:
     name: OMP
     kind: omp
     exec: [omp]
+  # Та же модель на минимальной обвязке: четыре инструмента вместо одиннадцати и системный
+  # промпт на 3 КБ вместо 50. Нужен, чтобы отличить заслугу модели от заслуги OMP.
+  - id: pi-local
+    name: pi-среда
+    kind: pi
+    exec: [pi]
   - id: claude-proxy
     name: Claude Code
     kind: claude-code

@@ -38,6 +38,7 @@ function metrics(totalMs: number, startupMs: number): NormalizedRunResult["metri
     cachedInputTokens: unavailable(),
     outputTokens: unavailable(),
     modelRequests: unavailable(),
+    harnessPromptTokens: unavailable(),
     finalContextTokens: unavailable(),
     contextWindowTokens: unavailable(),
     promptTokensPerSecond: unavailable(),
@@ -58,6 +59,19 @@ function textContent(content: unknown): string {
 }
 
 export function parseOmpOutput(output: string, totalMs: number, startupMs: number): NormalizedRunResult {
+  return parseAgentOutput(output, totalMs, startupMs, "omp");
+}
+
+/**
+ * pi — то же ядро агента, что и под OMP: словарь событий и формат `agent_end` совпадают.
+ * Отличия ровно два: идентификатор сессии лежит в `session.id`, а `ttft` и `duration` у сообщений
+ * не приходят — поэтому скорость генерации считается по стенным часам, как у codex и opencode.
+ */
+export function parsePiOutput(output: string, totalMs: number, startupMs: number): NormalizedRunResult {
+  return parseAgentOutput(output, totalMs, startupMs, "pi");
+}
+
+function parseAgentOutput(output: string, totalMs: number, startupMs: number, kind: "omp" | "pi"): NormalizedRunResult {
   const events = lines(output);
   const end = events.findLast((event) => event.type === "agent_end");
   const messages = Array.isArray(end?.messages) ? (end.messages as Json[]) : [];
@@ -66,7 +80,7 @@ export function parseOmpOutput(output: string, totalMs: number, startupMs: numbe
   const terminalError = [end?.errorMessage, last?.errorMessage].find(
     (value): value is string => typeof value === "string" && value.trim().length > 0,
   );
-  if (terminalError || last?.stopReason === "error") throw new Error(terminalError ?? "OMP agent ended with an error");
+  if (terminalError || last?.stopReason === "error") throw new Error(terminalError ?? `${kind === "pi" ? "pi" : "OMP"} agent ended with an error`);
   const usage = assistants.reduce<{ input: number; cached: number; output: number; durationMs: number }>(
     (sum, message) => {
       const item = message.usage as Json | undefined;
@@ -79,17 +93,25 @@ export function parseOmpOutput(output: string, totalMs: number, startupMs: numbe
     },
     { input: 0, cached: 0, output: 0, durationMs: 0 },
   );
-  const session = events.find((event) => typeof event.sessionId === "string" || typeof event.sessionID === "string");
+  const session = kind === "pi"
+    ? events.find((event) => event.type === "session" && typeof event.id === "string")
+    : events.find((event) => typeof event.sessionId === "string" || typeof event.sessionID === "string");
   const resultMetrics = metrics(totalMs, startupMs);
   resultMetrics.inputTokens = runnerNumber(usage.input, "tokens");
   resultMetrics.cachedInputTokens = runnerNumber(usage.cached, "tokens");
   resultMetrics.outputTokens = runnerNumber(usage.output, "tokens");
   resultMetrics.modelRequests = runnerNumber(assistants.length, "requests");
-  resultMetrics.generationTokensPerSecond = runnerNumber(
-    usage.output > 0 && usage.durationMs > 0 ? usage.output / (usage.durationMs / 1_000) : undefined,
-    "tokens/s",
-  );
+  // У pi в сообщениях нет `duration`, поэтому знаменатель — стенные часы всего прогона за вычетом старта.
+  const generationMs = kind === "pi" ? Math.max(totalMs - startupMs, 0) : usage.durationMs;
+  const tokensPerSecond = usage.output > 0 && generationMs > 0 ? usage.output / (generationMs / 1_000) : undefined;
+  resultMetrics.generationTokensPerSecond = kind === "pi"
+    ? estimatedNumber(tokensPerSecond, "tokens/s")
+    : runnerNumber(tokensPerSecond, "tokens/s");
   resultMetrics.ttftMs = runnerNumber(last?.ttft, "ms");
+  // Цена обвязки: первое обращение — это системный промпт и схемы инструментов плюс сам промпт
+  // задачи, то есть весь служебный текст, который модель платит на каждом шаге.
+  const firstUsage = assistants[0]?.usage as Json | undefined;
+  resultMetrics.harnessPromptTokens = runnerNumber(firstUsage?.input, "tokens");
   // Контекст последнего обращения: весь промпт (новый и поднятый из кеша) плюс то, что модель дописала.
   // У claude/codex/opencode такого поля нет: их финальный usage — сумма по всему прогону.
   // Для claude и opencode оно теоретически собирается из потока событий, но не проверено на живом выводе.
@@ -102,7 +124,7 @@ export function parseOmpOutput(output: string, totalMs: number, startupMs: numbe
   return {
     finalAnswer: textContent(last?.content),
     exitCode: 0,
-    sessionId: (session?.sessionId as string | undefined) ?? (session?.sessionID as string | undefined) ?? null,
+    sessionId: (session?.id as string | undefined) ?? (session?.sessionId as string | undefined) ?? (session?.sessionID as string | undefined) ?? null,
     requestId: typeof last?.responseId === "string" ? last.responseId : null,
     metrics: resultMetrics,
   };
