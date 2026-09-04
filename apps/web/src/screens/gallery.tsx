@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { ArrowRightIcon, CloseIcon } from "../icons.js";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
-import type { GalleryMetrics, GalleryResult, ResultVersion } from "../types.js";
+import type { GalleryMetrics, GalleryResult, Model, ResultVersion } from "../types.js";
 import { completionLabels, formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, measurementConditions, modelKindLabels, modelKindOrder, plural } from "../ui.js";
 import { ResultPreview } from "./results.js";
 
@@ -108,10 +108,18 @@ function GalleryDetail({ result, leader, alternatives, onClose }: { result: Gall
   </dialog>;
 }
 
+function toggled<T>(set: ReadonlySet<T>, value: T) {
+  const next = new Set(set);
+  if (!next.delete(value)) next.add(value);
+  return next;
+}
+
 export function GalleryPage() {
   const gallery = useData<GalleryResult[]>("gallery", "/gallery");
   const [opened, setOpened] = useState<GalleryResult>();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [hiddenModelIds, setHiddenModelIds] = useState<ReadonlySet<string>>(new Set());
+  const [collapsedKinds, setCollapsedKinds] = useState<ReadonlySet<Model["kind"]>>(new Set());
   const tags = [...new Set((gallery.data ?? []).flatMap((result) => result.prompt.tags ?? []))].sort((left, right) => left.localeCompare(right, "ru"));
   // Промпт без тегов не принадлежит ни одному срезу, поэтому под выбранным фильтром его не показываем.
   const visible = selectedTags.length
@@ -120,7 +128,9 @@ export function GalleryPage() {
   const toggleTag = (tag: string) => setSelectedTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]);
   const matrix = galleryMatrix(visible);
   // Подписочные и локальные модели идут отдельными группами: сравнивать их между собой смысла нет.
+  // Группы и лидеры считаются до скрытия: скрытая модель не должна переставлять звёздочки.
   const groups = modelKindOrder.map((kind) => ({ kind, rows: matrix.rows.filter((row) => row.kind === kind) })).filter((group) => group.rows.length);
+  const hiddenRows = matrix.rows.filter((row) => hiddenModelIds.has(row.model.id));
   return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея">
     {gallery.isPending ? <Skeleton rows={4} /> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
@@ -130,9 +140,9 @@ export function GalleryPage() {
       {tags.map((tag) => <button type="button" key={tag} className={selectedTags.includes(tag) ? "active" : ""} aria-pressed={selectedTags.includes(tag)} onClick={() => toggleTag(tag)}>{tag}</button>)}
     </div> : null}
     {matrix.rows.length ? <Panel title="Матрица результатов" action={<span className="mono">{matrix.rows.length} × {matrix.prompts.length}</span>}><div className="gallery-scroll"><table className="gallery-table"><thead><tr><th scope="col" className="gallery-model">Модель</th>{matrix.prompts.map((prompt) => <th scope="col" className="gallery-prompt" key={prompt.id} title={prompt.description || prompt.prompt}><strong>{prompt.name}</strong>{prompt.description ? <small className="task-description">{prompt.description}</small> : <small>{prompt.prompt}</small>}</th>)}</tr></thead>{groups.map((group) => <tbody key={group.kind}>
-      {groups.length > 1 ? <tr className="gallery-group"><th scope="rowgroup" colSpan={matrix.prompts.length + 1}><span>{modelKindLabels[group.kind]}</span></th></tr> : null}
-      {group.rows.map((row) => <tr key={row.model.id}><th scope="row" className="gallery-model">{row.model.name}</th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} leaders={matrix.leaders} onOpen={setOpened} /></td>)}</tr>)}
-    </tbody>)}</table></div></Panel> : null}
+      {groups.length > 1 ? <tr className="gallery-group"><th scope="rowgroup" colSpan={matrix.prompts.length + 1}><button type="button" aria-expanded={!collapsedKinds.has(group.kind)} onClick={() => setCollapsedKinds((current) => toggled(current, group.kind))}>{modelKindLabels[group.kind]}</button></th></tr> : null}
+      {collapsedKinds.has(group.kind) ? null : group.rows.filter((row) => !hiddenModelIds.has(row.model.id)).map((row) => <tr key={row.model.id}><th scope="row" className="gallery-model">{row.model.name}<button type="button" className="gallery-hide" title={`Скрыть ${row.model.name}`} aria-label={`Скрыть ${row.model.name}`} onClick={() => setHiddenModelIds((current) => toggled(current, row.model.id))}><CloseIcon /></button></th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} leaders={matrix.leaders} onOpen={setOpened} /></td>)}</tr>)}
+    </tbody>)}{hiddenRows.length ? <tfoot><tr><td className="gallery-hidden-note" colSpan={matrix.prompts.length + 1}>Скрыто: {hiddenRows.map((row) => row.model.name).join(", ")} — <button type="button" onClick={() => setHiddenModelIds(new Set())}>показать все</button></td></tr></tfoot> : null}</table></div></Panel> : null}
     {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} leader={matrix.leaders.has(opened.taskRunId)} alternatives={visible.filter((item) => item.model.id === opened.model.id && item.prompt.id === opened.prompt.id).length > 1} onClose={() => setOpened(undefined)} /> : null}
   </Page></div>;
 }

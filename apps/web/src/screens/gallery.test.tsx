@@ -202,3 +202,62 @@ describe("лидеры и разделение по типу моделей", ()
     expect(screen.getByText("Лидер по промпту")).toBeTruthy();
   });
 });
+
+describe("сворачивание групп и скрытие моделей", () => {
+  function scored(modelId: string, name: string, kind: "cloud" | "local-gguf", reviewScore: number): GalleryResult {
+    return { ...result("p1", "Аквариум", ["код"]), taskRunId: `run-${modelId}`, model: { id: modelId, name, kind }, reviewScore, reviewPossible: 40 };
+  }
+
+  beforeEach(() => {
+    gallery = [scored("local-1", "Gemma", "local-gguf", 20), scored("cloud-1", "Claude", "cloud", 36), scored("cloud-2", "Codex", "cloud", 30)];
+  });
+
+  const modelNames = () => [...screen.getByRole("table").querySelectorAll("th.gallery-model")].map((cell) => cell.textContent);
+
+  it("сворачивает группу и разворачивает обратно", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+
+    await user.click(screen.getByRole("button", { name: "По подписке" }));
+
+    expect(modelNames()).toEqual(["Модель", "Gemma"]);
+    expect(screen.getByRole("button", { name: "По подписке" }).getAttribute("aria-expanded")).toBe("false");
+
+    await user.click(screen.getByRole("button", { name: "По подписке" }));
+
+    expect(modelNames()).toEqual(["Модель", "Claude", "Codex", "Gemma"]);
+  });
+
+  it("скрывает модель, перечисляет её внизу и возвращает по «показать все»", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+
+    await user.click(screen.getByRole("button", { name: "Скрыть Codex" }));
+
+    expect(modelNames()).toEqual(["Модель", "Claude", "Gemma"]);
+    expect(screen.getByText(/Скрыто: Codex/u)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "показать все" }));
+
+    expect(modelNames()).toEqual(["Модель", "Claude", "Codex", "Gemma"]);
+    expect(screen.queryByText(/Скрыто:/u)).toBeNull();
+  });
+
+  // Лидеры считаются до скрытия: иначе звёздочка переезжает на следующую модель.
+  // Третья подписочная модель обязательна: после скрытия лидера в группе должно остаться
+  // с чем сравнивать, иначе звезды нет и при пересчёте — тест не отличил бы регрессию.
+  it("не переносит звезду лидера на видимую модель после скрытия лидера", async () => {
+    const user = userEvent.setup();
+    gallery = [...gallery, scored("cloud-3", "Mistral", "cloud", 24)];
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+    expect(screen.getAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа").length).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "Скрыть Claude" }));
+
+    expect(modelNames()).toEqual(["Модель", "Codex", "Mistral", "Gemma"]);
+    expect(screen.queryAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа").length).toBe(0);
+  });
+});
