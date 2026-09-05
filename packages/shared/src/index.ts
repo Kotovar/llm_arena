@@ -201,6 +201,7 @@ export const createBatchSchema = z.object({
   })).min(1),
   resultMode: z.enum(["text", "web"]),
   repeatCount: createRunSchema.shape.repeatCount,
+  warmupAttempt: createRunSchema.shape.warmupAttempt,
 });
 
 const measuredSources = z.enum([

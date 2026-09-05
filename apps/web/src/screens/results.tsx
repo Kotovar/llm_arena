@@ -5,7 +5,7 @@ import type { WatchdogDiagnostics } from "@llm-arena/shared";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { api, apiText } from "../api.js";
 import { useConfirm } from "../confirm.js";
-import { ArrowRightIcon, CloseIcon, ExternalIcon } from "../icons.js";
+import { ArrowLeftIcon, ArrowRightIcon, CloseIcon, ExternalIcon } from "../icons.js";
 import { Empty, NumberField, Page, Panel, SelectMenu, Status, useData, useHotkey } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { BatchSummary, Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
@@ -518,7 +518,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const stepper = useRef<(delta: number) => void>(() => {});
   useHotkey("ArrowLeft", () => stepper.current(-1));
   useHotkey("ArrowRight", () => stepper.current(1));
-  if (run.error) return <Page title="Запуск не найден" eyebrow="Результат" intro="Он мог быть удалён вместе с файлами, либо сервер сейчас недоступен."><p className="error">{run.error.message}</p><p className="actions"><Link to="/runs">← Ко всем результатам</Link></p></Page>;
+  if (run.error) return <Page title="Запуск не найден" eyebrow="Результат" intro="Он мог быть удалён вместе с файлами, либо сервер сейчас недоступен."><p className="error">{run.error.message}</p><p className="actions"><Link to="/runs"><ArrowLeftIcon />Ко всем результатам</Link></p></Page>;
   if (!run.data) return <Page title="Загрузка запуска" eyebrow="Результат"><Empty>Читаем сохранённые данные…</Empty></Page>;
   const snapshot = run.data.snapshot_json ? JSON.parse(run.data.snapshot_json) as { tasks?: unknown[]; benchmark?: { tasks?: unknown[] }; model?: { name?: string; modelRef?: string }; reasoningEffort?: string | null; environment?: RunEnvironment; profile?: { name?: string; parameters?: Record<string, unknown> } } : undefined;
   // benchmark — снапшоты запусков, сделанных до отказа от этой сущности.
@@ -566,6 +566,11 @@ export function RunDetail({ runId }: { runId: string }) {
   } : undefined;
   return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", harnessLabel(runners.data?.find((runner) => runner.id === run.data!.runner_id)?.kind, run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName ?? followupTaskName, runningFollowup)} />
+    {/* Прогон батча открывают со страницы батча — туда же и возвращаем, иначе назад пришлось бы
+        идти через список одиночных запусков и переключать вкладку. */}
+    <p className="actions">{run.data.batch_id
+      ? <Link to="/batch" search={{ id: run.data.batch_id }}><ArrowLeftIcon />Назад</Link>
+      : <Link to="/runs"><ArrowLeftIcon />Назад</Link>}</p>
     {isActive ? <section className="progress-card"><div className="progress-copy"><span className="spinner large" /><div><strong>{runningFollowup ? `Уточнение${followupTaskName ? `: ${followupTaskName}` : ""}` : run.data.status === "pending" ? "Ожидает своей очереди" : `Выполняется промпт ${progress.current} из ${total}${activeTaskName ? `: ${activeTaskName}` : ""}`}</strong><p>{runningFollowup ? activeFollowup ? `Уточнение ${activeFollowup.position}: ${activeFollowup.prompt}` : "Запускаем уточнение…" : activeTaskName ?? "Запускаем модель…"}</p></div><Elapsed since={runningFollowup ? activeFollowup?.started_at ?? run.data.started_at : run.data.started_at} /></div><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><button className="danger" onClick={() => cancel.mutate()}>Остановить</button></section> : null}
     {snapshot?.environment ? <Environment environment={snapshot.environment} profile={snapshot.profile} /> : null}
     {run.data.error && !run.data.taskRuns?.length ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}

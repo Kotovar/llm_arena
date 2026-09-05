@@ -43,6 +43,8 @@ describe("batches", () => {
       taskRevisionIds: [first.currentRevision.id, second.currentRevision.id],
       models: [modelEntry(alpha), modelEntry(beta)],
       resultMode: "text",
+      repeatCount: 2,
+      warmupAttempt: true,
     } });
 
     expect(created.statusCode).toBe(202);
@@ -51,6 +53,8 @@ describe("batches", () => {
     // Прогоны батча — обычные прогоны очереди: их видно в общем списке и они ждут своей очереди.
     expect(store.listBatchRuns(batchId).map((run) => run.status)).toEqual(["pending", "pending"]);
     expect(store.listBatchRuns(batchId).map((run) => run.batch_position)).toEqual([0, 1]);
+    // Повторы и прогрев — условия замера: потерять их по дороге в батч значит сравнивать разное.
+    expect(store.listBatchRuns(batchId).map((run) => [run.repeat_count, run.warmup_attempt])).toEqual([[2, 1], [2, 1]]);
 
     const progress = await app.inject({ method: "GET", url: `/api/batches/${batchId}` });
     expect(progress.json().modelCount).toBe(2);
@@ -122,6 +126,7 @@ describe("batches", () => {
       taskRevisionIds: [failing.currentRevision.id, passing.currentRevision.id],
       models: [modelEntry(alpha)],
       resultMode: "text",
+      warmupAttempt: true,
     } });
     const { batchId, runIds } = created.json() as { batchId: string; runIds: string[] };
 
@@ -143,6 +148,8 @@ describe("batches", () => {
     expect(retriedRuns).toHaveLength(1);
     // В повтор ушёл только упавший промпт: успех и ручная остановка остались за бортом.
     expect(store.listRunTasks(retriedRuns[0]!.id).map((revision) => revision.name)).toEqual(["Часы"]);
+    // Повтор идёт в тех же условиях, что и исходный прогон, иначе его результат не с чем сравнивать.
+    expect(retriedRuns[0]!.warmup_attempt).toBe(1);
 
     await app.close();
     store.close();

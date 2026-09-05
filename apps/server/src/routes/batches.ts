@@ -39,7 +39,9 @@ export function registerBatchRoutes(app: FastifyInstance, store: ArenaStore, dep
         if (taskRun.status === "running") active = { modelName, taskName: name };
         return { taskRunId: taskRun.id, taskRevisionId: taskRun.task_revision_id, name, outcome };
       });
-      return { runId: run.id, modelId: run.model_id, modelName, status: run.status, planned, prompts };
+      // Раннер и флаг агента едут наружу целиком: по ним экран подписывает обвязку — без этого два
+      // прогона одной модели на pi и на OMP в списке батча неотличимы.
+      return { runId: run.id, modelId: run.model_id, modelName, status: run.status, runner_id: run.runner_id, use_omp_agent: run.use_omp_agent, planned, prompts };
     });
     return { runs, models, counts, active };
   };
@@ -51,6 +53,7 @@ export function registerBatchRoutes(app: FastifyInstance, store: ArenaStore, dep
       taskRevisionIds: input.taskRevisionIds,
       resultMode: input.resultMode,
       repeatCount: input.repeatCount,
+      warmupAttempt: input.warmupAttempt,
     }));
     const created = store.createBatch(inputs);
     deps.wake();
@@ -124,6 +127,7 @@ export function registerBatchRoutes(app: FastifyInstance, store: ArenaStore, dep
         modelRef: run.model_ref ?? undefined,
         reasoningEffort: run.reasoning_effort as CreateRun["reasoningEffort"],
         repeatCount: run.repeat_count,
+        warmupAttempt: run.warmup_attempt === 1,
       }] : [];
     });
     if (!inputs.length) throw new Error("Nothing to retry");

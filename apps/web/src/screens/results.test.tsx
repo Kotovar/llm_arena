@@ -511,6 +511,22 @@ describe("список промптов запуска", () => {
     expect(screen.queryByRole("heading", { level: 3, name: "Аквариум" })).toBeNull();
   });
 
+  // Прогон батча открывают со страницы батча: назад через список одиночных запусков и вкладку —
+  // это два клика вместо одного.
+  it("возвращает одиночный прогон в список, а прогон батча — на его страницу", async () => {
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+    expect(screen.getByRole("link", { name: /Назад/u }).getAttribute("href")).toBe("/runs");
+
+    cleanup();
+    const fromBatch = { ...run, batch_id: "batch-1" };
+    fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url.startsWith("/api/runs/") ? fromBatch : []), { status: 200, headers: { "content-type": "application/json" } }));
+    await renderInApp(<RunDetail runId="run-1" />);
+    await screen.findByRole("heading", { level: 3, name: "Аквариум" });
+
+    expect(screen.getByRole("link", { name: /Назад/u }).getAttribute("href")).toContain("id=batch-1");
+  });
+
   it("удаляет отдельный промпт запуска и возвращает к оставшимся", async () => {
     const user = userEvent.setup();
     const deleted: string[] = [];

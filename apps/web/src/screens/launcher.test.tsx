@@ -11,9 +11,11 @@ function task(id: string, name: string, tags: string[] = []) {
 
 let payloads: Record<string, unknown>;
 let runBodies: unknown[];
+let batchBodies: unknown[];
 
 beforeEach(() => {
   runBodies = [];
+  batchBodies = [];
   payloads = {
     "/api/tasks": [task("task-1", "Аквариум"), task("task-2", "Песок")],
     "/api/models": [{ id: "model-1", name: "Модель", kind: "cloud", provider: "openai", modelRef: "model", path: null, alias: null, capabilities: { toolUse: true, vision: false, reasoning: false }, mmprojPath: null }],
@@ -27,6 +29,10 @@ beforeEach(() => {
     if (url === "/api/runs" && init?.method === "POST") {
       runBodies.push(JSON.parse(String(init.body)));
       return new Response(JSON.stringify({ id: "run-1" }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url === "/api/batches" && init?.method === "POST") {
+      batchBodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ batchId: "batch-1", runIds: ["run-1", "run-2"] }), { status: 200, headers: { "content-type": "application/json" } });
     }
     return new Response(JSON.stringify(payloads[url] ?? {}), { status: 200, headers: { "content-type": "application/json" } });
   }));
@@ -57,12 +63,25 @@ describe("среда локальной модели", () => {
     ];
   });
 
+  const harnessBox = (name: string) => screen.getByRole<HTMLInputElement>("checkbox", { name });
+  // Голая модель есть только в текстовом режиме, поэтому список галочек зависит от режима.
+  const harnessNames = ["OMP-среда", "pi-среда", "Голая модель"];
+
+  // Обвязки — галочки, а не переключатель: выбрать одну значит снять остальные.
+  async function chooseHarnesses(user: ReturnType<typeof userEvent.setup>, wanted: string[]) {
+    for (const name of wanted) if (!harnessBox(name).checked) await user.click(harnessBox(name));
+    for (const name of harnessNames) {
+      const box = screen.queryByRole<HTMLInputElement>("checkbox", { name });
+      if (box && !wanted.includes(name) && box.checked) await user.click(box);
+    }
+  }
+
   // Успешный запуск уводит на страницу прогона, поэтому на каждую обвязку — свой рендер.
   async function launchWith(harness?: string) {
     const user = userEvent.setup();
     await renderInApp(<Launcher />);
     await screen.findByText("Среда локальной модели");
-    if (harness) await user.click(screen.getByRole("radio", { name: harness }));
+    if (harness) await chooseHarnesses(user, [harness]);
     await user.click(screen.getByRole("button", { name: /Запустить/u }));
     await waitFor(() => expect(runBodies).toHaveLength(1));
     return runBodies[0];
@@ -77,8 +96,20 @@ describe("среда локальной модели", () => {
     expect(await launchWith("pi-среда")).toMatchObject({ runnerId: "pi-local", useOmpAgent: false });
   });
 
-  it("оставляет «без обвязки» на OMP, но с выключенной средой", async () => {
-    expect(await launchWith("Без обвязки")).toMatchObject({ runnerId: "omp", useOmpAgent: false });
+  // В web «без обвязки» было тем же OMP с выключенными расширениями — эту точку закрывает pi,
+  // поэтому галочка осталась только у текстового режима, где ведёт на чистый llama-chat.
+  it("даёт голую модель только в текстовом режиме и ведёт её на llama-chat", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<Launcher />);
+    await screen.findByText("Среда локальной модели");
+
+    expect(screen.queryByRole("checkbox", { name: "Голая модель" })).toBeNull();
+    await user.click(screen.getByRole("radio", { name: "Текстовый ответ" }));
+    await chooseHarnesses(user, ["Голая модель"]);
+    await user.click(screen.getByRole("button", { name: /^Запустить$/u }));
+
+    await waitFor(() => expect(runBodies).toHaveLength(1));
+    expect(runBodies[0]).toMatchObject({ runnerId: "llama-chat", useOmpAgent: false, resultMode: "text" });
   });
 
   // Раннеры и модели грузятся независимо: если применить параметры повтора до прихода раннеров,
@@ -100,7 +131,7 @@ describe("среда локальной модели", () => {
     await screen.findByText("Аквариум");
     releaseRunners();
 
-    await waitFor(() => expect((screen.getByRole("radio", { name: "pi-среда" }) as HTMLInputElement).checked).toBe(true));
+    await waitFor(() => expect(harnessBox("pi-среда").checked).toBe(true));
     await user.click(screen.getByRole("button", { name: /Запустить/u }));
 
     await waitFor(() => expect(runBodies).toHaveLength(1));
@@ -112,8 +143,70 @@ describe("среда локальной модели", () => {
     await renderInApp(<Launcher />);
     await screen.findByText("Среда локальной модели");
 
-    expect(screen.getByRole("radio", { name: "pi-среда" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("radio", { name: "OMP-среда" }).hasAttribute("disabled")).toBe(true);
+    expect(harnessBox("pi-среда").hasAttribute("disabled")).toBe(true);
+    expect(harnessBox("OMP-среда").hasAttribute("disabled")).toBe(true);
+  });
+
+  // Недоступная обвязка оставалась в состоянии невидимой галочкой: экран показывал одну среду,
+  // а запуск уходил батчем из двух, где для первой нет раннера, — и кнопка молча гасла.
+  it("не тянет недоступный OMP в выбор, когда настроен только pi", async () => {
+    const user = userEvent.setup();
+    payloads["/api/runners"] = [
+      { id: "pi-local", name: "pi-среда", kind: "pi", exec: ["pi"], default: true },
+      { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"] },
+    ];
+    await renderInApp(<Launcher />);
+    await screen.findByText("Среда локальной модели");
+
+    expect(harnessBox("OMP-среда").hasAttribute("disabled")).toBe(true);
+    await chooseHarnesses(user, ["pi-среда"]);
+    expect(screen.getByRole("button", { name: /^Запустить$/u })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /^Запустить$/u }));
+    await waitFor(() => expect(runBodies).toHaveLength(1));
+    expect(batchBodies).toHaveLength(0);
+    expect(runBodies[0]).toMatchObject({ runnerId: "pi-local", useOmpAgent: false });
+  });
+
+  // Повтор в другой обвязке — это уже не повтор: подмену надо назвать, а не проглотить.
+  it("предупреждает, когда среда повторяемого прогона больше недоступна", async () => {
+    payloads["/api/runners"] = [
+      { id: "omp", name: "OMP", kind: "omp", exec: ["omp"], default: true },
+      { id: "llama-chat", name: "llama.cpp Chat", kind: "llama-chat", exec: ["llama-server"] },
+    ];
+    await renderInApp(<Launcher />, "/?tasks=task-1&model=local-1&runner=pi-local&omp=false&mode=web");
+
+    expect(await screen.findByText(/Среда того запуска сейчас недоступна/u)).toBeTruthy();
+    // Откат виден на экране: отмечена та обвязка, в которой прогон пойдёт на самом деле.
+    await waitFor(() => expect(harnessBox("OMP-среда").checked).toBe(true));
+
+    // Исчезнувший раннер молчал громче всего: обвязку по нему не восстановить, и выбор уезжал на OMP.
+    cleanup();
+    await renderInApp(<Launcher />, "/?tasks=task-1&model=local-1&runner=pi-local&mode=text");
+
+    expect(await screen.findByText(/Среда того запуска сейчас недоступна/u)).toBeTruthy();
+  });
+
+  // Две обвязки — это уже не один прогон: он уходит батчем, чтобы очередь подняла модель дважды,
+  // а не переключала обвязку на каждом промпте.
+  it("отмеченные две обвязки уводит в батч по элементу на каждую", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<Launcher />);
+    await screen.findByText("Среда локальной модели");
+
+    await chooseHarnesses(user, ["OMP-среда", "pi-среда"]);
+    expect(screen.getByRole("button", { name: /Запустить 2 прогона подряд/u })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Запустить 2 прогона подряд/u }));
+
+    await waitFor(() => expect(batchBodies).toHaveLength(1));
+    expect(runBodies).toHaveLength(0);
+    expect(batchBodies[0]).toMatchObject({
+      models: [
+        { modelId: "local-1", executionProfileId: "profile-1", runnerId: "omp", useOmpAgent: true },
+        { modelId: "local-1", executionProfileId: "profile-1", runnerId: "pi-local", useOmpAgent: false },
+      ],
+      resultMode: "web",
+    });
   });
 });
 

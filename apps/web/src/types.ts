@@ -349,7 +349,7 @@ export type BatchProgress = {
   modelIds: string[];
   failedCount: number;
   finished: boolean;
-  models: { runId: string; modelId: string; modelName: string; status: string; planned: number; prompts: BatchPrompt[] }[];
+  models: { runId: string; modelId: string; modelName: string; status: string; runner_id: string; use_omp_agent: number; planned: number; prompts: BatchPrompt[] }[];
   counts: Partial<Record<TaskOutcome, number>>;
   active: { modelName: string; taskName: string } | null;
 };

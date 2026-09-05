@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, toneClass, visionProjectorFiles } from "./ui.js";
+import { batchRunSummary, toggleHarness, usableHarnesses, attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, toneClass, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -24,7 +24,7 @@ describe("интерфейс запуска", () => {
 
   it("не приписывает OMP облачным CLI-запускам", () => {
     expect(launchModeNote({ kind: "cloud", resultMode: "web", usingOmpAgent: false })).toBe("Готовое web-приложение будет создано выбранным CLI.");
-    expect(launchModeNote({ kind: "local-gguf", resultMode: "web", usingOmpAgent: false })).toBe("Изолированный OMP: без skills, расширений и MCP.");
+    expect(launchModeNote({ kind: "local-gguf", resultMode: "text", usingOmpAgent: false })).toBe("Ответ модели без рабочей директории");
   });
 
   it("сохраняет метаданные coding-задания при изменении текста промпта", () => {
@@ -596,5 +596,30 @@ describe("подкраска чисел", () => {
   it("переворачивает шкалу там, где меньше значит лучше", () => {
     expect(toneClass(0, [5, 15, 30], true)).toBe("tone-good");
     expect(toneClass(40, [5, 15, 30], true)).toBe("tone-bad");
+  });
+});
+
+describe("выбор обвязок", () => {
+  it("держит фиксированный порядок и не даёт снять последнюю", () => {
+    expect(toggleHarness(["omp"], "pi", true)).toEqual(["omp", "pi"]);
+    // Порядок галочек не зависит от порядка кликов: он же порядок прогонов в батче.
+    expect(toggleHarness(["bare"], "omp", true)).toEqual(["omp", "bare"]);
+    expect(toggleHarness(["omp", "pi"], "omp", false)).toEqual(["pi"]);
+    expect(toggleHarness(["pi"], "pi", false)).toEqual(["pi"]);
+  });
+
+  // Голой модели в web нет: без отката экран остался бы вовсе без отмеченной среды, а план — пустым.
+  it("откатывается на первую доступную, когда всё отмеченное недоступно", () => {
+    expect(usableHarnesses(["omp", "pi"], { omp: true, pi: false, bare: true })).toEqual(["omp"]);
+    expect(usableHarnesses(["bare"], { omp: true, pi: true, bare: false })).toEqual(["omp"]);
+    expect(usableHarnesses(["bare"], { omp: false, pi: true, bare: false })).toEqual(["pi"]);
+    expect(usableHarnesses(["omp"], { omp: false, pi: false, bare: false })).toEqual([]);
+  });
+
+  it("считает запуски по обвязкам, а на смешанном выборе — по прогонам", () => {
+    expect(batchRunSummary(5, 2, 1, 2)).toBe("5 промптов × 2 модели = 10 запусков");
+    expect(batchRunSummary(5, 2, 2, 4)).toBe("5 промптов × 2 модели × 2 обвязки = 20 запусков");
+    // Облачную модель обвязка не множит: произведение не сходится, поэтому множители сворачиваются.
+    expect(batchRunSummary(5, 2, 2, 3)).toBe("5 промптов × 3 прогона = 15 запусков");
   });
 });

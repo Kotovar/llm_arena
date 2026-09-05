@@ -44,6 +44,29 @@ export function cloudProviderCatalogKind(provider: string) {
 /** Обвязка локальной модели: OMP, минимальный агент pi или её отсутствие. */
 export type Harness = "omp" | "pi" | "bare";
 
+/**
+ * Порядок обвязок фиксирован: он же порядок прогонов в батче, а от него зависит, какая обвязка
+ * пойдёт по прогретой карте. Снять последнюю галочку нельзя — запускать без среды нечего.
+ */
+const harnessOrder: Harness[] = ["omp", "pi", "bare"];
+
+export function toggleHarness(current: Harness[], harness: Harness, checked: boolean): Harness[] {
+  const next = checked ? [...current, harness] : current.filter((item) => item !== harness);
+  return next.length ? harnessOrder.filter((item) => next.includes(item)) : current;
+}
+
+/**
+ * Что из отмеченного действительно можно запустить. Недоступную обвязку нельзя оставлять в
+ * состоянии: следующая галочка допишется к невидимой первой, экран покажет одну среду, а запуск
+ * уйдёт батчем из двух. Если недоступно всё отмеченное — откат на первую доступную, иначе смена
+ * режима результата (голая модель есть только в текстовом) оставляла бы экран без единой галочки.
+ * Пустой ответ — у модели нет ни одной среды, запускать нечего.
+ */
+export function usableHarnesses(current: Harness[], available: Record<Harness, boolean>): Harness[] {
+  const usable = current.filter((item) => available[item]);
+  return usable.length ? usable : harnessOrder.filter((item) => available[item]).slice(0, 1);
+}
+
 export function chooseRunner(
   model: Pick<Model, "kind" | "provider" | "capabilities">,
   taskKinds: Task["currentRevision"]["kind"][],
@@ -298,7 +321,9 @@ export function launchModeNote({ kind, resultMode, usingOmpAgent, usingPi = fals
   if (usingPi) return "pi: четыре инструмента и системный промпт на 3 КБ — видно, что умеет сама модель.";
   if (usingOmpAgent) return "OMP: skills, расширения и настроенные MCP.";
   if (ompUnavailable) return ompUnavailable;
-  return resultMode === "web" ? "Изолированный OMP: без skills, расширений и MCP." : "Ответ модели без рабочей директории";
+  // Голая модель осталась только в текстовом режиме: в web её место занял pi, поэтому «изолированный
+  // OMP без расширений» больше не выбрать — соответствующей подписи здесь тоже нет.
+  return "Ответ модели без рабочей директории";
 }
 
 // Вкладка браузера показывает ход генерации: свёрнутое окно всё ещё говорит, на каком промпте запуск.
@@ -568,6 +593,21 @@ export function plural(count: number, one: string, few: string, many: string) {
 
 export function promptCountLabel(count: number) {
   return `${count} ${plural(count, "промпт", "промпта", "промптов")}`;
+}
+
+/**
+ * «5 промптов × 2 модели × 2 обвязки = 20 запусков». Обвязка есть только у локальной модели,
+ * поэтому на смешанном выборе произведение не сходится — тогда вместо множителей идут прогоны.
+ */
+export function batchRunSummary(promptCount: number, modelCount: number, harnessCount: number, entryCount: number) {
+  const runCount = promptCount * entryCount;
+  const runs = `${runCount} ${plural(runCount, "запуск", "запуска", "запусков")}`;
+  const factors = [promptCountLabel(promptCount), `${modelCount} ${plural(modelCount, "модель", "модели", "моделей")}`];
+  if (harnessCount > 1) factors.push(`${harnessCount} ${plural(harnessCount, "обвязка", "обвязки", "обвязок")}`);
+  if (modelCount * Math.max(harnessCount, 1) !== entryCount) {
+    factors.splice(1, factors.length, `${entryCount} ${plural(entryCount, "прогон", "прогона", "прогонов")}`);
+  }
+  return `${factors.join(" × ")} = ${runs}`;
 }
 
 const relativeTime = new Intl.RelativeTimeFormat("ru-RU", { numeric: "auto" });
