@@ -5,7 +5,7 @@ import { api } from "../api.js";
 import { ArrowRightIcon, CloseIcon } from "../icons.js";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { GalleryMetrics, GalleryResult, Model, ResultVersion } from "../types.js";
-import { completionLabels, formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, measurementConditions, modelKindLabels, modelKindOrder, plural } from "../ui.js";
+import { bestFirst, completionLabels, formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, measurementConditions, modelKindLabels, modelKindOrder, plural } from "../ui.js";
 import { ResultPreview } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
@@ -16,10 +16,9 @@ function stopPreview(preview: PreviewState) {
 
 const LEADER_TITLE = "Лучшая оценка по этому промпту среди моделей своего типа";
 
-function detailRows(result: GalleryResult, leader: boolean) {
+function detailRows(result: GalleryResult) {
   const rows: [string, string][] = [["Модель", result.model.name], ["Версия", versionLabel(result.selectedVersion)]];
   if (result.reviewScore != null) rows.push(["Моя оценка", `${result.reviewScore}/${result.reviewPossible ?? 40}`]);
-  if (leader) rows.push(["Лидер по промпту", LEADER_TITLE]);
   const conditions = result.profile ? measurementConditions({ name: result.profile.name, parameters: { context: result.profile.context } }) : undefined;
   if (conditions) rows.push(["Условия замера", conditions]);
   for (const tag of galleryResultTags(result)) {
@@ -61,12 +60,18 @@ function GalleryResultButton({ result, leader, onOpen }: { result: GalleryResult
 }
 
 function GalleryCell({ results, leaders, onOpen }: { results: GalleryResult[]; leaders: Set<string>; onOpen: (result: GalleryResult) => void }) {
-  if (!results.length) return <span className="gallery-empty">Нет результата</span>;
-  const [featured, ...alternatives] = results;
-  return <div className="gallery-cell"><GalleryResultButton result={featured!} leader={leaders.has(featured!.taskRunId)} onOpen={onOpen} />{alternatives.length ? <details className="gallery-multiple"><summary><strong>Ещё {alternatives.length} {plural(alternatives.length, "результат", "результата", "результатов")}</strong><span>Выберите запуск</span></summary><div>{alternatives.map((result) => <GalleryResultButton key={result.taskRunId} result={result} leader={leaders.has(result.taskRunId)} onOpen={onOpen} />)}</div></details> : null}</div>;
+  const best = results[0];
+  if (!best) return <span className="gallery-empty">Нет результата</span>;
+  return <div className="gallery-cell"><GalleryResultButton result={best} leader={leaders.has(best.taskRunId)} onOpen={onOpen} /></div>;
 }
 
-function GalleryDetail({ result, leader, alternatives, onClose }: { result: GalleryResult; leader: boolean; alternatives: boolean; onClose: () => void }) {
+/** Подпись соседнего результата в подробностях: чем он отличается — обвязкой, версией, оценкой. */
+function alternativeLabel(result: GalleryResult) {
+  const tags = galleryResultTags(result);
+  return [tags.length ? tags.join(" · ") : versionLabel(result.selectedVersion), result.reviewScore == null ? null : `${result.reviewScore}/${result.reviewPossible ?? 40}`].filter(Boolean).join(" — ");
+}
+
+function GalleryDetail({ result, alternatives, onOpen, onClose }: { result: GalleryResult; alternatives: GalleryResult[]; onOpen: (result: GalleryResult) => void; onClose: () => void }) {
   const client = useQueryClient();
   const dialog = useRef<HTMLDialogElement>(null);
   const activePreview = useRef<PreviewState | undefined>(undefined);
@@ -99,11 +104,12 @@ function GalleryDetail({ result, leader, alternatives, onClose }: { result: Gall
     };
   }, []);
   return <dialog className="gallery-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
-    <header><div><span className="mono">{versionLabel(result.selectedVersion)}</span>{result.completion ? <span className={`completion-flag ${result.completion}`}>{completionLabels[result.completion]}</span> : null}<h2>{result.prompt.name}</h2>{result.prompt.description ? <p className="task-description">{result.prompt.description}</p> : null}</div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
+    <header><div>{/* В матрице стоит только лучший результат модели: остальные обвязки и прогоны переключаются здесь. */}
+      <div className="gallery-dialog-meta"><span className="mono">{versionLabel(result.selectedVersion)}</span>{result.completion ? <span className={`completion-flag ${result.completion}`}>{completionLabels[result.completion]}</span> : null}{alternatives.length ? <div className="gallery-alternatives"><span className="mono">Ещё {alternatives.length} {plural(alternatives.length, "результат", "результата", "результатов")}:</span>{alternatives.map((item) => <button type="button" key={item.taskRunId} onClick={() => onOpen(item)}>{alternativeLabel(item)}</button>)}</div> : null}</div><h2>{result.prompt.name}</h2>{result.prompt.description ? <p className="task-description">{result.prompt.description}</p> : null}</div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
     {/* Живой preview встаёт на место снимка: снимок — это та же версия, только застывшая. */}
     <div className="gallery-detail-grid"><section>{preview ? <ResultPreview url={preview.url} target={preview} onClose={() => stop.mutate()} closing={stop.isPending} title={result.prompt.name} /> : <><Screenshot result={result} className="gallery-detail-shot" /><section className="preview-cta"><div><span className="mono">Готовая версия</span><strong>Запустить web-приложение</strong><p>Preview соберёт эту версию и заменит текущий запущенный preview.</p></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview"}<ArrowRightIcon /></button></section></>}{start.error || stop.error ? <p className="error">{(start.error ?? stop.error)?.message}</p> : null}</section>
-      <aside className="gallery-details"><dl>{detailRows(result, leader).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{/* Выбирать «главный» есть из чего только когда у пары модель×промпт несколько результатов. */}
-      {alternatives ? result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button> : null}{feature.error ? <p className="error">{feature.error.message}</p> : null}<ResultMetrics metrics={result.metrics} /><details className="final-prompt"><summary>Итоговый промпт</summary><pre>{result.prompt.prompt}</pre>{result.followupPrompts?.map((prompt, index) => <div key={index}><strong>Уточнение {index + 1}</strong><pre>{prompt}</pre></div>)}</details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть результат</Link>{result.reviewComment ? <p className="gallery-comment" title={result.reviewComment}><span className="mono">Комментарий к оценке</span>{result.reviewComment}</p> : null}</aside>
+      <aside className="gallery-details"><dl>{detailRows(result).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{/* Выбирать «главный» есть из чего только когда у пары модель×промпт несколько результатов. */}
+      {alternatives.length ? result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button> : null}{feature.error ? <p className="error">{feature.error.message}</p> : null}<ResultMetrics metrics={result.metrics} /><details className="final-prompt"><summary>Итоговый промпт</summary><pre>{result.prompt.prompt}</pre>{result.followupPrompts?.map((prompt, index) => <div key={index}><strong>Уточнение {index + 1}</strong><pre>{prompt}</pre></div>)}</details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть результат</Link>{result.reviewComment ? <p className="gallery-comment" title={result.reviewComment}><span className="mono">Комментарий к оценке</span>{result.reviewComment}</p> : null}</aside>
     </div>
   </dialog>;
 }
@@ -136,7 +142,7 @@ export function GalleryPage() {
   // Подписочные и локальные модели идут отдельными группами: сравнивать их между собой смысла нет.
   // Группы и лидеры считаются до скрытия: скрытая модель не должна переставлять звёздочки.
   const groups = modelKindOrder.map((kind) => ({ kind, rows: matrix.rows.filter((row) => row.kind === kind) })).filter((group) => group.rows.length);
-  const hiddenRows = matrix.rows.filter((row) => hiddenModelIds.has(row.rowKey));
+  const hiddenRows = matrix.rows.filter((row) => hiddenModelIds.has(row.model.id));
   return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея">
     {gallery.isPending ? <Skeleton rows={4} /> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
@@ -148,8 +154,8 @@ export function GalleryPage() {
     </div> : null}
     {matrix.rows.length ? <Panel title="Матрица результатов" action={<span className="mono">{matrix.rows.length} × {matrix.prompts.length}</span>}><div className="gallery-scroll"><table className="gallery-table"><thead><tr><th scope="col" className="gallery-model">Модель</th>{matrix.prompts.map((prompt) => <th scope="col" className="gallery-prompt" key={prompt.id} title={prompt.description || prompt.prompt}><strong>{prompt.name}</strong>{prompt.description ? <small className="task-description">{prompt.description}</small> : <small>{prompt.prompt}</small>}</th>)}</tr></thead>{groups.map((group) => <tbody key={group.kind}>
       {groups.length > 1 ? <tr className="gallery-group"><th scope="rowgroup" colSpan={matrix.prompts.length + 1}><button type="button" aria-expanded={!collapsedKinds.has(group.kind)} onClick={() => setCollapsedKinds((current) => toggled(current, group.kind))}>{modelKindLabels[group.kind]}</button></th></tr> : null}
-      {collapsedKinds.has(group.kind) ? null : group.rows.filter((row) => !hiddenModelIds.has(row.rowKey)).map((row) => <tr key={row.rowKey}><th scope="row" className="gallery-model">{row.model.name}{row.harness ? <small className="gallery-harness">{row.harness}</small> : null}<button type="button" className="gallery-hide" title={`Скрыть ${row.model.name}`} aria-label={`Скрыть ${row.model.name}`} onClick={() => setHiddenModelIds((current) => toggled(current, row.rowKey))}><CloseIcon /></button></th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} leaders={matrix.leaders} onOpen={setOpened} /></td>)}</tr>)}
-    </tbody>)}{hiddenRows.length ? <tfoot><tr><td className="gallery-hidden-note" colSpan={matrix.prompts.length + 1}>Скрыто: {hiddenRows.map((row) => [row.model.name, row.harness].filter(Boolean).join(" · ")).join(", ")} — <button type="button" onClick={() => setHiddenModelIds(new Set())}>показать все</button></td></tr></tfoot> : null}</table></div></Panel> : null}
-    {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} leader={matrix.leaders.has(opened.taskRunId)} alternatives={visible.filter((item) => item.model.id === opened.model.id && item.prompt.id === opened.prompt.id).length > 1} onClose={() => setOpened(undefined)} /> : null}
+      {collapsedKinds.has(group.kind) ? null : group.rows.filter((row) => !hiddenModelIds.has(row.model.id)).map((row) => <tr key={row.model.id}><th scope="row" className="gallery-model">{row.model.name}<button type="button" className="gallery-hide" title={`Скрыть ${row.model.name}`} aria-label={`Скрыть ${row.model.name}`} onClick={() => setHiddenModelIds((current) => toggled(current, row.model.id))}><CloseIcon /></button></th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} leaders={matrix.leaders} onOpen={setOpened} /></td>)}</tr>)}
+    </tbody>)}{hiddenRows.length ? <tfoot><tr><td className="gallery-hidden-note" colSpan={matrix.prompts.length + 1}>Скрыто: {hiddenRows.map((row) => row.model.name).join(", ")} — <button type="button" onClick={() => setHiddenModelIds(new Set())}>показать все</button></td></tr></tfoot> : null}</table></div></Panel> : null}
+    {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} alternatives={visible.filter((item) => item.model.id === opened.model.id && item.prompt.id === opened.prompt.id && item.taskRunId !== opened.taskRunId).toSorted(bestFirst)} onOpen={setOpened} onClose={() => setOpened(undefined)} /> : null}
   </Page></div>;
 }

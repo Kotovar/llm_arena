@@ -433,6 +433,44 @@ describe("Gallery", () => {
     expect(matrix.rows[0]!.cells[0]!.results.map((item) => item.taskRunId)).toEqual(["new", "first"]);
   });
 
+  it("сводит обвязки одной модели в одну строку и ставит лучший результат первым", () => {
+    const result = (taskRunId: string, runnerId: string, reviewScore: number) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: "p1", name: "Prompt", prompt: "Text" },
+      model: { id: "m1", name: "Model", kind: "local-gguf" as const },
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+      runnerId,
+      reviewScore,
+      reviewPossible: 40,
+    });
+
+    const matrix = galleryMatrix([result("omp", "omp", 20), result("pi", "pi-local", 32)]);
+
+    expect(matrix.rows).toHaveLength(1);
+    expect(matrix.rows[0]!.cells[0]!.results.map((item) => item.taskRunId)).toEqual(["pi", "omp"]);
+  });
+
+  it("не прячет лидера промпта за выбранным вручную главным результатом", () => {
+    const result = (taskRunId: string, reviewScore: number, featured = false) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: "p1", name: "Prompt", prompt: "Text" },
+      model: { id: "m1", name: "Model", kind: "local-gguf" as const },
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+      reviewScore,
+      reviewPossible: 40,
+      featured,
+    });
+
+    // Выбор куратора стоял на слабом прогоне: в ячейке видна одна плитка, и это должна быть лучшая.
+    const matrix = galleryMatrix([result("weak-featured", 20, true), result("best", 32)]);
+
+    expect(matrix.rows[0]!.cells[0]!.results[0]!.taskRunId).toBe("best");
+  });
+
   it("отмечает лидера по промпту внутри своего типа моделей", () => {
     const result = (taskRunId: string, kind: "cloud" | "local-gguf", reviewScore: number | null, reviewPossible = 40) => ({
       taskRunId,

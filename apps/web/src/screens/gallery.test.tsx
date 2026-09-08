@@ -78,37 +78,40 @@ describe("галерея по тегам", () => {
 });
 
 // Ссылка «Сравнить» из батча приводит в галерею с его промптами.
-// Один промпт на pi и на OMP должен стоять двумя строками в одном столбце.
-describe("строка матрицы «модель + обвязка»", () => {
-  it("разводит один и тот же прогон по обвязкам и подписывает их", async () => {
-    gallery = [
-      { ...result("p1", "Аквариум", []), taskRunId: "run-omp", runnerId: "omp", runnerKind: "omp", useOmpAgent: true },
-      { ...result("p1", "Аквариум", []), taskRunId: "run-pi", runnerId: "pi-local", runnerKind: "pi", useOmpAgent: false },
-    ] as GalleryResult[];
+// Обвязки одной модели живут в одной строке: в матрице лучший результат, остальные — в подробностях.
+describe("обвязки в одной строке модели", () => {
+  const harnessGallery = () => [
+    { ...result("p1", "Аквариум", []), taskRunId: "run-omp", model: { id: "model-1", name: "Ornith", kind: "local-gguf" }, runnerId: "omp", runnerKind: "omp", useOmpAgent: true, reviewScore: 20, reviewPossible: 40 },
+    { ...result("p1", "Аквариум", []), taskRunId: "run-pi", model: { id: "model-1", name: "Ornith", kind: "local-gguf" }, runnerId: "pi-local", runnerKind: "pi", useOmpAgent: false, reviewScore: 32, reviewPossible: 40 },
+  ] as GalleryResult[];
+
+  it("держит одну строку на модель и показывает в ней лучший результат", async () => {
+    gallery = harnessGallery();
     await renderInApp(<GalleryPage />);
     const table = await screen.findByRole("table");
 
     const rows = [...table.querySelectorAll("tbody th.gallery-model")];
-    expect(rows).toHaveLength(2);
-    expect(rows.map((cell) => cell.querySelector(".gallery-harness")?.textContent)).toEqual(["OMP-среда", "pi-среда"]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain("Ornith");
+    // В ячейке одна плитка — с большей оценкой, то есть pi.
+    const tiles = table.querySelectorAll(".gallery-result");
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0]!.textContent).toContain("32/40");
+    expect(tiles[0]!.textContent).toContain("pi-среда");
   });
 
-  // Подпись на плитке и в диалоге должна совпадать с заголовком строки, а не звать pi «без обвязки».
-  it("подписывает плитку той же обвязкой, что и строку", async () => {
-    gallery = [{ ...result("p1", "Аквариум", []), model: { id: "model-1", name: "Ornith", kind: "local-gguf" }, runnerId: "pi-local", runnerKind: "pi", useOmpAgent: false }] as GalleryResult[];
-    await renderInApp(<GalleryPage />);
-    await screen.findByRole("table");
-
-    expect(screen.getByText("pi-среда")).toBeTruthy();
-    expect(screen.queryByText("без обвязки")).toBeNull();
-  });
-
-  it("не подписывает обвязку, когда она у модели одна", async () => {
-    gallery = [{ ...result("p1", "Аквариум", []), runnerId: "omp", runnerKind: "omp", useOmpAgent: true }] as GalleryResult[];
+  it("даёт открыть вторую обвязку из подробностей", async () => {
+    const user = userEvent.setup();
+    gallery = harnessGallery();
     await renderInApp(<GalleryPage />);
     const table = await screen.findByRole("table");
+    await user.click(table.querySelector(".gallery-result")!);
 
-    expect(table.querySelector(".gallery-harness")).toBeNull();
+    const alternative = screen.getByRole("button", { name: "OMP-среда — 20/40" });
+    await user.click(alternative);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "pi-среда — 32/40" })).toBeTruthy());
+    expect(document.querySelector(".gallery-dialog")!.textContent).toContain("OMP-среда");
   });
 });
 
@@ -260,14 +263,15 @@ describe("лидеры и разделение по типу моделей", ()
     expect(leaders[0]!.closest("button")!.textContent).toContain("36/40");
   });
 
-  it("называет лидерство в подробностях результата", async () => {
+  // Звезда живёт на плитке: в подробностях она бы прыгала при переключении между средами одной модели.
+  it("не заводит строку о лидерстве в подробностях результата", async () => {
     const user = userEvent.setup();
     await renderInApp(<GalleryPage />);
     await screen.findByRole("table");
 
     await user.click(screen.getAllByRole("button", { name: /Исходная версия/u })[0]!);
 
-    expect(screen.getByText("Лидер по промпту")).toBeTruthy();
+    expect(screen.queryByText("Лидер по промпту")).toBeNull();
   });
 });
 

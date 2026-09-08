@@ -201,28 +201,28 @@ function galleryLeaders(results: GalleryResult[]) {
 }
 
 /**
- * Ключ строки матрицы — «модель + обвязка»: один и тот же промпт на pi и на OMP должен стоять
- * двумя строками в одном столбце, иначе сравнивать обвязки визуально нечем.
+ * Порядок результатов в ячейке: сперва доля от максимума, «главный» разводит только равные.
+ * Оценка выше выбора куратора намеренно: иначе лидер промпта прятался бы в альтернативах
+ * вместе со звёздочкой, и матрица переставала бы показывать, кто по промпту лучший.
  */
-export function galleryRowKey(result: Pick<GalleryResult, "model" | "runnerId" | "useOmpAgent">) {
-  return result.runnerId ? `${result.model.id}\0${harnessKey(result.runnerId, result.useOmpAgent === true)}` : result.model.id;
+export function bestFirst(left: GalleryResult, right: GalleryResult) {
+  return (scoreRatio(right) ?? -1) - (scoreRatio(left) ?? -1) || Number(Boolean(right.featured)) - Number(Boolean(left.featured));
 }
 
 export function galleryMatrix(results: GalleryResult[]) {
   const prompts = new Map<string, GalleryResult["prompt"]>();
-  const models = new Map<string, GalleryResult & { rowKey: string }>();
+  const models = new Map<string, GalleryResult>();
   const cells = new Map<string, GalleryResult[]>();
   for (const result of results) {
     prompts.set(result.prompt.id, prompts.get(result.prompt.id) ?? result.prompt);
-    const rowKey = galleryRowKey(result);
-    models.set(rowKey, models.get(rowKey) ?? { ...result, rowKey });
-    const key = `${result.prompt.id}\0${rowKey}`;
+    // Обвязка (pi/OMP) не заводит своей строки: в матрице стоит лучший результат модели,
+    // а остальные обвязки видны в подробностях — иначе половина таблицы уходит на дубли.
+    models.set(result.model.id, models.get(result.model.id) ?? result);
+    const key = `${result.prompt.id}\0${result.model.id}`;
     cells.set(key, [...(cells.get(key) ?? []), result]);
   }
   // Промптов со временем становится много, поэтому они идут столбцами: моделей в строках заметно меньше.
   const promptList = [...prompts.values()];
-  const harnessCounts = new Map<string, number>();
-  for (const row of models.values()) harnessCounts.set(row.model.id, (harnessCounts.get(row.model.id) ?? 0) + 1);
   return {
     prompts: promptList,
     leaders: galleryLeaders(results),
@@ -230,11 +230,8 @@ export function galleryMatrix(results: GalleryResult[]) {
       .toSorted((left, right) => modelKindOrder.indexOf(modelKindOf(left.model)) - modelKindOrder.indexOf(modelKindOf(right.model)))
       .map((row) => ({
         model: row.model,
-        rowKey: row.rowKey,
-        // Подпись обвязки нужна только там, где у модели их несколько: иначе это шум в каждой строке.
-        harness: harnessCounts.get(row.model.id)! > 1 ? harnessAxisLabel(row.runnerKind, row.useOmpAgent === true) ?? row.runnerId ?? null : null,
         kind: modelKindOf(row.model),
-        cells: promptList.map((prompt) => ({ prompt, results: (cells.get(`${prompt.id}\0${row.rowKey}`) ?? []).toSorted((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))) })),
+        cells: promptList.map((prompt) => ({ prompt, results: (cells.get(`${prompt.id}\0${row.model.id}`) ?? []).toSorted(bestFirst) })),
       })),
   };
 }
