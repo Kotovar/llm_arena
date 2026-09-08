@@ -212,15 +212,28 @@ function LogDialog({ path, onClose }: { path: string; onClose: () => void }) {
   </dialog>;
 }
 
-export function ResultPreview({ url, target, onClose, closing, title = "Готовое web-приложение" }: { url: string; target: { taskRunId: string; resultSha: string }; onClose: () => void; closing?: boolean; title?: string }) {
+export function ResultPreview({ url, target, onClose, closing, title = "Готовое web-приложение", viewport }: { url: string; target: { taskRunId: string; resultSha: string }; onClose: () => void; closing?: boolean; title?: string; viewport?: { width: number; height: number } }) {
   usePreviewHeartbeat([target]);
+  const frame = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0);
+  const viewportWidth = viewport?.width;
+  const viewportHeight = viewport?.height;
+  useEffect(() => {
+    if (!frame.current || !viewportWidth || !viewportHeight) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setScale(Math.min(entry.contentRect.width / viewportWidth, entry.contentRect.height / viewportHeight));
+    });
+    observer.observe(frame.current);
+    return () => observer.disconnect();
+  }, [viewportWidth, viewportHeight]);
   useEffect(() => {
     // Фокус часто внутри iframe, поэтому слушаем на окне, а не на секции.
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !closing) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, closing]);
-  return <section className="result-preview"><header><div><span className="mono">Preview запущен</span><strong>{title}</strong></div><div><a href={url} target="_blank" rel="noreferrer">Открыть в новой вкладке <ExternalIcon /></a><button type="button" onClick={onClose} disabled={closing} title="Esc">Остановить preview</button></div></header><iframe title={`Preview: ${title}`} src={url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" /></section>;
+  const iframe = <iframe title={`Preview: ${title}`} src={url} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock" style={viewport ? { width: viewport.width, height: viewport.height, transform: `translate(-50%, -50%) scale(${scale})` } : undefined} />;
+  return <section className="result-preview"><header><div><span className="mono">Preview запущен</span><strong>{title}</strong></div><div><a href={url} target="_blank" rel="noreferrer">Открыть в новой вкладке <ExternalIcon /></a><button type="button" onClick={onClose} disabled={closing} title="Esc">Остановить preview</button></div></header>{viewport ? <div className="preview-scaled-frame" ref={frame}>{iframe}</div> : iframe}</section>;
 }
 
 type ScoreKey = "correctness" | "codeQuality" | "uiQuality" | "instructionFollowing";
@@ -458,6 +471,7 @@ function railItems(taskRuns: readonly TaskRun[]): RailItem[] {
 /** Список промптов запуска: при десятке заданий вертикальная простыня карточек нечитаема. */
 function PromptRail({ items, activeId, reviewed, onSelect, onNextUnrated }: { items: RailItem[]; activeId: string; reviewed: number; onSelect: (id: string) => void; onNextUnrated?: (() => void) | undefined }) {
   return <nav className="prompt-rail" aria-label="Промпты запуска" aria-keyshortcuts="ArrowLeft ArrowRight">
+    <div className="prompt-rail-heading"><strong>Промпты</strong><span>{items.length}</span></div>
     <ol>{items.map(({ taskRun, name, score }, index) => <li key={taskRun.id}>
       <button type="button" className={taskRun.id === activeId ? "rail-item active" : "rail-item"} aria-current={taskRun.id === activeId} onClick={() => onSelect(taskRun.id)}>
         <span className="rail-number">{index + 1}</span>
@@ -564,7 +578,7 @@ export function RunDetail({ runId }: { runId: string }) {
     ...(run.data.repeat_count > 1 ? { repeat: run.data.repeat_count } : {}),
     ...(run.data.warmup_attempt ? { warmup: true } : {}),
   } : undefined;
-  return <Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", harnessLabel(runners.data?.find((runner) => runner.id === run.data!.runner_id)?.kind, run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
+  return <div className="run-detail-page"><Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", harnessLabel(runners.data?.find((runner) => runner.id === run.data!.runner_id)?.kind, run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName ?? followupTaskName, runningFollowup)} />
     {/* Прогон батча открывают со страницы батча — туда же и возвращаем, иначе назад пришлось бы
         идти через список одиночных запусков и переключать вкладку. */}
@@ -578,5 +592,5 @@ export function RunDetail({ runId }: { runId: string }) {
       <div className="run-pane">
         {activeTaskRun ? <TaskResult key={activeTaskRun.id} taskRun={activeTaskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} onDeleted={() => selectTaskRun(undefined)} deletable={items.length > 1} /> : null}
       </div></div> : null}{isActive && !items.length ? <Empty>Готовим рабочее окружение и запускаем модель…</Empty> : null}{remove.error ? <p className="error">{remove.error.message}</p> : null}{resume.error ? <p className="error">{resume.error.message}</p> : null}</Panel>{confirmView}
-  </Page>;
+  </Page></div>;
 }

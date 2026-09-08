@@ -17,8 +17,7 @@ function stopPreview(preview: PreviewState) {
 const LEADER_TITLE = "Лучшая оценка по этому промпту среди моделей своего типа";
 
 function detailRows(result: GalleryResult) {
-  const rows: [string, string][] = [["Модель", result.model.name], ["Версия", versionLabel(result.selectedVersion)]];
-  if (result.reviewScore != null) rows.push(["Моя оценка", `${result.reviewScore}/${result.reviewPossible ?? 40}`]);
+  const rows: [string, string][] = [["Версия", versionLabel(result.selectedVersion)]];
   const conditions = result.profile ? measurementConditions({ name: result.profile.name, parameters: { context: result.profile.context } }) : undefined;
   if (conditions) rows.push(["Условия замера", conditions]);
   for (const tag of galleryResultTags(result)) {
@@ -44,16 +43,16 @@ function ResultMetrics({ metrics, compact = false }: { metrics: GalleryMetrics |
   return <dl className={compact ? "gallery-metrics compact" : "gallery-metrics"}>{visible.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>;
 }
 
-function Screenshot({ result, className }: { result: GalleryResult; className: string }) {
+function Screenshot({ result, className, onSize }: { result: GalleryResult; className: string; onSize?: (size: { width: number; height: number }) => void }) {
   const [missing, setMissing] = useState(false);
   if (!result.screenshotUrl || missing) return <div className={`${className} gallery-shot-missing`}>Снимок недоступен</div>;
-  return <img className={className} src={result.screenshotUrl} alt={`Снимок: ${result.prompt.name}, ${result.model.name}`} loading="lazy" onError={() => setMissing(true)} />;
+  return <img className={className} src={result.screenshotUrl} alt={`Снимок: ${result.prompt.name}, ${result.model.name}`} loading="lazy" onLoad={(event) => onSize?.({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} onError={() => setMissing(true)} />;
 }
 
 function GalleryResultButton({ result, leader, onOpen }: { result: GalleryResult; leader: boolean; onOpen: (result: GalleryResult) => void }) {
   const tags = galleryResultTags(result);
   return <button type="button" className="gallery-result" onClick={() => onOpen(result)}>
-    <Screenshot result={result} className="gallery-shot" />
+    <span className="gallery-shot-wrap"><Screenshot result={result} className="gallery-shot" /><span className="gallery-open-hint" aria-hidden="true">Открыть результат ↗</span></span>
     <span className="gallery-result-copy"><strong><span className="gallery-result-title">{result.completion ? <span className={`completion-dot ${result.completion}`} title={completionLabels[result.completion]} aria-label={completionLabels[result.completion]} /> : null}{versionLabel(result.selectedVersion)}</span>{result.reviewScore != null ? <span className="gallery-score">{leader ? <span className="gallery-leader" title={LEADER_TITLE} aria-label={LEADER_TITLE}>★</span> : null}{result.reviewScore}/{result.reviewPossible ?? 40}</span> : null}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
     <ResultMetrics metrics={result.metrics} compact />
   </button>;
@@ -77,6 +76,7 @@ function GalleryDetail({ result, alternatives, onOpen, onClose }: { result: Gall
   const activePreview = useRef<PreviewState | undefined>(undefined);
   const closed = useRef(false);
   const [preview, setPreview] = useState<PreviewState>();
+  const [viewport, setViewport] = useState({ width: 1280, height: 860 });
   const start = useMutation({
     mutationFn: () => api<PreviewState>(`/task-runs/${result.taskRunId}/preview`, { method: "POST", body: JSON.stringify({ resultSha: result.selectedVersion.resultSha }) }),
     onSuccess: (next) => {
@@ -103,13 +103,23 @@ function GalleryDetail({ result, alternatives, onOpen, onClose }: { result: Gall
       if (active) void stopPreview(active);
     };
   }, []);
-  return <dialog className="gallery-dialog" ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
-    <header><div>{/* В матрице стоит только лучший результат модели: остальные обвязки и прогоны переключаются здесь. */}
-      <div className="gallery-dialog-meta"><span className="mono">{versionLabel(result.selectedVersion)}</span>{result.completion ? <span className={`completion-flag ${result.completion}`}>{completionLabels[result.completion]}</span> : null}{alternatives.length ? <div className="gallery-alternatives"><span className="mono">Ещё {alternatives.length} {plural(alternatives.length, "результат", "результата", "результатов")}:</span>{alternatives.map((item) => <button type="button" key={item.taskRunId} onClick={() => onOpen(item)}>{alternativeLabel(item)}</button>)}</div> : null}</div><h2>{result.prompt.name}</h2>{result.prompt.description ? <p className="task-description">{result.prompt.description}</p> : null}</div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
-    {/* Живой preview встаёт на место снимка: снимок — это та же версия, только застывшая. */}
-    <div className="gallery-detail-grid"><section>{preview ? <ResultPreview url={preview.url} target={preview} onClose={() => stop.mutate()} closing={stop.isPending} title={result.prompt.name} /> : <><Screenshot result={result} className="gallery-detail-shot" /><section className="preview-cta"><div><span className="mono">Готовая версия</span><strong>Запустить web-приложение</strong><p>Preview соберёт эту версию и заменит текущий запущенный preview.</p></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview"}<ArrowRightIcon /></button></section></>}{start.error || stop.error ? <p className="error">{(start.error ?? stop.error)?.message}</p> : null}</section>
-      <aside className="gallery-details"><dl>{detailRows(result).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{/* Выбирать «главный» есть из чего только когда у пары модель×промпт несколько результатов. */}
-      {alternatives.length ? result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button> : null}{feature.error ? <p className="error">{feature.error.message}</p> : null}<ResultMetrics metrics={result.metrics} /><details className="final-prompt"><summary>Итоговый промпт</summary><pre>{result.prompt.prompt}</pre>{result.followupPrompts?.map((prompt, index) => <div key={index}><strong>Уточнение {index + 1}</strong><pre>{prompt}</pre></div>)}</details><Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть результат</Link>{result.reviewComment ? <p className="gallery-comment" title={result.reviewComment}><span className="mono">Комментарий к оценке</span>{result.reviewComment}</p> : null}</aside>
+  return <dialog className="gallery-dialog" aria-label={`${result.prompt.name} — ${result.model.name}`} ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
+    <header><div><span className="mono">Результат из галереи</span><h2>{result.prompt.name}</h2><div className="gallery-dialog-meta"><span>{result.model.name}</span>{result.completion ? <span className={`completion-flag ${result.completion}`}>{completionLabels[result.completion]}</span> : null}</div></div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
+    <div className="gallery-detail-grid">
+      <section className="gallery-stage" aria-label="Просмотр результата">
+        {preview ? <ResultPreview url={preview.url} target={preview} onClose={() => stop.mutate()} closing={stop.isPending} title={result.prompt.name} viewport={viewport} /> : <div className="gallery-viewer">
+          <div className="gallery-viewer-toolbar"><div><strong>Снимок результата</strong><span>{versionLabel(result.selectedVersion)}</span></div><button type="button" className="primary" onClick={() => start.mutate()} disabled={start.isPending}>{start.isPending ? "Запускаем…" : "Запустить preview"}<ArrowRightIcon /></button></div>
+          <div className="gallery-shot-stage"><Screenshot result={result} className="gallery-detail-shot" onSize={setViewport} /></div>
+        </div>}
+        {start.error || stop.error ? <p className="error" role="alert">{(start.error ?? stop.error)?.message}</p> : null}
+        <details className="final-prompt gallery-prompt-details"><summary>Итоговый промпт</summary>{result.prompt.description ? <p className="gallery-task-summary">{result.prompt.description}</p> : null}<pre>{result.prompt.prompt}</pre>{result.followupPrompts?.map((prompt, index) => <div key={index}><strong>Уточнение {index + 1}</strong><pre>{prompt}</pre></div>)}</details>
+      </section>
+      <aside className="gallery-details" aria-label="Сведения о результате">
+        <section className="gallery-review-card"><div className="gallery-review-heading"><h3>Моя оценка</h3>{result.reviewScore != null ? <strong>{result.reviewScore}<span> / {result.reviewPossible ?? 40}</span></strong> : <span className="mono">Пока нет оценки</span>}</div>{result.reviewComment ? <p className="gallery-comment"><span className="mono">Комментарий к оценке</span>{result.reviewComment}</p> : null}<Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть результат<ArrowRightIcon /></Link></section>
+        <section className="gallery-run-info"><h3>Параметры результата</h3><dl>{detailRows(result).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><ResultMetrics metrics={result.metrics} /></section>
+        {alternatives.length ? <section className="gallery-variants"><h3>Другие результаты модели <span>{alternatives.length}</span></h3><div className="gallery-alternatives">{alternatives.map((item) => <button type="button" key={item.taskRunId} onClick={() => onOpen(item)}><span>{alternativeLabel(item)}</span><small>{versionLabel(item.selectedVersion)}</small></button>)}</div>{result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" className="gallery-feature-action" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button>}</section> : null}
+        {feature.error ? <p className="error" role="alert">{feature.error.message}</p> : null}
+      </aside>
     </div>
   </dialog>;
 }
@@ -129,32 +139,38 @@ export function GalleryPage() {
   const batchModelIds = modelFilter ? new Set(modelFilter.split(",")) : undefined;
   const [opened, setOpened] = useState<GalleryResult>();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [search, setSearch] = useState("");
   const [hiddenModelIds, setHiddenModelIds] = useState<ReadonlySet<string>>(new Set());
   const [collapsedKinds, setCollapsedKinds] = useState<ReadonlySet<Model["kind"]>>(new Set());
   const all = (gallery.data ?? []).filter((result) => (!batchPromptIds || batchPromptIds.has(result.prompt.id)) && (!batchModelIds || batchModelIds.has(result.model.id)));
   const tags = [...new Set(all.flatMap((result) => result.prompt.tags ?? []))].sort((left, right) => left.localeCompare(right, "ru"));
   // Промпт без тегов не принадлежит ни одному срезу, поэтому под выбранным фильтром его не показываем.
-  const visible = selectedTags.length
-    ? all.filter((result) => (result.prompt.tags ?? []).some((tag) => selectedTags.includes(tag)))
-    : all;
+  const query = search.trim().toLocaleLowerCase("ru");
+  const visible = all.filter((result) =>
+    (!selectedTags.length || (result.prompt.tags ?? []).some((tag) => selectedTags.includes(tag))) &&
+    (!query || `${result.prompt.name} ${result.model.name}`.toLocaleLowerCase("ru").includes(query)));
   const toggleTag = (tag: string) => setSelectedTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]);
   const matrix = galleryMatrix(visible);
+  // Поиск модели не меняет лидера среди всех моделей её типа.
+  const leaders = query ? galleryMatrix(all).leaders : matrix.leaders;
   // Подписочные и локальные модели идут отдельными группами: сравнивать их между собой смысла нет.
   // Группы и лидеры считаются до скрытия: скрытая модель не должна переставлять звёздочки.
   const groups = modelKindOrder.map((kind) => ({ kind, rows: matrix.rows.filter((row) => row.kind === kind) })).filter((group) => group.rows.length);
   const hiddenRows = matrix.rows.filter((row) => hiddenModelIds.has(row.model.id));
-  return <div className="gallery-page"><Page title="Галерея" eyebrow="Галерея">
+  return <div className="gallery-page"><Page title="Галерея результатов" eyebrow="Сравнение моделей" intro="Один промпт — разные решения. Сравните снимки и откройте результат, чтобы проверить его в работе.">
     {gallery.isPending ? <Skeleton rows={4} /> : null}
     {gallery.error ? <p className="error">{gallery.error.message}</p> : null}
     {!gallery.isPending && !gallery.error && !gallery.data?.length ? <Empty action={<Link to="/">Запустить web-задачу</Link>}>Пока нет успешных web-результатов с выбранной версией. Итоговую версию выбирают на странице результата.</Empty> : null}
     {batchPromptIds || batchModelIds ? <p className="batch-active">Срез батча: {batchModelIds ? `${batchModelIds.size} ${plural(batchModelIds.size, "модель", "модели", "моделей")}` : "все модели"} × {batchPromptIds ? `${batchPromptIds.size} ${plural(batchPromptIds.size, "промпт", "промпта", "промптов")}` : "все промпты"}. <Link to="/gallery">Показать все</Link></p> : null}
+    {all.length ? <div className="gallery-toolbar"><label className="gallery-search"><span>Найти результат</span><input type="search" placeholder="Промпт или модель" value={search} onChange={(event) => setSearch(event.target.value)} /></label><p className="gallery-summary" role="status">{matrix.rows.length} {plural(matrix.rows.length, "модель", "модели", "моделей")}<span aria-hidden="true"> × </span>{matrix.prompts.length} {plural(matrix.prompts.length, "промпт", "промпта", "промптов")}</p></div> : null}
     {tags.length ? <div className="gallery-tags" role="group" aria-label="Теги промптов">
       <button type="button" className={selectedTags.length ? "" : "active"} aria-pressed={selectedTags.length === 0} onClick={() => setSelectedTags([])}>Все промпты</button>
       {tags.map((tag) => <button type="button" key={tag} className={selectedTags.includes(tag) ? "active" : ""} aria-pressed={selectedTags.includes(tag)} onClick={() => toggleTag(tag)}>{tag}</button>)}
     </div> : null}
+    {!gallery.isPending && !gallery.error && Boolean(gallery.data?.length) && !matrix.rows.length ? <Empty action={search || selectedTags.length ? <button type="button" onClick={() => { setSearch(""); setSelectedTags([]); }}>Сбросить фильтры</button> : <Link to="/gallery">Показать всю галерею</Link>}>Нет результатов по выбранным условиям.</Empty> : null}
     {matrix.rows.length ? <Panel title="Матрица результатов" action={<span className="mono">{matrix.rows.length} × {matrix.prompts.length}</span>}><div className="gallery-scroll"><table className="gallery-table"><thead><tr><th scope="col" className="gallery-model">Модель</th>{matrix.prompts.map((prompt) => <th scope="col" className="gallery-prompt" key={prompt.id} title={prompt.description || prompt.prompt}><strong>{prompt.name}</strong>{prompt.description ? <small className="task-description">{prompt.description}</small> : <small>{prompt.prompt}</small>}</th>)}</tr></thead>{groups.map((group) => <tbody key={group.kind}>
       {groups.length > 1 ? <tr className="gallery-group"><th scope="rowgroup" colSpan={matrix.prompts.length + 1}><button type="button" aria-expanded={!collapsedKinds.has(group.kind)} onClick={() => setCollapsedKinds((current) => toggled(current, group.kind))}>{modelKindLabels[group.kind]}</button></th></tr> : null}
-      {collapsedKinds.has(group.kind) ? null : group.rows.filter((row) => !hiddenModelIds.has(row.model.id)).map((row) => <tr key={row.model.id}><th scope="row" className="gallery-model">{row.model.name}<button type="button" className="gallery-hide" title={`Скрыть ${row.model.name}`} aria-label={`Скрыть ${row.model.name}`} onClick={() => setHiddenModelIds((current) => toggled(current, row.model.id))}><CloseIcon /></button></th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} leaders={matrix.leaders} onOpen={setOpened} /></td>)}</tr>)}
+      {collapsedKinds.has(group.kind) ? null : group.rows.filter((row) => !hiddenModelIds.has(row.model.id)).map((row) => <tr key={row.model.id}><th scope="row" className="gallery-model">{row.model.name}<button type="button" className="gallery-hide" title={`Скрыть ${row.model.name}`} aria-label={`Скрыть ${row.model.name}`} onClick={() => setHiddenModelIds((current) => toggled(current, row.model.id))}><CloseIcon /></button></th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} leaders={leaders} onOpen={setOpened} /></td>)}</tr>)}
     </tbody>)}{hiddenRows.length ? <tfoot><tr><td className="gallery-hidden-note" colSpan={matrix.prompts.length + 1}>Скрыто: {hiddenRows.map((row) => row.model.name).join(", ")} — <button type="button" onClick={() => setHiddenModelIds(new Set())}>показать все</button></td></tr></tfoot> : null}</table></div></Panel> : null}
     {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} alternatives={visible.filter((item) => item.model.id === opened.model.id && item.prompt.id === opened.prompt.id && item.taskRunId !== opened.taskRunId).toSorted(bestFirst)} onOpen={setOpened} onClose={() => setOpened(undefined)} /> : null}
   </Page></div>;

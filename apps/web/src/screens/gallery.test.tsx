@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDialogSupport, renderInApp } from "../test-harness.js";
@@ -22,6 +22,11 @@ function result(promptId: string, name: string, tags: string[]): GalleryResult {
 let gallery: GalleryResult[];
 
 beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe() { this.callback([{ contentRect: { width: 640, height: 400 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+    disconnect() {}
+  });
   gallery = [
     result("p1", "Аквариум", ["код"]),
     result("p2", "Часы", ["текст"]),
@@ -36,6 +41,20 @@ afterEach(() => {
 });
 
 describe("галерея по тегам", () => {
+  it("ищет без учёта регистра, сочетает поиск с тегами и сбрасывает пустой срез", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+    const search = screen.getByRole("searchbox", { name: "Найти результат" });
+    await user.type(search, "  АКВАРИУМ  ");
+    expect(within(screen.getByRole("table")).queryByText("Часы")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "текст" }));
+    expect(screen.queryByRole("table")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
+    expect(within(screen.getByRole("table")).getByText("Часы")).toBeTruthy();
+    await user.type(search, "модель");
+    expect(within(screen.getByRole("table")).getByText("Без тега")).toBeTruthy();
+  });
   it("показывает все промпты, пока чипсы не выбраны", async () => {
     await renderInApp(<GalleryPage />);
     const table = await screen.findByRole("table");
@@ -107,10 +126,10 @@ describe("обвязки в одной строке модели", () => {
     const table = await screen.findByRole("table");
     await user.click(table.querySelector(".gallery-result")!);
 
-    const alternative = screen.getByRole("button", { name: "OMP-среда — 20/40" });
+    const alternative = screen.getByRole("button", { name: /OMP-среда — 20\/40/u });
     await user.click(alternative);
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "pi-среда — 32/40" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /pi-среда — 32\/40/u })).toBeTruthy());
     expect(document.querySelector(".gallery-dialog")!.textContent).toContain("OMP-среда");
   });
 });
@@ -166,10 +185,17 @@ describe("preview в подробностях результата", () => {
 
     await user.click(screen.getByRole("button", { name: /Аквариум/u }));
     expect(document.querySelector("img.gallery-detail-shot")).toBeTruthy();
+    const shot = document.querySelector("img.gallery-detail-shot")!;
+    Object.defineProperties(shot, { naturalWidth: { value: 1280 }, naturalHeight: { value: 860 } });
+    fireEvent.load(shot);
 
     await user.click(screen.getByRole("button", { name: /Запустить preview/u }));
 
     expect(await screen.findByTitle("Preview: Аквариум")).toBeTruthy();
+    const iframe = screen.getByTitle("Preview: Аквариум");
+    expect(iframe.style.width).toBe("1280px");
+    expect(iframe.style.height).toBe("860px");
+    expect(iframe.style.transform).toBe(`translate(-50%, -50%) scale(${400 / 860})`);
     expect(document.querySelector("img.gallery-detail-shot")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Остановить preview" }));
@@ -181,6 +207,21 @@ describe("preview в подробностях результата", () => {
 
 describe("подробности результата", () => {
   const opened = (extra: Partial<GalleryResult>): GalleryResult => ({ ...result("p1", "Аквариум", ["код"]), screenshotUrl: "/api/shot.png", ...extra });
+
+  it("показывает нулевую оценку, раскрывает уточнения и закрывается кнопкой", async () => {
+    const user = userEvent.setup();
+    gallery = [opened({ reviewScore: 0, reviewPossible: 40, followupPrompts: ["Добавь рыб"] })];
+    await renderInApp(<GalleryPage />);
+    await user.click(await screen.findByRole("button", { name: /Аквариум/u }));
+    const dialog = screen.getByRole("dialog", { name: "Аквариум — Модель" });
+    expect(within(dialog).queryByText("Пока нет оценки")).toBeNull();
+    expect(dialog.querySelector(".gallery-review-heading strong")?.textContent).toBe("0 / 40");
+    await user.click(within(dialog).getByText("Итоговый промпт"));
+    expect(dialog.querySelector("details")?.open).toBe(true);
+    expect(within(dialog).getByText("Добавь рыб")).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "Закрыть подробности результата" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
 
   // Единственный результат в ячейке и так главный: выбирать не из чего.
   it("прячет «сделать главным», пока у пары модель×промпт один результат", async () => {
@@ -261,6 +302,14 @@ describe("лидеры и разделение по типу моделей", ()
     const leaders = within(table).getAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа");
     expect(leaders.length).toBe(1);
     expect(leaders[0]!.closest("button")!.textContent).toContain("36/40");
+  });
+
+  it("сохраняет звезду лидера при поиске по имени модели", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<GalleryPage />);
+    await screen.findByRole("table");
+    await user.type(screen.getByRole("searchbox"), "Claude");
+    expect(screen.getAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа")).toHaveLength(1);
   });
 
   // Звезда живёт на плитке: в подробностях она бы прыгала при переключении между средами одной модели.
