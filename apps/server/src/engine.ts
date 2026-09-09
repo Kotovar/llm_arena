@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { FixtureManifest, LlamaProfile, StopReason, TaskImage, WatchdogDiagnostics } from "@llm-arena/shared";
-import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace } from "./artifacts.js";
+import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace, type PreparedWorkspace } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { loadOwnerId, recoverOwnedProcesses } from "./lifecycle.js";
 import { LlamaCppServerManager } from "./llama-server.js";
@@ -16,7 +16,7 @@ import type { ArenaStore } from "./store.js";
 import { completedResultVersions } from "./result-versions.js";
 import { readExecutableVersion, readGpuInfo, startGpuSampler, type GpuInfo } from "./system-metrics.js";
 import { buildTaskPrompt } from "./task-prompt.js";
-import { describeGenerationError } from "./generation-error.js";
+import { POST_PROCESSING_PREFIX, describeGenerationError } from "./generation-error.js";
 import { taskImagePath } from "./task-images.js";
 import { AgentLoopError, createWatchdog } from "./watchdog.js";
 
@@ -60,6 +60,18 @@ function assertModelCapabilities(
 
 function runnerImages(dataDir: string, images: readonly TaskImage[]) {
   return images.map((image) => ({ path: taskImagePath(dataDir, image), mimeType: image.mimeType }));
+}
+
+/**
+ * Коммит результата и патч — служебный шаг арены, а не работа агента. Его сбой помечается
+ * отдельным префиксом, чтобы неудача пайплайна не выглядела как неудача модели.
+ */
+function finalizeResult(prepared: PreparedWorkspace): { artifacts?: ReturnType<typeof finalizeWorkspace>; error?: string } {
+  try {
+    return { artifacts: finalizeWorkspace(prepared) };
+  } catch (error) {
+    return { error: `${POST_PROCESSING_PREFIX} ${(error as Error).message}` };
+  }
 }
 
 /** Допуск к резерву VRAM: настолько llama.cpp промахивается мимо своего же --fit-target. */
@@ -372,12 +384,14 @@ export class BenchmarkEngine {
           if (backend?.contextTokens) result.metrics.contextWindowTokens = { value: backend.contextTokens, unit: "tokens", source: "llama.cpp" };
           const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, taskSignal) : [];
           const failedCheck = checks.find((check) => check.status !== "pass");
-          const status = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
-          const artifacts = status === "completed" ? finalizeWorkspace(prepared) : undefined;
+          const agentStatus = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
+          // Сбой служебного шага после агента — не сбой агента, поэтому он отделён и подписан отдельно.
+          const finalized = agentStatus === "completed" ? finalizeResult(prepared) : { artifacts: undefined, error: undefined };
+          const status = agentStatus === "completed" && !finalized.error ? "completed" as const : "failed" as const;
           const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, taskSignal);
-          const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
+          const saved = { ...result, artifacts: finalized.artifacts, checks, previewImage: Boolean(previewImage) };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
-          const failure = status === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined;
+          const failure = finalized.error ?? (agentStatus === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
           this.store.saveTaskRunResult(taskRun.id, saved, status, failure);
           if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, saved, status, failure);
         } catch (error) {
@@ -485,14 +499,15 @@ export class BenchmarkEngine {
       if (backend?.contextTokens) result.metrics.contextWindowTokens = { value: backend.contextTokens, unit: "tokens", source: "llama.cpp" };
       const checks = snapshot.fixture ? await this.#runChecks(snapshot.fixture, workspace, followup.artifact_path, signal) : [];
       const failedCheck = checks.find((check) => check.status !== "pass");
-      const status = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
-      const artifacts = status === "completed"
-        ? finalizeWorkspace({ artifactRoot: followup.artifact_path, workspace, gitDir, baselineSha: baseVersion.baselineSha })
-        : undefined;
+      const agentStatus = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
+      const finalized = agentStatus === "completed"
+        ? finalizeResult({ artifactRoot: followup.artifact_path, workspace, gitDir, baselineSha: baseVersion.baselineSha })
+        : { artifacts: undefined, error: undefined };
+      const status = agentStatus === "completed" && !finalized.error ? "completed" as const : "failed" as const;
       const previewImage = status === "completed" && await this.#capturePreview(snapshot.fixture, workspace, followup.artifact_path, signal);
-      const saved = { ...result, artifacts, checks, previewImage: Boolean(previewImage) };
+      const saved = { ...result, artifacts: finalized.artifacts, checks, previewImage: Boolean(previewImage) };
       writeFileSync(join(followup.artifact_path, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
-      this.store.saveFollowupResult(followup.id, saved, status, status === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
+      this.store.saveFollowupResult(followup.id, saved, status, finalized.error ?? (agentStatus === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined));
     } finally {
       await backend?.stop();
     }

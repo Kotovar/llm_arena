@@ -1665,6 +1665,44 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("отдаёт обрезанный патч и сохраняет остальной результат промпта", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-big-diff-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Три-дэ", kind: "coding", prompt: "Сделай", fixtureId: "web-app", tags: [] });
+    const model = store.createModel({ name: "Модель", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+    const source = join(directory, "fixture");
+    mkdirSync(source);
+    writeFileSync(join(source, "index.html"), "<h1>ok</h1>");
+    const artifactPath = join(directory, "result");
+    const prepared = prepareWorkspace(source, artifactPath);
+    writeFileSync(join(prepared.workspace, "three.core.js"), "const x = 1;\n".repeat(60_000));
+    writeFileSync(join(prepared.workspace, "app.js"), "start();\n");
+    const artifacts = finalizeWorkspace(prepared);
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, artifactPath, { task: task.currentRevision });
+    store.saveTaskRunResult(taskRun.id, { artifacts, checks: [] });
+
+    // Огромный вендорный файл не отменяет успешного промпта: статус и SHA результата на месте.
+    const stored = store.getTaskRun(taskRun.id)!;
+    expect(stored.status).toBe("completed");
+    expect(JSON.parse(stored.result_json!).artifacts.resultSha).toBe(artifacts.resultSha);
+    expect(JSON.parse(stored.result_json!).artifacts.diff).toMatchObject({ status: "partial", omittedCount: 1 });
+
+    const diff = await app.inject({ method: "GET", url: `/api/task-runs/${taskRun.id}/diff?resultSha=${artifacts.resultSha}` });
+    expect(diff.statusCode).toBe(200);
+    expect(diff.body).toContain("Result diff exceeded configured size limit");
+    expect(diff.body).toContain("+start();");
+    expect(diff.body).not.toContain("const x = 1;");
+
+    await app.close();
+    store.close();
+  });
+
   it("тегирует промпт, не трогая его версию и галерею", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-tags-"));
     directories.push(directory);
@@ -1781,6 +1819,34 @@ describe("REST API", () => {
 
     const all = await app.inject({ method: "GET", url: "/api/analytics/decision-points" });
     expect((all.json() as Array<{ sampleCount: number; tag: string | null }>)[0]).toMatchObject({ sampleCount: 6, tag: null });
+    await app.close();
+    store.close();
+  });
+
+  it("округляет медианы скорости в аналитике, а не отдаёт сырые доли", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-analytics-rounding-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(directory, ".data");
+    const app = buildApp({ store, config });
+
+    const task = store.createTask({ name: "Скорость", kind: "prompt", prompt: "Answer", tags: [] });
+    const model = store.createModel({ name: "Модель", kind: "cloud", provider: "openai", modelRef: "model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "t0"), { task: { id: task.currentRevision.id } });
+    // Метрика приходит от раннера как есть: именно такая дробь и утекала в таблицу целиком.
+    store.saveTaskRunResult(taskRun.id, {
+      finalAnswer: "A",
+      metrics: { generationTokensPerSecond: { value: 74.1721230494744 }, outputTokens: { value: 794 }, totalDurationMs: { value: 11_381 } },
+    }, "completed");
+
+    const stats = (await app.inject({ method: "GET", url: "/api/analytics/model-stats" })).json() as Array<Record<string, number | null>>;
+    expect(stats[0]!.medianTokensPerSecond).toBe(74.2);
+
+    const points = (await app.inject({ method: "GET", url: "/api/analytics/decision-points" })).json() as Array<Record<string, number | null>>;
+    expect(points[0]!.medianTokensPerSecond).toBe(74.2);
+
     await app.close();
     store.close();
   });

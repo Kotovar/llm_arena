@@ -330,6 +330,60 @@ describe("изменения версии", () => {
     await user.click(screen.getByRole("button", { name: "Скрыть изменения" }));
     expect(screen.queryByText(/diff --git/u)).toBeNull();
   });
+
+  it("объясняет обрезанный патч и не роняет остальной результат", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async () => new Response("# Result diff exceeded configured size limit\ndiff --git a/app.js", { status: 200 }));
+    await renderResult(taskRun({
+      result_json: JSON.stringify({
+        finalAnswer: "Готово",
+        previewImage: true,
+        artifacts: {
+          baselineSha: "b".repeat(40),
+          resultSha: "a".repeat(40),
+          changedFiles: ["app.js", "three.core.js"],
+          diff: {
+            status: "partial",
+            bytes: 4_096,
+            fileCount: 2,
+            omittedCount: 1,
+            truncated: false,
+            note: "Result diff exceeded configured size limit for 1 file(s); their contents are omitted.",
+            files: [
+              { path: "app.js", added: 3, deleted: 0, bytes: 40, omitted: false },
+              { path: "three.core.js", added: 60_007, deleted: 0, bytes: 5_033_164, omitted: true },
+            ],
+          },
+        },
+      }),
+    }));
+
+    // Итоговый ответ и снимок продолжают работать независимо от полноты патча.
+    expect(screen.getByText("Готово")).toBeDefined();
+    await user.click(screen.getByRole("button", { name: "Изменения версии" }));
+
+    await waitFor(() => expect(screen.getByText("Патч показан не полностью")).toBeDefined());
+    const note = screen.getByText("Патч показан не полностью").parentElement!;
+    expect(note.textContent).toContain("Изменено файлов: 2");
+    expect(note.textContent).toMatch(/three\.core\.js \(4\.8 МБ, 60\s007 строк\)/u);
+    expect(screen.getByText(/diff --git/u)).toBeDefined();
+  });
+
+  it("не показывает пояснение, когда патч полный", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async () => new Response("diff --git a/index.html", { status: 200 }));
+    await renderResult(taskRun({
+      result_json: JSON.stringify({
+        finalAnswer: "Готово",
+        artifacts: { baselineSha: "b".repeat(40), resultSha: "a".repeat(40), diff: { status: "complete", bytes: 120, fileCount: 1, omittedCount: 0, truncated: false, note: null, files: [] } },
+      }),
+    }));
+
+    await user.click(screen.getByRole("button", { name: "Изменения версии" }));
+
+    await waitFor(() => expect(screen.getByText(/diff --git/u)).toBeDefined());
+    expect(screen.queryByText(/Патч показан не полностью|Патч недоступен/u)).toBeNull();
+  });
 });
 
 describe("версии результата", () => {

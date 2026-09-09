@@ -682,6 +682,7 @@ export const outcomeLabels: Record<TaskOutcome, string> = {
   completed: "Завершён без отметки",
   check_failed: "Проверки не прошли",
   error: "Ошибка",
+  post_processing: "Ошибка обработки результата",
   watchdog: "Зациклился",
   broken: "Не работает",
   aborted_auto: "Остановлен автоматически",

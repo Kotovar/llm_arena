@@ -93,6 +93,43 @@ function parseResult(json: string | null): Record<string, unknown> | undefined {
   }
 }
 
+type DiffSummary = {
+  status?: string;
+  bytes?: number;
+  fileCount?: number;
+  omittedCount?: number;
+  truncated?: boolean;
+  note?: string | null;
+  files?: Array<{ path?: string; added?: number | null; deleted?: number | null; bytes?: number | null; omitted?: boolean }>;
+};
+
+function diffSummary(result: Record<string, unknown> | undefined): DiffSummary | undefined {
+  const artifacts = result?.artifacts;
+  if (!artifacts || typeof artifacts !== "object") return undefined;
+  const diff = (artifacts as { diff?: unknown }).diff;
+  return diff && typeof diff === "object" ? diff as DiffSummary : undefined;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+/** Патч мог быть обрезан: без пояснения обрезанный <pre> читается как поломка арены. */
+function DiffNote({ summary }: { summary: DiffSummary }) {
+  if (!summary.status || summary.status === "complete") return null;
+  const omitted = (summary.files ?? []).filter((file) => file.omitted);
+  return <p className="diff-note">
+    <strong>{summary.status === "unavailable" ? "Патч недоступен" : "Патч показан не полностью"}</strong>
+    {summary.note ? ` — ${summary.note}` : null}
+    {typeof summary.fileCount === "number" ? ` Изменено файлов: ${summary.fileCount}${typeof summary.bytes === "number" ? `, размер патча ${formatBytes(summary.bytes)}` : ""}.` : null}
+    {omitted.length
+      ? <> Пропущены: {omitted.map((file) => `${file.path} (${file.bytes != null ? formatBytes(file.bytes) : "?"}${file.added != null ? `, ${(file.added + (file.deleted ?? 0)).toLocaleString("ru-RU")} строк` : ", бинарный"})`).join("; ")}.</>
+      : null}
+  </p>;
+}
+
 function resultSha(json: string | null) {
   const artifacts = parseResult(json)?.artifacts;
   if (!artifacts || typeof artifacts !== "object") return undefined;
@@ -438,7 +475,7 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     {retryTaskRun.error ? <p className="error">{retryTaskRun.error.message}</p> : null}
     {logsOpen ? <LogDialog key={logsPath} path={logsPath} onClose={() => setLogsOpen(false)} /> : null}
     {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{zedErrorWorkspace ? <><code>{zedErrorWorkspace}</code><button onClick={() => void copyWorkspacePath(zedErrorWorkspace)}>Скопировать путь</button></> : null}</div> : null}
-    {artifact !== undefined ? <pre className="artifact">{artifact || "Нет данных"}</pre> : null}
+    {artifact !== undefined ? <>{diffSummary(result) ? <DiffNote summary={diffSummary(result)!} /> : null}<pre className="artifact">{artifact || "Нет данных"}</pre></> : null}
     {taskRun.status === "completed" ? <details className="followups"><summary><strong>Уточнения ({followups.length})</strong>{hasActiveFollowup ? <span className="chip">Выполняется</span> : null}</summary><div className="followups-content">{followups.length ? <div className="followup-list">{followups.map((item) => <FollowupResult key={item.id} followup={item} cancelPending={cancelFollowup.isPending} onCancel={() => cancelFollowup.mutate(item.id)} />)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" title="Ctrl+Enter" disabled={hasActiveFollowup || addFollowup.isPending}>{hasActiveFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></div></details> : null}
     {taskRun.status === "completed" || taskRun.review ? <form className="review" onSubmit={rate}><div className="review-heading"><span className="mono">Моя оценка</span><output>{draftTotal}<span>/{draftPossible}</span></output></div>{markCompletion.error ? <span className="error review-message">{markCompletion.error.message}</span> : null}{taskRun.broken_at ? <p className="broken-note">Результат помечен как нерабочий: он не попадёт в галерею, а в лидерборде и аналитике считается неудачей модели. Оценку можно оставить для памяти — в долю баллов она не пойдёт.</p> : null}{criteria.map(([key, label]) => <fieldset className="score-control" key={key} disabled={isBroken}><legend>{label}{key === "uiQuality" ? <button type="button" className={draft[key] === 0 ? "not-applied on" : "not-applied"} aria-pressed={draft[key] === 0} title="Визуал к этому результату не применяется" onClick={() => updateScore(key, draft[key] === 0 ? null : 0)}>не применяется</button> : null}<output>{draft[key] === null ? "—" : draft[key] === 0 ? "н/п" : `${draft[key]}/10`}</output></legend><div className="score-scale" onMouseLeave={() => setHoveredScore(null)}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <label key={value} title={`${value} из 10`} onMouseEnter={() => setHoveredScore({ key, value })} onMouseDown={() => updateScore(key, value)}><input type="radio" name={`${taskRun.id}-${key}`} value={value} checked={draft[key] === value} onChange={() => updateScore(key, value)} /><span aria-hidden="true" style={{ "--step": value } as CSSProperties} className={value <= (hoveredScore?.key === key ? hoveredScore.value : draft[key] ?? 0) ? `score-cell ${hoveredScore?.key === key ? "hovered" : "on"}` : "score-cell"}>{value}</span><span className="visually-hidden">{label}: {value} из 10</span></label>)}</div></fieldset>)}<label className="comment">Комментарий<textarea rows={2} value={draft.comment} title="Ctrl+Enter — сохранить оценку" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} onChange={(event) => { const comment = event.currentTarget.value; setDraft((current) => ({ ...current, comment })); setSaved(false); review.reset(); }} /></label><div className="review-actions"><div className="completion-choice" role="group" aria-label="Выполнение промпта">{completionChoices.map(([value, label]) => <button key={value} type="button" className={completion === value ? `completion-toggle ${value} on` : "completion-toggle"} aria-pressed={completion === value} disabled={markCompletion.isPending} title={value === "broken" ? "Формально завершён, но по факту не работает: результат исчезнет из галереи, а в лидерборде и аналитике будет считаться неудачей" : `Промпт выполнен ${label.toLowerCase()}`} onClick={() => chooseCompletion(value)}>{label}</button>)}</div>{missingReview ? <span className="review-missing">{reviewMissingLabel(missingScores, completion === null)}</span> : null}<button className={saved ? "saved" : ""} disabled={review.isPending || markCompletion.isPending || missingReview}>{isBroken ? "Сохранить как нерабочий" : reviewSaveLabel(review.isPending, saved)}</button></div>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form> : null}
   </article>;

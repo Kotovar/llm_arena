@@ -22,6 +22,7 @@ export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStor
         completion: row.task_run_completion,
         stopReason: row.task_run_stop_reason,
         resultJson: row.task_run_result_json,
+        error: row.task_run_error,
       });
       if (!passesCompletion(outcome, slice.completion)) continue;
       if (!models.has(row.model_id)) {

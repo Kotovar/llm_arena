@@ -79,6 +79,7 @@ fixtures:
       Work in the current directory as a coding agent. Create real files of a finished web application instead of putting the implementation only in your final answer.
       The application must run under the built-in static preview server: keep the entry point in index.html and use plain browser HTML, CSS and JavaScript that needs no dependency installation.
       Do not delete server.mjs or check-assets.mjs. Every file referenced by index.html must actually exist next to it: the application is opened without internet access, so external CDNs will not work.
+      Do not vendor or copy full third-party libraries, generated bundles, package distributions or minified dependencies into the solution unless the task explicitly requires it. Prefer plain browser APIs, the already installed dependencies or an import map.
       Split the code into index.html, styles.css and app.js instead of one huge file. Write at most about 150 lines per tool call and append long content in parts.
       After implementing, check the syntax of the JavaScript files you created. In the final answer briefly list what you did.
     checks:

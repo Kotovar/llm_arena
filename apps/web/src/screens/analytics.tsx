@@ -334,7 +334,7 @@ function SummaryTable({ stats }: { stats: ModelStats[] }) {
       <td className={`mono ${toneClass(shownPercent(row.failureCount, row.attempted), failureTone, true)}`}>{percentLabel(row.failureCount, row.attempted)}</td>
       <td className="mono">{row.averageDurationMs === null ? "—" : formatDuration(row.averageDurationMs)}</td>
       <td className="mono">{row.medianTokensPerSecond ?? "—"}</td>
-      {row.harnessKey ? <><td className="mono">{row.medianWallTokensPerSecond === null ? "—" : Math.round(row.medianWallTokensPerSecond * 10) / 10}</td><td className="mono">{row.medianHarnessPromptTokens === null ? "—" : row.medianHarnessPromptTokens.toLocaleString("ru-RU")}</td></> : null}
+      {row.harnessKey ? <><td className="mono">{row.medianWallTokensPerSecond ?? "—"}</td><td className="mono">{row.medianHarnessPromptTokens === null ? "—" : row.medianHarnessPromptTokens.toLocaleString("ru-RU")}</td></> : null}
       <td className={`mono ${toneClass(row.scorePercent === null ? null : Math.round(row.scorePercent), scoreTone)}`} title={`Оценено ${row.reviewedCount} из ${row.attempted}`}>{row.scorePercent === null ? "—" : `${row.scorePercent}%`}</td>
     </tr>)}</tbody>
   </table></div>;

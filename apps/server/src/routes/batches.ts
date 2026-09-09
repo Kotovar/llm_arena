@@ -33,6 +33,7 @@ export function registerBatchRoutes(app: FastifyInstance, store: ArenaStore, dep
           completion: taskRun.completion,
           stopReason: taskRun.stop_reason,
           resultJson: taskRun.result_json,
+          error: taskRun.error,
         });
         counts[outcome] = (counts[outcome] ?? 0) + 1;
         const name = deps.taskRunName(taskRun) ?? `Промпт ${taskRun.position + 1}`;

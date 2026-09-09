@@ -115,6 +115,7 @@ type LeaderboardTaskRunRow = {
   task_run_completion: "full" | "partial" | null;
   task_run_stop_reason: StopReason | null;
   task_run_result_json: string | null;
+  task_run_error: string | null;
   model_id: string;
   model_ref: string | null;
   runner_id: string;
@@ -148,6 +149,7 @@ type DecisionRow = {
   completion: "full" | "partial" | null;
   stop_reason: StopReason | null;
   result_json: string | null;
+  error: string | null;
   run_id: string;
   run_status: RunStatus;
   model_id: string;
@@ -885,6 +887,7 @@ export function createStore(filename: string) {
         SELECT benchmark_runs.id AS run_id, task_runs.id AS task_run_id, task_runs.status AS task_run_status,
                task_runs.broken_at AS task_run_broken_at, task_runs.completion AS task_run_completion,
                task_runs.stop_reason AS task_run_stop_reason, task_runs.result_json AS task_run_result_json,
+               task_runs.error AS task_run_error,
                benchmark_runs.model_id, benchmark_runs.model_ref,
                benchmark_runs.runner_id, benchmark_runs.use_omp_agent,
                tasks.tags_json,
@@ -983,7 +986,7 @@ export function createStore(filename: string) {
     /** Терминальные результаты с профилем, тегами версии промпта и оценкой: сырьё для точек решения. */
     listDecisionRows() {
       return all<DecisionRow>(`
-        SELECT task_runs.id, task_runs.status, task_runs.broken_at, task_runs.completion, task_runs.stop_reason, task_runs.result_json,
+        SELECT task_runs.id, task_runs.status, task_runs.broken_at, task_runs.completion, task_runs.stop_reason, task_runs.result_json, task_runs.error,
                benchmark_runs.id AS run_id, benchmark_runs.status AS run_status, benchmark_runs.model_id, benchmark_runs.execution_profile_id,
                benchmark_runs.runner_id, benchmark_runs.use_omp_agent,
                tasks.tags_json,

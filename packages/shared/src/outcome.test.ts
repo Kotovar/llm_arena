@@ -33,6 +33,18 @@ describe("classifyTaskRun", () => {
     expect(classifyTaskRun({ ...base, status: "failed", resultJson: "{not json" })).toBe("error");
   });
 
+  it("separates a failed post-processing step from a failed model", () => {
+    const error = "Result post-processing failed: git commit failed: exitCode: 128;";
+    expect(classifyTaskRun({ ...base, status: "failed", error })).toBe("post_processing");
+    // Служебный сбой арены не идёт ни в успехи модели, ни в её неудачи.
+    expect(isModelFailure("post_processing")).toBe(false);
+    expect(isSuccess("post_processing")).toBe(false);
+    expect(isCounted("post_processing")).toBe(false);
+    // Настоящее падение агента с тем же статусом остаётся неудачей модели.
+    expect(classifyTaskRun({ ...base, status: "failed", error: "Runner exited 1" })).toBe("error");
+    expect(classifyTaskRun({ ...base, status: "failed", resultJson: failing, error })).toBe("post_processing");
+  });
+
   it("reads the watchdog status", () => {
     expect(classifyTaskRun({ ...base, status: "agent_loop" })).toBe("watchdog");
   });

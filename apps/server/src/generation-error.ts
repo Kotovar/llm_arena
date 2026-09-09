@@ -1,5 +1,8 @@
+/** Метка служебного шага после агента: по ней ошибка пайплайна отличается от ошибки модели. */
+export const POST_PROCESSING_PREFIX = "Result post-processing failed:";
+
 export type GenerationErrorDetails = {
-  code: "invalid_tool_call" | "runner_inactive" | "task_time_limit_exceeded" | "agent_loop" | "generation_failed";
+  code: "invalid_tool_call" | "runner_inactive" | "task_time_limit_exceeded" | "agent_loop" | "post_processing_failed" | "generation_failed";
   message: string;
   details?: string;
   rawSize: number;
@@ -14,6 +17,14 @@ function formatDuration(ms: number): string {
 export function describeGenerationError(raw: string | null): GenerationErrorDetails | null {
   if (!raw) return null;
   const rawSize = Buffer.byteLength(raw, "utf8");
+  if (raw.startsWith(POST_PROCESSING_PREFIX)) {
+    return {
+      code: "post_processing_failed",
+      message: "Агент завершил задачу, но арена не смогла сохранить результат.",
+      details: "Ошибка служебного шага после агента, а не самой модели. Подробности — в техническом логе.",
+      rawSize,
+    };
+  }
   const inactive = raw.match(/^Runner inactive for (\d+) ms\b/u);
   if (inactive) {
     return {

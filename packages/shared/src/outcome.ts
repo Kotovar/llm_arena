@@ -9,7 +9,7 @@ export type StopReason = z.infer<typeof stopReasonSchema>;
 
 export type TaskOutcome =
   | "full" | "partial" | "completed"
-  | "broken" | "watchdog" | "check_failed" | "error"
+  | "broken" | "watchdog" | "check_failed" | "error" | "post_processing"
   | "aborted_auto" | "aborted_user"
   | "pending" | "running";
 
@@ -20,7 +20,12 @@ export type OutcomeInput = {
   stopReason: StopReason | null;
   /** Нужен только чтобы отличить непройденную проверку fixture от прочих падений. */
   resultJson: string | null;
+  /** Техническая ошибка промпта: по её префиксу видно, что упал служебный шаг, а не модель. */
+  error?: string | null;
 };
+
+/** Совпадает с POST_PROCESSING_PREFIX сервера: сбой шага после агента не приписывается модели. */
+const POST_PROCESSING_PREFIX = "Result post-processing failed:";
 
 function hasFailedCheck(resultJson: string | null): boolean {
   if (!resultJson) return false;
@@ -42,7 +47,11 @@ export function classifyTaskRun(input: OutcomeInput): TaskOutcome {
   if (input.brokenAt) return "broken";
   if (input.status === "completed") return input.completion ?? "completed";
   if (input.status === "agent_loop") return "watchdog";
-  if (input.status === "failed") return hasFailedCheck(input.resultJson) ? "check_failed" : "error";
+  if (input.status === "failed") {
+    // Агент дошёл до конца, упал служебный шаг арены: это неудача пайплайна, а не модели.
+    if (input.error?.startsWith(POST_PROCESSING_PREFIX)) return "post_processing";
+    return hasFailedCheck(input.resultJson) ? "check_failed" : "error";
+  }
   if (input.status === "cancelled") {
     // Старые записи без stop_reason считаем ручной остановкой: восстановить причину задним числом
     // нельзя, а ложно обвинить модель хуже, чем пропустить неудачу.
@@ -75,6 +84,7 @@ export const outcomeLabels: Record<TaskOutcome, string> = {
   completed: "Завершён без отметки",
   check_failed: "Проверки не прошли",
   error: "Ошибка",
+  post_processing: "Ошибка обработки результата",
   watchdog: "Зациклился",
   broken: "Не работает",
   aborted_auto: "Остановлен автоматически",
@@ -92,6 +102,7 @@ export const outcomeOrder: TaskOutcome[] = [
   "error",
   "watchdog",
   "broken",
+  "post_processing",
   "aborted_auto",
   "aborted_user",
   "pending",

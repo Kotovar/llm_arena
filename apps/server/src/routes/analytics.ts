@@ -10,6 +10,11 @@ import { aggregateModelStats, attemptMetrics, mean, median, type MetricRow, resu
 import type { ArenaStore } from "../store.js";
 import { type LeaderboardSlice, leaderboardSliceSchema, passesCompletion, type SliceQuery } from "./slice.js";
 
+/** Медианы уходят в таблицы как есть, поэтому округляются здесь же, как и остальные цифры ответа. */
+function roundOrNull(value: number | null | undefined, digits = 1): number | null {
+  return value === null || value === undefined ? null : round(value, digits);
+}
+
 type DecisionRow = ReturnType<ArenaStore["listDecisionRows"]>[number];
 type EnrichedRow = { row: DecisionRow; metricRow: Omit<MetricRow, "key"> };
 
@@ -32,6 +37,7 @@ function* enrichedRows(store: ArenaStore, slice: LeaderboardSlice): Generator<En
       completion: row.completion,
       stopReason: row.stop_reason,
       resultJson: row.result_json,
+      error: row.error,
     });
     if (!passesCompletion(outcome, slice.completion)) continue;
     // Оборванный и неработающий результат не измеряем: мерить нечего, а в исходах они уже неудача.
@@ -132,7 +138,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
           runCount: stats.runIds.size,
           interruptedRunCount: stats.interruptedRunIds.size,
           qualityPercent: scoreShare(stats.reviews),
-          medianTokensPerSecond: median(stats.speedSamples),
+          medianTokensPerSecond: roundOrNull(median(stats.speedSamples)),
           averageDurationMs: stats.durations.length ? Math.round(mean(stats.durations)!) : null,
           failureRate: stats.attempted ? round(stats.failureCount / stats.attempted, 4) : 0,
           userAbortCount: stats.userAbortCount,
@@ -180,10 +186,10 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
         reviewedCount: stats.reviews.length,
         scorePercent: scoreShare(stats.reviews),
         criteria: reviewCriteria(stats.reviews),
-        medianTokensPerSecond: median(stats.speedSamples),
+        medianTokensPerSecond: roundOrNull(median(stats.speedSamples)),
         // Сопоставимая между обвязками скорость и измеренная цена обвязки в токенах.
-        medianWallTokensPerSecond: median(stats.wallSpeedSamples),
-        medianHarnessPromptTokens: median(stats.harnessPromptTokens),
+        medianWallTokensPerSecond: roundOrNull(median(stats.wallSpeedSamples)),
+        medianHarnessPromptTokens: roundOrNull(median(stats.harnessPromptTokens), 0),
         averageDurationMs: stats.durations.length ? Math.round(mean(stats.durations)!) : null,
         representative: stats.successCount >= threshold,
         representativeThreshold: threshold,

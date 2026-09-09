@@ -23,7 +23,7 @@ import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
 import { activeExportPath, renderAgentLayout, renderFishCommand, renderFishLauncher, renderPiContextSync, renderPiLauncher, stopAgentLocalSession, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 import { describeGenerationError } from "./generation-error.js";
-import { assertWorkspaceCommit, workspaceVersionDiff } from "./artifacts.js";
+import { assertWorkspaceCommit, writeResultDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -755,7 +755,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!run) throw new Error("Task run not found");
     const version = resolvedVersion(run, request.query.resultSha);
     reply.type("text/plain");
-    return workspaceVersionDiff(join(run.artifact_path, "control", "baseline.git"), version.baselineSha, version.resultSha);
+    // Патч кладётся на диск при завершении промпта; старые и потерянные патчи достраиваем на месте.
+    const path = join(version.artifactPath, "diff.patch");
+    if (!existsSync(path)) {
+      writeResultDiff(join(run.artifact_path, "control", "baseline.git"), version.baselineSha, version.resultSha, path);
+    }
+    return createReadStream(path);
   });
   app.get<{ Params: { id: string }; Querystring: { stream?: "stdout" | "stderr" | "display" } }>("/api/task-runs/:id/logs", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);
