@@ -69,6 +69,22 @@ afterEach(() => {
 });
 
 describe("форма массового запуска", () => {
+  it("выбирает все модели и объясняет, чего не хватает для запуска", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<BatchPage />, "/batch");
+    await screen.findByText("Alpha");
+    const readiness = () => screen.getByRole("status", { name: "Готовность батча" }).textContent;
+    expect(readiness()).toBe("Выберите хотя бы одну модель.");
+    await user.click(screen.getByRole("button", { name: "Выбрать все модели" }));
+    expect(readiness()).toBe("Выберите хотя бы один промпт.");
+    await user.click(screen.getByRole("button", { name: "Выбрать все" }));
+    expect(readiness()).toBe("Всё готово к запуску");
+    expect(screen.getByText("2 промпта × 2 модели = 4 запуска")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Снять выбор моделей" }));
+    expect(readiness()).toBe("Выберите хотя бы одну модель.");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Запустить батч" }).disabled).toBe(true);
+  });
+
   it("считает число запусков и отправляет по элементу на модель", async () => {
     const user = userEvent.setup();
     await renderInApp(<BatchPage />, "/batch");

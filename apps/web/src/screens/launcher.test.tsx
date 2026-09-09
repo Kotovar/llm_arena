@@ -377,3 +377,17 @@ describe("профиль локальной модели", () => {
     await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ taskRevisionIds: ["task-1-rev", "task-3-rev"] })]));
   });
 });
+
+describe("готовность запуска", () => {
+  it("объясняет снятый выбор и снова разрешает запуск после выбора промптов", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<Launcher />);
+    await screen.findByText("Всё готово к запуску");
+    await user.click(screen.getByRole("button", { name: "Снять все" }));
+    expect(screen.getByRole("status", { name: "Готовность запуска" }).textContent).toBe("Выберите хотя бы один промпт.");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: /^Запустить$/u }).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Выбрать все" }));
+    expect(screen.getByRole("status", { name: "Готовность запуска" }).textContent).toBe("Всё готово к запуску");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: /^Запустить$/u }).disabled).toBe(false);
+  });
+});
