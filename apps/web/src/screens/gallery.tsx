@@ -51,9 +51,9 @@ function Screenshot({ result, className, onSize }: { result: GalleryResult; clas
 
 function GalleryResultButton({ result, leader, onOpen }: { result: GalleryResult; leader: boolean; onOpen: (result: GalleryResult) => void }) {
   const tags = galleryResultTags(result);
-  return <button type="button" className="gallery-result" onClick={() => onOpen(result)}>
-    <span className="gallery-shot-wrap"><Screenshot result={result} className="gallery-shot" /><span className="gallery-open-hint" aria-hidden="true">Открыть результат ↗</span></span>
-    <span className="gallery-result-copy"><strong><span className="gallery-result-title">{result.completion ? <span className={`completion-dot ${result.completion}`} title={completionLabels[result.completion]} aria-label={completionLabels[result.completion]} /> : null}{versionLabel(result.selectedVersion)}</span>{result.reviewScore != null ? <span className="gallery-score">{leader ? <span className="gallery-leader" title={LEADER_TITLE} aria-label={LEADER_TITLE}>★</span> : null}{result.reviewScore}/{result.reviewPossible ?? 40}</span> : null}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
+  return <button type="button" className="gallery-result" data-leader={leader} onClick={() => onOpen(result)}>
+    <span className="gallery-shot-wrap"><Screenshot result={result} className="gallery-shot" />{leader ? <span className="gallery-winner-badge" title={LEADER_TITLE} aria-label={LEADER_TITLE}><span aria-hidden="true">★</span> Лидер</span> : null}<span className="gallery-open-hint" aria-hidden="true">Открыть результат ↗</span></span>
+    <span className="gallery-result-copy"><strong><span className="gallery-result-title">{result.completion ? <span className={`completion-dot ${result.completion}`} title={completionLabels[result.completion]} aria-label={completionLabels[result.completion]} /> : null}{versionLabel(result.selectedVersion)}</span>{result.reviewScore != null ? <span className="gallery-score">{result.reviewScore}/{result.reviewPossible ?? 40}</span> : null}</strong>{tags.length ? <small title={tags.join(" · ")}>{tags.join(" · ")}</small> : null}</span>
     <ResultMetrics metrics={result.metrics} compact />
   </button>;
 }

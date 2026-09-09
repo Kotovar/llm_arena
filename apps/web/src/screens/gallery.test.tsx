@@ -304,6 +304,21 @@ describe("лидеры и разделение по типу моделей", ()
     expect(leaders[0]!.closest("button")!.textContent).toContain("36/40");
   });
 
+  it("показывает звезду на лучшей обвязке после объединения OMP и pi в строку модели", async () => {
+    const omp = { ...scored("local-1", "Gemma", "local-gguf", 20), runnerId: "omp", featured: true };
+    const pi = { ...omp, taskRunId: "pi-best", runnerId: "pi-local", reviewScore: 38, featured: false };
+    gallery = [omp, pi, scored("local-2", "Qwen", "local-gguf", 30)];
+    await renderInApp(<GalleryPage />);
+    const table = await screen.findByRole("table");
+    expect(table.querySelectorAll("tbody th.gallery-model")).toHaveLength(2);
+    const star = within(table).getByTitle("Лучшая оценка по этому промпту среди моделей своего типа");
+    expect(star.closest("button")!.textContent).toContain("38/40");
+    expect(star.textContent).toContain("Лидер");
+    expect(star.closest("button")!.getAttribute("data-leader")).toBe("true");
+    expect(table.querySelectorAll('[data-leader="true"]')).toHaveLength(1);
+    expect(star.closest("tr")!.textContent).toContain("Gemma");
+  });
+
   it("сохраняет звезду лидера при поиске по имени модели", async () => {
     const user = userEvent.setup();
     await renderInApp(<GalleryPage />);
