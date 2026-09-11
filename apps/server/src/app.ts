@@ -17,6 +17,7 @@ import {
   modelDirectorySchema,
   selectResultVersionSchema,
   updateModelCapabilitiesSchema,
+  publicFixtureManifest,
 } from "@llm-arena/shared";
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
@@ -290,7 +291,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
 
   app.get("/api/health", async () => ({ status: "ok" }));
   app.get("/api/runners", async () => config.runners.map(({ env: _env, ...runner }) => runner));
-  app.get("/api/fixtures", async () => config.fixtures.map(({ source: _source, ...fixture }) => fixture));
+  app.get("/api/fixtures", async () => config.fixtures.map(({ source: _source, ...fixture }) => publicFixtureManifest(fixture)));
   app.get("/api/diagnostics", async () => ({
     node: process.version,
     platform: process.platform,

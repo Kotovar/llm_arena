@@ -275,28 +275,59 @@ export const commandSpecSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
 });
 
+export const fixtureCheckSchema = z.object({
+  id: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  command: commandSpecSchema,
+});
+
 export const fixtureManifestSchema = z.object({
   id: z.string().trim().min(1),
   name: z.string().trim().min(1),
   source: z.string().trim().min(1),
   instructions: z.string().trim().min(1).optional(),
   install: commandSpecSchema.optional(),
-  checks: z
-    .array(
-      z.object({
-        id: z.string().trim().min(1),
-        label: z.string().trim().min(1),
-        command: commandSpecSchema,
-      }),
-    )
-    .default([]),
+  /** Проверки внутри workspace: модель их видит и может запускать сама. */
+  checks: z.array(fixtureCheckSchema).default([]),
+  /**
+   * Проверки бенчмарка. Живут вне workspace и модели не видны, иначе решение пишется прямо
+   * под ассерты. Гоняются по копии результата, поэтому в diff их файлы не попадают.
+   */
+  hidden: z.array(fixtureCheckSchema).default([]),
+  /**
+   * Состояние, в котором обязан находиться исходный fixture: `id` проверки → ожидаемый исход.
+   * Универсального правила «исходный fixture обязан падать» нет — у правки бага здесь
+   * `fail`, у рефакторинга всё `pass`. Проверяется отдельной командой, не на прогоне.
+   */
+  baseline: z.record(z.string(), z.enum(["pass", "fail"])).default({}),
+  /** Лимит времени на задачу; без него действует только watchdog и пауза без вывода. */
+  limits: z.object({ maxDurationMs: z.number().int().positive() }).optional(),
   preview: z
     .object({
       command: commandSpecSchema,
       readyPath: z.string().default("/"),
     })
     .optional(),
+}).superRefine((manifest, context) => {
+  // Совпавшие id развели бы результаты проверок по одному ключу, а опечатка в baseline
+  // молча означала бы «состояние не проверяем». Оба случая ловятся при загрузке конфигурации,
+  // а не когда прогон уже дошёл до валидации.
+  const ids = [...manifest.checks, ...manifest.hidden].map((check) => check.id);
+  const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
+  if (duplicate) context.addIssue({ code: "custom", message: `Duplicate check id "${duplicate}"` });
+  for (const id of Object.keys(manifest.baseline)) {
+    if (!ids.includes(id)) context.addIssue({ code: "custom", message: `Baseline names unknown check "${id}"` });
+  }
 });
+
+/**
+ * Манифест без скрытых проверок: наружу уходит только он. Скрытые проверки и ожидаемый
+ * baseline — это ответы к заданию, а у агента в workspace есть и shell, и localhost.
+ */
+export function publicFixtureManifest<T extends { hidden?: unknown; baseline?: unknown }>(manifest: T): Omit<T, "hidden" | "baseline"> {
+  const { hidden: _hidden, baseline: _baseline, ...rest } = manifest;
+  return rest;
+}
 
 export const runnerDefinitionSchema = z.object({
   id: z.string().trim().min(1),
@@ -323,6 +354,8 @@ export type RunStatus = z.infer<typeof runStatusSchema>;
 export type RunnerKind = z.infer<typeof runnerKindSchema>;
 export type RunnerDefinition = z.infer<typeof runnerDefinitionSchema>;
 export type FixtureManifest = z.infer<typeof fixtureManifestSchema>;
+export type PublicFixtureManifest = ReturnType<typeof publicFixtureManifest<FixtureManifest>>;
+export type FixtureCheck = z.infer<typeof fixtureCheckSchema>;
 export type NormalizedRunResult = z.infer<typeof normalizedRunResultSchema>;
 export type WatchdogDiagnostics = z.infer<typeof watchdogDiagnosticsSchema>;
 export type Review = z.infer<typeof reviewSchema>;

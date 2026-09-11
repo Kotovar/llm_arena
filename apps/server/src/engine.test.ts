@@ -335,6 +335,10 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = join(root, ".data");
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    // Снимок промпта уезжает в ответ API целиком, поэтому скрытым проверкам в нём не место.
+    config.fixtures = config.fixtures.map((fixture) => fixture.id === "web-app"
+      ? { ...fixture, hidden: [{ id: "regression", label: "Regression", command: { argv: ["node", "--test", "hidden/order.test.js"] } }], baseline: { regression: "fail" } }
+      : fixture);
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай тетрис", tags: [] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
@@ -347,6 +351,8 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(taskRun.status).toBe("completed");
     expect(store.getTaskRevision(task.currentRevision.id)?.kind).toBe("prompt");
     expect(JSON.parse(taskRun.snapshot_json).task).toMatchObject({ kind: "coding", fixtureId: "web-app" });
+    expect(JSON.parse(taskRun.snapshot_json).fixture).not.toHaveProperty("hidden");
+    expect(taskRun.snapshot_json).not.toContain("order.test.js");
     expect(readFileSync(join(taskRun.artifact_path, "workspace", "index.html"), "utf8")).toBe("<h1>Готовое приложение</h1>");
     expect(JSON.parse(taskRun.result_json!).finalAnswer).toContain("Create real files");
     // Снимок делается настоящим браузером, поэтому проверяем его только там, где браузер есть.

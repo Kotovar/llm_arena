@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { FixtureManifest, LlamaProfile, StopReason, TaskImage, WatchdogDiagnostics } from "@llm-arena/shared";
+import { publicFixtureManifest, type LlamaProfile, type PublicFixtureManifest, type StopReason, type TaskImage, type WatchdogDiagnostics } from "@llm-arena/shared";
 import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace, type PreparedWorkspace } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { loadOwnerId, recoverOwnedProcesses } from "./lifecycle.js";
@@ -301,7 +301,7 @@ export class BenchmarkEngine {
         if (effectiveTask.kind === "coding" && !fixture) throw new Error(`Fixture ${effectiveTask.fixtureId} not found`);
         const source = fixture?.source ?? this.#emptyFixture();
         const prepared = prepareWorkspace(source, artifactRoot);
-        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture, model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
+        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture: fixture && publicFixtureManifest(fixture), model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
         this.store.startTaskRun(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: "running", position, name: task.name } });
         const stdoutPath = join(artifactRoot, "stdout.log");
@@ -440,7 +440,7 @@ export class BenchmarkEngine {
     const model = this.store.getModel(run.model_id);
     const definition = this.config.runners.find((item) => item.id === run.runner_id);
     if (!model || !definition) throw new Error("Saved model or runner is unavailable");
-    const snapshot = JSON.parse(taskRun.snapshot_json) as { task: { kind: "prompt" | "coding"; images?: TaskImage[] }; fixture?: FixtureManifest; profile?: { parameters: LlamaProfile } };
+    const snapshot = JSON.parse(taskRun.snapshot_json) as { task: { kind: "prompt" | "coding"; images?: TaskImage[] }; fixture?: PublicFixtureManifest; profile?: { parameters: LlamaProfile } };
     const workspace = join(taskRun.artifact_path, "workspace");
     const gitDir = join(taskRun.artifact_path, "control", "baseline.git");
     const baseVersion = completedResultVersions(taskRun).at(-1);
@@ -590,7 +590,7 @@ export class BenchmarkEngine {
   }
 
   // Поднимает результат на свободном порту и снимает превью браузером. Любой сбой — просто нет картинки.
-  async #capturePreview(fixture: FixtureManifest | undefined, workspace: string, artifactRoot: string, signal: AbortSignal): Promise<boolean> {
+  async #capturePreview(fixture: PublicFixtureManifest | undefined, workspace: string, artifactRoot: string, signal: AbortSignal): Promise<boolean> {
     const preview = fixture?.preview;
     if (!preview || signal.aborted) return false;
     const logPath = join(artifactRoot, "preview-shot.log");
@@ -634,7 +634,7 @@ export class BenchmarkEngine {
     }
   }
 
-  async #runChecks(fixture: FixtureManifest, workspace: string, artifactRoot: string, signal: AbortSignal) {
+  async #runChecks(fixture: PublicFixtureManifest, workspace: string, artifactRoot: string, signal: AbortSignal) {
     const results: Array<{ id: string; label: string; status: string; exitCode: number | null; durationMs: number }> = [];
     for (const check of fixture.checks) {
       if (signal.aborted) break;

@@ -13,6 +13,36 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("never hands out the hidden validation of a fixture", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-hidden-validation-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    // Агент работает в workspace с shell и видит localhost, поэтому API арены для него —
+    // такой же путь к ответам, как файл рядом с заданием.
+    config.fixtures = [{
+      id: "stale-search",
+      name: "Stale search",
+      source: join(directory, "fixture"),
+      checks: [{ id: "tests", label: "Tests", command: { argv: ["node", "--test"] } }],
+      hidden: [{ id: "regression", label: "Regression", command: { argv: ["node", "--test", "hidden/order.test.js"] } }],
+      baseline: { tests: "pass", regression: "fail" },
+    }];
+    const app = buildApp({ store, config });
+
+    const response = await app.inject({ method: "GET", url: "/api/fixtures" });
+
+    const [fixture] = response.json() as Array<Record<string, unknown>>;
+    expect(fixture).toMatchObject({ id: "stale-search", checks: [{ id: "tests" }] });
+    expect(fixture).not.toHaveProperty("hidden");
+    expect(fixture).not.toHaveProperty("baseline");
+    expect(fixture).not.toHaveProperty("source");
+    expect(JSON.stringify(response.json())).not.toContain("order.test.js");
+    await app.close();
+    store.close();
+  });
+
   it("stores task images before a task revision references them", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-image-api-"));
     directories.push(directory);
