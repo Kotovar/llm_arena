@@ -21,6 +21,8 @@ pnpm dev
 
 - [Настройка и локальные данные](docs/CONFIGURATION.md)
 - [Устройство проекта](docs/ARCHITECTURE.md)
+- [Benchmark Mode — план реализации](docs/BENCHMARK-PLAN.md)
+- [Benchmark Mode — исходные материалы](docs/benchmark/README.md)
 
 ## Проверка
 
