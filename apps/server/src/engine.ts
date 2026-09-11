@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { publicFixtureManifest, type LlamaProfile, type PublicFixtureManifest, type StopReason, type TaskImage, type WatchdogDiagnostics } from "@llm-arena/shared";
-import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace, type PreparedWorkspace } from "./artifacts.js";
+import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace, type WorkspaceArtifacts } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { loadOwnerId, recoverOwnedProcesses } from "./lifecycle.js";
 import { LlamaCppServerManager } from "./llama-server.js";
@@ -66,7 +66,7 @@ function runnerImages(dataDir: string, images: readonly TaskImage[]) {
  * Коммит результата и патч — служебный шаг арены, а не работа агента. Его сбой помечается
  * отдельным префиксом, чтобы неудача пайплайна не выглядела как неудача модели.
  */
-function finalizeResult(prepared: PreparedWorkspace): { artifacts?: ReturnType<typeof finalizeWorkspace>; error?: string } {
+function finalizeResult(prepared: WorkspaceArtifacts): { artifacts?: ReturnType<typeof finalizeWorkspace>; error?: string } {
   try {
     return { artifacts: finalizeWorkspace(prepared) };
   } catch (error) {
@@ -301,7 +301,7 @@ export class BenchmarkEngine {
         if (effectiveTask.kind === "coding" && !fixture) throw new Error(`Fixture ${effectiveTask.fixtureId} not found`);
         const source = fixture?.source ?? this.#emptyFixture();
         const prepared = prepareWorkspace(source, artifactRoot);
-        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture: fixture && publicFixtureManifest(fixture), model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
+        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture: fixture && publicFixtureManifest(fixture), ...(fixture ? { fixtureRevision: prepared.baselineTree } : {}), model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
         this.store.startTaskRun(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: "running", position, name: task.name } });
         const stdoutPath = join(artifactRoot, "stdout.log");
@@ -389,7 +389,9 @@ export class BenchmarkEngine {
           const finalized = agentStatus === "completed" ? finalizeResult(prepared) : { artifacts: undefined, error: undefined };
           const status = agentStatus === "completed" && !finalized.error ? "completed" as const : "failed" as const;
           const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, taskSignal);
-          const saved = { ...result, artifacts: finalized.artifacts, checks, previewImage: Boolean(previewImage) };
+          // Ревизия fixture едет рядом с результатом: по одному файлу на диске видно, на каком
+          // исходном состоянии он получен, без обращения к базе.
+          const saved = { ...result, artifacts: finalized.artifacts, checks, previewImage: Boolean(previewImage), ...(fixture ? { fixtureRevision: prepared.baselineTree } : {}) };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
           const failure = finalized.error ?? (agentStatus === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
           this.store.saveTaskRunResult(taskRun.id, saved, status, failure);

@@ -353,6 +353,10 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(JSON.parse(taskRun.snapshot_json).task).toMatchObject({ kind: "coding", fixtureId: "web-app" });
     expect(JSON.parse(taskRun.snapshot_json).fixture).not.toHaveProperty("hidden");
     expect(taskRun.snapshot_json).not.toContain("order.test.js");
+    // Ревизия fixture: без неё по результату не понять, на каком исходном состоянии он получен.
+    const fixtureRevision = JSON.parse(taskRun.snapshot_json).fixtureRevision as string;
+    expect(fixtureRevision).toMatch(/^[0-9a-f]{40,64}$/u);
+    expect(JSON.parse(readFileSync(join(taskRun.artifact_path, "result.json"), "utf8")).fixtureRevision).toBe(fixtureRevision);
     expect(readFileSync(join(taskRun.artifact_path, "workspace", "index.html"), "utf8")).toBe("<h1>Готовое приложение</h1>");
     expect(JSON.parse(taskRun.result_json!).finalAnswer).toContain("Create real files");
     // Снимок делается настоящим браузером, поэтому проверяем его только там, где браузер есть.

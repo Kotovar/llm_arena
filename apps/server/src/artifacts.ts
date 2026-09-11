@@ -4,11 +4,20 @@ import { spawnSync } from "node:child_process";
 import { resultShaSchema } from "@llm-arena/shared";
 import { DIFF_LIMITS, formatBytes } from "./diff-limits.js";
 
-export type PreparedWorkspace = {
+/** Всё, что нужно, чтобы снять результат: подготовка workspace для этого не обязательна. */
+export type WorkspaceArtifacts = {
   artifactRoot: string;
   workspace: string;
   gitDir: string;
   baselineSha: string;
+};
+
+export type PreparedWorkspace = WorkspaceArtifacts & {
+  /**
+   * Ревизия fixture: хеш дерева baseline-коммита. Берём дерево, а не сам коммит, — в коммите
+   * есть время создания, и один и тот же fixture давал бы каждый раз новый идентификатор.
+   */
+  baselineTree: string;
 };
 
 export type DiffFileSummary = {
@@ -32,6 +41,32 @@ export type DiffSummary = {
   note: string | null;
 };
 
+/**
+ * Настройки git самого оператора не должны влиять ни на ревизию fixture, ни на diff. Без
+ * этого глобальный gitignore выбрасывает файлы из baseline-коммита — они есть в workspace,
+ * но ни в идентификаторе fixture, ни в патче их нет, и заметить это нечем. То же делает
+ * `core.autocrlf` с переводами строк.
+ *
+ * ponytail: остаётся `.gitattributes` внутри самого fixture — его clean/smudge-фильтры
+ * применяются и к содержимому, и к `git archive`. Потолок снимается запретом фильтров в
+ * fixtures как соглашением, а не кодом.
+ */
+const GIT_ENV = {
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_COUNT: "3",
+  GIT_CONFIG_KEY_0: "core.excludesFile",
+  GIT_CONFIG_VALUE_0: "/dev/null",
+  GIT_CONFIG_KEY_1: "core.autocrlf",
+  GIT_CONFIG_VALUE_1: "false",
+  GIT_CONFIG_KEY_2: "core.attributesFile",
+  GIT_CONFIG_VALUE_2: "/dev/null",
+} as const;
+
+function gitEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, ...GIT_ENV };
+}
+
 /** Обрезает вывод команды до превью: целиком он бывает в мегабайтах и в сообщении об ошибке не нужен. */
 function preview(output: string): string {
   const limit = DIFF_LIMITS.errorPreviewBytes;
@@ -49,7 +84,7 @@ function commandFailure(command: string, args: string[], result: ReturnType<type
 }
 
 function run(command: string, args: string[], cwd?: string): string {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: DIFF_LIMITS.maxCommandOutputBytes });
+  const result = spawnSync(command, args, { cwd, encoding: "utf8", env: gitEnv(), maxBuffer: DIFF_LIMITS.maxCommandOutputBytes });
   if (result.status !== 0) throw new Error(commandFailure(command, args, result));
   return result.stdout.trim();
 }
@@ -69,15 +104,19 @@ export function prepareWorkspace(fixtureSource: string, artifactRoot: string): P
   run("git", ["add", "-A"], workspace);
   run("git", ["commit", "-q", "--allow-empty", "-m", "fixture baseline"], workspace);
   const baselineSha = run("git", ["rev-parse", "HEAD"], workspace);
+  // ponytail: ревизия покрывает ровно то, что попало в baseline-коммит. Потолок — исключённые
+  // выше каталоги сборки: два fixture, различающиеся только ими, дадут один идентификатор.
+  // Пока fixtures без зависимостей, этих каталогов там просто нет.
+  const baselineTree = run("git", ["rev-parse", "HEAD^{tree}"], workspace);
   cpSync(join(workspace, ".git"), gitDir, { recursive: true });
-  return { artifactRoot, workspace, gitDir, baselineSha };
+  return { artifactRoot, workspace, gitDir, baselineSha, baselineTree };
 }
 
 /**
  * Коммит результата обязателен — это и есть работа агента. Патч необязателен: он нужен только
  * для просмотра, поэтому его сбой или обрезка не отменяют успешный результат.
  */
-export function finalizeWorkspace(prepared: PreparedWorkspace) {
+export function finalizeWorkspace(prepared: WorkspaceArtifacts) {
   const gitArgs = ["--git-dir", prepared.gitDir, "--work-tree", prepared.workspace];
   run("git", [...gitArgs, "add", "-A"]);
   run("git", [...gitArgs, "commit", "-q", "--allow-empty", "-m", "agent result"]);
@@ -209,7 +248,8 @@ export function writeResultDiff(gitDir: string, baselineSha: string, resultSha: 
   try {
     if (header) writeSync(fd, header);
     // stdout уходит прямо в файл: буфер spawnSync тут и переполнялся, роняя весь прогон.
-    diffResult = spawnSync("git", args, { stdio: ["ignore", fd, "pipe"], maxBuffer: DIFF_LIMITS.maxCommandOutputBytes });
+    // Патч пишется в файл мимо run(), поэтому изоляция конфига нужна здесь отдельно.
+    diffResult = spawnSync("git", args, { stdio: ["ignore", fd, "pipe"], env: gitEnv(), maxBuffer: DIFF_LIMITS.maxCommandOutputBytes });
   } finally {
     closeSync(fd);
   }
@@ -258,7 +298,7 @@ export function materializeWorkspaceVersion(gitDir: string, resultSha: string, w
   mkdirSync(workspace, { recursive: true });
   // Архив идёт во временный файл, а не в буфер: вендорная копия библиотеки в него не помещается.
   const archivePath = join(workspace, ".arena-archive.tar");
-  const archive = spawnSync("git", ["--git-dir", gitDir, "archive", "--format=tar", "-o", archivePath, sha]);
+  const archive = spawnSync("git", ["--git-dir", gitDir, "archive", "--format=tar", "-o", archivePath, sha], { env: gitEnv() });
   if (archive.status !== 0) throw new Error(commandFailure("git", ["archive", sha], archive));
   try {
     const extract = spawnSync("tar", ["-x", "-f", archivePath, "-C", workspace]);
