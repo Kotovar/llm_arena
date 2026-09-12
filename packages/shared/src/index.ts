@@ -57,7 +57,6 @@ export const taskRevisionSchema = createTaskSchema.and(
     taskId: z.string().uuid(),
     revision: z.number().int().positive(),
     contentHash: z.string().length(64),
-    fixtureHash: z.string().length(64).nullable(),
     createdAt: z.string().datetime(),
   }),
 );
@@ -170,7 +169,24 @@ export const createExecutionProfileSchema = z.object({
   calibrated: z.boolean().default(false),
 });
 
-export const createRunSchema = z.object({
+/**
+ * Один элемент состава набора: ревизия задачи и содержимое её fixture на момент снимка.
+ * Хеш fixture нужен, чтобы правку исходного проекта было видно до многочасового прогона,
+ * а не после: сам прогон пишет фактическую ревизию отдельно.
+ */
+export const suiteItemSchema = z.object({
+  taskRevisionId: z.string().uuid(),
+  fixtureId: z.string().trim().min(1).nullable(),
+  fixtureRevision: z.string().regex(/^[0-9a-f]{40,64}$/iu).nullable(),
+}).strict();
+
+export const createSuiteSchema = z.object({ name: z.string().trim().min(1).max(160) }).strict();
+export const renameSuiteSchema = createSuiteSchema;
+export const createSuiteRevisionSchema = z.object({
+  taskIds: z.array(z.string().uuid()).min(1).refine((ids) => new Set(ids).size === ids.length, "Prompts must be unique"),
+}).strict();
+
+const runBaseSchema = z.object({
   taskRevisionIds: z.array(z.string().uuid()).min(1).refine((ids) => new Set(ids).size === ids.length, "Prompts must be unique"),
   modelId: z.string().uuid(),
   executionProfileId: z.string().uuid().nullable(),
@@ -185,23 +201,39 @@ export const createRunSchema = z.object({
 });
 
 /**
+ * Прогон задаётся либо списком промптов, либо ревизией набора — но не обоими сразу: состав
+ * прогона по набору принадлежит ревизии, и присланный рядом список её бы молча переопределил.
+ */
+export const createRunSchema = runBaseSchema.extend({
+  taskRevisionIds: z.array(z.string().uuid()).refine((ids) => new Set(ids).size === ids.length, "Prompts must be unique").default([]),
+  suiteRevisionId: z.string().uuid().nullable().default(null),
+}).superRefine((value, context) => {
+  if (!value.suiteRevisionId && !value.taskRevisionIds.length) {
+    context.addIssue({ code: "custom", message: "Run needs prompts or a suite revision" });
+  }
+  if (value.suiteRevisionId && value.taskRevisionIds.length) {
+    context.addIssue({ code: "custom", message: "A suite run takes its prompts from the suite revision" });
+  }
+});
+
+/**
  * Батч — те же прогоны, только с общей меткой: по одному `benchmark_run` на модель.
  * Собственной записи в базе у батча нет, поэтому и своих параметров тут нет —
  * только то, что нужно разложить в обычные прогоны.
  */
 export const createBatchSchema = z.object({
-  taskRevisionIds: createRunSchema.shape.taskRevisionIds,
+  taskRevisionIds: runBaseSchema.shape.taskRevisionIds,
   models: z.array(z.object({
     modelId: z.string().uuid(),
     executionProfileId: z.string().uuid().nullable().default(null),
     runnerId: z.string().trim().min(1),
     useOmpAgent: z.boolean().default(false),
     modelRef: z.string().trim().min(1).optional(),
-    reasoningEffort: createRunSchema.shape.reasoningEffort,
+    reasoningEffort: runBaseSchema.shape.reasoningEffort,
   })).min(1),
   resultMode: z.enum(["text", "web"]),
-  repeatCount: createRunSchema.shape.repeatCount,
-  warmupAttempt: createRunSchema.shape.warmupAttempt,
+  repeatCount: runBaseSchema.shape.repeatCount,
+  warmupAttempt: runBaseSchema.shape.warmupAttempt,
 });
 
 const measuredSources = z.enum([
@@ -356,6 +388,9 @@ export type CreateExecutionProfile = z.infer<typeof createExecutionProfileSchema
 export type ModelEconomics = z.infer<typeof modelEconomicsSchema>;
 export type LlamaProfile = z.infer<typeof llamaProfileSchema>;
 export type CreateRun = z.input<typeof createRunSchema>;
+export type SuiteItem = z.infer<typeof suiteItemSchema>;
+export type CreateSuite = z.infer<typeof createSuiteSchema>;
+export type CreateSuiteRevision = z.infer<typeof createSuiteRevisionSchema>;
 export type CreateBatch = z.infer<typeof createBatchSchema>;
 export type RunStatus = z.infer<typeof runStatusSchema>;
 export type RunnerKind = z.infer<typeof runnerKindSchema>;

@@ -1,4 +1,5 @@
-import { closeSync, cpSync, mkdirSync, openSync, readSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, cpSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resultShaSchema } from "@llm-arena/shared";
@@ -115,6 +116,19 @@ export function prepareWorkspace(fixtureSource: string, artifactRoot: string): P
   const baselineTree = run("git", ["rev-parse", "HEAD^{tree}"], workspace);
   cpSync(join(workspace, ".git"), gitDir, { recursive: true });
   return { artifactRoot, workspace, gitDir, baselineSha, baselineTree };
+}
+
+/**
+ * Ревизия fixture без запуска: тот же путь, что и у рабочего каталога прогона, поэтому
+ * хеш, посчитанный при сборке набора задач, гарантированно совпадёт с прогонным.
+ */
+export function fixtureRevision(source: string): string {
+  const root = mkdtempSync(join(tmpdir(), "arena-fixture-revision-"));
+  try {
+    return prepareWorkspace(source, root).baselineTree;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 /**

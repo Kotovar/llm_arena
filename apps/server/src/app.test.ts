@@ -15,6 +15,54 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("снимает состав набора по факту и показывает, что разъехалось", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-suites-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const app = buildApp({ store, config });
+    const coding = await app.inject({ method: "POST", url: "/api/tasks", payload: { name: "Гонка поиска", kind: "coding", prompt: "Найди причину", fixtureId: "stale-search-results" } });
+    const taskId = (coding.json() as { id: string }).id;
+    const suite = await app.inject({ method: "POST", url: "/api/suites", payload: { name: "Coding General" } });
+    const suiteId = (suite.json() as { id: string }).id;
+
+    const created = await app.inject({ method: "POST", url: `/api/suites/${suiteId}/revisions`, payload: { taskIds: [taskId] } });
+    const revisionId = (created.json() as { id: string }).id;
+    const fresh = await app.inject({ method: "GET", url: `/api/suite-revisions/${revisionId}` });
+
+    expect(created.statusCode).toBe(201);
+    type Snapshot = {
+      revision: number;
+      items: Array<{ taskRevisionId: string }>;
+      prompts: Array<{ name: string; fixtureId: string; fixtureRevision: string }>;
+      drift: Array<{ taskRevisionId: string; reason: string }>;
+      runs: unknown[];
+    };
+    const snapshot = fresh.json() as Snapshot;
+    expect(snapshot.revision).toBe(1);
+    expect(snapshot.prompts[0]).toMatchObject({ name: "Гонка поиска", fixtureId: "stale-search-results" });
+    expect(snapshot.prompts[0]!.fixtureRevision).toMatch(/^[0-9a-f]{40,64}$/u);
+    expect(snapshot.drift).toEqual([]);
+    expect(snapshot.runs).toEqual([]);
+    const pinned = snapshot.items[0]!.taskRevisionId;
+
+    // Правка промпта снимок не меняет — он и должен остаться прежним, — но расхождение обязано быть видно.
+    await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}`, payload: { name: "Гонка поиска", kind: "coding", prompt: "Найди причину и исправь", fixtureId: "stale-search-results" } });
+    const drifted = (await app.inject({ method: "GET", url: `/api/suite-revisions/${revisionId}` })).json() as Snapshot;
+
+    expect(drifted.items[0]!.taskRevisionId).toBe(pinned);
+    expect(drifted.drift).toEqual([{ taskRevisionId: pinned, reason: "prompt" }]);
+
+    // Архивную задачу вернут в работу, а изменённый промпт уже не тот: причины разные.
+    await app.inject({ method: "DELETE", url: `/api/tasks/${taskId}` });
+    const archived = (await app.inject({ method: "GET", url: `/api/suite-revisions/${revisionId}` })).json() as Snapshot;
+
+    expect(archived.drift).toEqual([{ taskRevisionId: pinned, reason: "prompt-archived" }]);
+    await app.close();
+    store.close();
+  }, 60_000);
+
   it("addresses a fixture preview by the fixture, not by a task run", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-fixture-lease-"));
     directories.push(directory);

@@ -168,7 +168,129 @@ describe("run prompts", () => {
   });
 });
 
+describe("наборы задач", () => {
+  const item = (taskRevisionId: string, fixtureRevision: string | null = null) => ({
+    taskRevisionId,
+    fixtureId: fixtureRevision ? "stale-search-results" : null,
+    fixtureRevision,
+  });
+
+  it("нумерует ревизии и не плодит одинаковые", () => {
+    const store = testStore();
+    const suite = store.createSuite("Coding General");
+    const task = store.createTask({ name: "Task", kind: "prompt", prompt: "First", tags: [] });
+
+    const first = store.createSuiteRevision(suite.id, [item(task.currentRevision.id)]);
+    const same = store.createSuiteRevision(suite.id, [item(task.currentRevision.id)]);
+
+    // Тот же состав обязан остаться той же ревизией: иначе прогоны по нему перестали бы
+    // считаться сравнимыми, хотя ничего не менялось.
+    expect(first.revision).toBe(1);
+    expect(same.id).toBe(first.id);
+    expect(store.listSuiteRevisions(suite.id)).toHaveLength(1);
+  });
+
+  it("даёт новую ревизию, когда правка промпта меняет состав", () => {
+    const store = testStore();
+    const suite = store.createSuite("Coding General");
+    const task = store.createTask({ name: "Task", kind: "prompt", prompt: "First", tags: [] });
+    const before = store.createSuiteRevision(suite.id, [item(task.currentRevision.id)]);
+
+    const edited = store.updateTask(task.id, { name: "Task", kind: "prompt", prompt: "Second", tags: [] });
+    const after = store.createSuiteRevision(suite.id, [item(edited.currentRevision.id)]);
+
+    expect(after.id).not.toBe(before.id);
+    expect(after.revision).toBe(2);
+    expect(after.contentHash).not.toBe(before.contentHash);
+  });
+
+  it("даёт новую ревизию, когда изменилось только содержимое fixture", () => {
+    const store = testStore();
+    const suite = store.createSuite("Coding General");
+    const task = store.createTask({ name: "Task", kind: "coding", prompt: "Fix it", fixtureId: "stale-search-results", tags: [] });
+    const before = store.createSuiteRevision(suite.id, [item(task.currentRevision.id, "a".repeat(40))]);
+
+    const after = store.createSuiteRevision(suite.id, [item(task.currentRevision.id, "b".repeat(40))]);
+
+    // Промпт тот же, а исходный проект другой: сравнивать такие прогоны нельзя.
+    expect(after.id).not.toBe(before.id);
+    expect(after.revision).toBe(2);
+  });
+
+  it("помечает совместимыми только прогоны одной ревизии", () => {
+    const store = testStore();
+    const suite = store.createSuite("Coding General");
+    const task = store.createTask({ name: "Task", kind: "prompt", prompt: "First", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const first = store.createSuiteRevision(suite.id, [item(task.currentRevision.id)]);
+    const base = { modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" as const };
+
+    const left = store.createRun({ ...base, suiteRevisionId: first.id });
+    const right = store.createRun({ ...base, suiteRevisionId: first.id });
+    const edited = store.updateTask(task.id, { name: "Task", kind: "prompt", prompt: "Second", tags: [] });
+    const second = store.createSuiteRevision(suite.id, [item(edited.currentRevision.id)]);
+    const later = store.createRun({ ...base, suiteRevisionId: second.id });
+
+    expect(store.listSuiteRevisionRuns(first.id).map((run) => run.id).toSorted()).toEqual([left.id, right.id].toSorted());
+    expect(store.listSuiteRevisionRuns(second.id).map((run) => run.id)).toEqual([later.id]);
+    // Состав прогона берётся из ревизии, а не присылается рядом с запросом.
+    expect(store.listRunTasks(later.id).map((prompt) => prompt.prompt)).toEqual(["Second"]);
+  });
+
+  it("отказывает прогону по несуществующей ревизии набора", () => {
+    const store = testStore();
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+
+    expect(() => store.createRun({ suiteRevisionId: randomUUID(), modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" }))
+      .toThrow(/Suite revision not found/u);
+    expect(store.listRuns()).toHaveLength(0);
+  });
+
+  it("убирает архивный набор из списка, не теряя его ревизии", () => {
+    const store = testStore();
+    const suite = store.createSuite("Coding General");
+    const task = store.createTask({ name: "Task", kind: "prompt", prompt: "First", tags: [] });
+    const revision = store.createSuiteRevision(suite.id, [item(task.currentRevision.id)]);
+
+    store.archiveSuite(suite.id);
+
+    expect(store.listSuites()).toHaveLength(0);
+    expect(store.getSuiteRevision(revision.id)?.items).toHaveLength(1);
+  });
+});
+
 describe("run queue", () => {
+  it("убирает пустую колонку хеша fixture, не теряя ревизии задач", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-fixture-hash-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const sqlite = new DatabaseSync(filename);
+    sqlite.exec(`
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, current_revision_id TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE task_revisions (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT,
+        kind TEXT NOT NULL, prompt TEXT NOT NULL, fixture_id TEXT, tags_json TEXT NOT NULL, content_hash TEXT NOT NULL,
+        fixture_hash TEXT, created_at TEXT NOT NULL, UNIQUE(task_id, revision)
+      );
+      INSERT INTO tasks VALUES ('task', 'revision', NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+      INSERT INTO task_revisions VALUES ('revision', 'task', 1, 'Гонка', NULL, 'coding', 'Найди причину', 'web-app', '[]', '${"c".repeat(64)}', 'deadbeef', '2026-01-01T00:00:00.000Z');
+    `);
+    sqlite.close();
+
+    const store = createStore(filename);
+
+    // Колонка всегда была пустой, а владельца у неё нет: содержимое fixture фиксирует набор задач.
+    const columns = new DatabaseSync(filename).prepare("PRAGMA table_info(task_revisions)").all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).not.toContain("fixture_hash");
+    expect(store.listTasks()[0]?.currentRevision).toMatchObject({ name: "Гонка", prompt: "Найди причину", fixtureId: "web-app" });
+    store.close();
+
+    // Вторая миграция по той же базе не должна падать на уже удалённой колонке.
+    const again = createStore(filename);
+    expect(again.listTasks()).toHaveLength(1);
+    again.close();
+  });
+
   it("removes the legacy benchmark tables together with the column", () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-legacy-drop-"));
     directories.push(directory);

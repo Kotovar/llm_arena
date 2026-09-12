@@ -226,7 +226,7 @@ function ActivityCard() {
 
 export function Shell() {
   const groups = [
-    { label: "Запуск", links: [["/", "Новый запуск"], ["/batch", "Массовый запуск"]] },
+    { label: "Запуск", links: [["/", "Новый запуск"], ["/batch", "Массовый запуск"], ["/benchmark", "Наборы задач"]] },
     { label: "Анализ", links: [["/runs", "Результаты"], ["/leaderboard", "Лидерборд"], ["/compare", "Сравнение"], ["/analytics", "Аналитика"], ["/gallery", "Галерея"]] },
     { label: "Подготовка", links: [["/tasks", "Промпты"], ["/fixtures", "Исходные проекты"], ["/models", "Модели"], ["/settings", "Настройки"]] },
   ] as const;

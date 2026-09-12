@@ -14,6 +14,10 @@ import {
   createTaskSchema,
   reviewSchema,
   retryTaskRunSchema,
+  createSuiteSchema,
+  createSuiteRevisionSchema,
+  renameSuiteSchema,
+  type SuiteItem,
   modelDirectorySchema,
   selectResultVersionSchema,
   updateModelCapabilitiesSchema,
@@ -26,7 +30,7 @@ import { activeExportPath, renderAgentLayout, renderFishCommand, renderFishLaunc
 import { describeGenerationError } from "./generation-error.js";
 import { FIXTURE_PREVIEW_VERSION, fixturePreviewOwner } from "./preview.js";
 import { verifyFixture } from "./fixture-verify.js";
-import { assertWorkspaceCommit, writeResultDiff } from "./artifacts.js";
+import { assertWorkspaceCommit, fixtureRevision, writeResultDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -381,6 +385,62 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return reply.code(201).send({ model, profile });
   });
 
+  /**
+   * Состав набора на сейчас: ревизии задач и содержимое их fixture. Считается по факту, а не
+   * берётся из прошлой ревизии, — иначе снимок повторил бы устаревшие данные.
+   */
+  const currentSuiteItems = (taskIds: readonly string[]) => {
+    const tasks = new Map(store.listTasks().map((task) => [task.id, task]));
+    return taskIds.map((taskId) => {
+      const task = tasks.get(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      const revision = task.currentRevision;
+      const fixture = revision.kind === "coding" ? config.fixtures.find((item) => item.id === revision.fixtureId) : undefined;
+      if (revision.kind === "coding" && !fixture) throw new Error(`Fixture ${revision.fixtureId} not found`);
+      return {
+        taskRevisionId: revision.id,
+        fixtureId: fixture?.id ?? null,
+        // ponytail: хеш считается копированием fixture. Потолок — набор из десятков задач;
+        // тогда кэшировать по каталогу, а не пересчитывать на каждый снимок и каждый просмотр.
+        fixtureRevision: fixture ? fixtureRevision(fixture.source) : null,
+      };
+    });
+  };
+
+  /** Что разъехалось между снимком и текущим состоянием: править набор или нет — решает человек. */
+  type Drift = { taskRevisionId: string; reason: "prompt" | "prompt-archived" | "prompt-missing" | "fixture" | "fixture-missing" };
+  const suiteRevisionDrift = (items: readonly SuiteItem[]): Drift[] => items.flatMap((item): Drift[] => {
+    const at = (reason: Drift["reason"]): Drift[] => [{ taskRevisionId: item.taskRevisionId, reason }];
+    const task = store.taskStateByRevision(item.taskRevisionId);
+    // Причины разные: архивную задачу вернут в работу, а изменённый промпт уже не тот.
+    if (!task) return at("prompt-missing");
+    if (task.archivedAt) return at("prompt-archived");
+    if (!task.isCurrent) return at("prompt");
+    if (!item.fixtureId) return [];
+    const fixture = config.fixtures.find((candidate) => candidate.id === item.fixtureId);
+    if (!fixture) return at("fixture-missing");
+    return fixtureRevision(fixture.source) === item.fixtureRevision ? [] : at("fixture");
+  });
+
+  app.get("/api/suites", async () => store.listSuites());
+  app.post("/api/suites", async (request, reply) => reply.code(201).send(store.createSuite(parse(createSuiteSchema, request.body).name)));
+  app.patch<{ Params: { id: string } }>("/api/suites/:id", async (request) => store.renameSuite(request.params.id, parse(renameSuiteSchema, request.body).name));
+  app.delete<{ Params: { id: string } }>("/api/suites/:id", async (request, reply) => {
+    store.archiveSuite(request.params.id);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string } }>("/api/suites/:id/revisions", async (request, reply) => {
+    const { taskIds } = parse(createSuiteRevisionSchema, request.body);
+    return reply.code(201).send(store.createSuiteRevision(request.params.id, currentSuiteItems(taskIds)));
+  });
+  app.get<{ Params: { id: string } }>("/api/suites/:id/revisions", async (request) => store.listSuiteRevisions(request.params.id));
+  app.get<{ Params: { id: string } }>("/api/suite-revisions/:id", async (request, reply) => {
+    const revision = store.getSuiteRevision(request.params.id);
+    if (!revision) return reply.code(404).send({ message: "Suite revision not found" });
+    const prompts = revision.items.map((item) => ({ ...item, name: store.getTaskRevision(item.taskRevisionId)?.name ?? null }));
+    // Прогоны по одной ревизии набора сравнимы между собой; по разным — нет, и это видно здесь.
+    return { ...revision, prompts, drift: suiteRevisionDrift(revision.items), runs: store.listSuiteRevisionRuns(revision.id).map(withPublicError) };
+  });
   app.get("/api/tasks", async () => store.listTasks());
   app.post("/api/task-images", async (request, reply) => reply.code(201).send(storeTaskImage(config.dataDir, parse(taskImageUploadSchema, request.body))));
   app.post("/api/tasks", async (request, reply) => reply.code(201).send(store.createTask(parseTask(request.body))));
