@@ -83,6 +83,8 @@ const HEAVY_LANE_BUSY = "Сейчас выполняется другой тяж
 export class BenchmarkEngine {
   readonly #controllers = new Map<string, AbortController>();
   readonly #taskControllers = new Map<string, AbortController>();
+  /** Почему остановлена одна задача: лимит времени — её свойство, а не всего прогона. */
+  readonly #taskStopReasons = new Map<string, StopReason>();
   /** Почему прогон остановлен: сообщение уходит в `error`, причина — в `stop_reason`. */
   readonly #stopReasons = new Map<string, { reason: StopReason; message?: string }>();
   readonly #listeners = new Map<string, Set<(event: RunEvent) => void>>();
@@ -319,6 +321,22 @@ export class BenchmarkEngine {
         const taskController = new AbortController();
         const taskSignal = AbortSignal.any([signal, taskController.signal]);
         this.#taskControllers.set(taskRun.id, taskController);
+        /**
+         * Общий лимит времени задачи. `taskTimeoutMs` раннера — это пауза без вывода, а не
+         * потолок работы: агент, который бодро пишет в stdout час, под него не попадает.
+         * Watchdog ловит патологию, лимит — просто «не уложился».
+         */
+        const limitMs = fixture?.limits?.maxDurationMs;
+        const limit = limitMs
+          ? setTimeout(() => {
+            this.#taskStopReasons.set(taskRun.id, "timeout");
+            appendFileSync(displayPath, `\nЗадача остановлена: исчерпан лимит ${Math.round(limitMs / 1000)} с.\n`);
+            taskController.abort();
+          }, limitMs)
+          : undefined;
+        // Всё, что дальше, — под одним finally: таймер, оставшийся висеть, гасил бы отмену уже
+        // завершённой задачи и держал бы событийный цикл до конца лимита.
+        try {
         const agentInput = {
           definition,
           prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
@@ -419,16 +437,17 @@ export class BenchmarkEngine {
           const result = watchdogError ? { watchdog: watchdogError.diagnostics } : {};
           if (watchdogError) writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
           // Промпт мог оборваться вместе со всем прогоном: тогда причина у него та же, что у прогона.
-          this.store.saveTaskRunResult(taskRun.id, result, status, failure, status === "cancelled" ? this.#stopReason(run.id) : null);
+          this.store.saveTaskRunResult(taskRun.id, result, status, failure, status === "cancelled" ? this.#taskStopReason(run.id, taskRun.id) : null);
           if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, result, status, failure);
         }
-        try {
-          for (let attempt = 2; attempt <= repeats && !taskSignal.aborted; attempt += 1) {
-            if (backend && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
-            await measure(attempt);
-          }
+        for (let attempt = 2; attempt <= repeats && !taskSignal.aborted; attempt += 1) {
+          if (backend && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
+          await measure(attempt);
+        }
         } finally {
+          clearTimeout(limit);
           this.#taskControllers.delete(taskRun.id);
+          this.#taskStopReasons.delete(taskRun.id);
         }
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: this.store.getTaskRun(taskRun.id)?.status } });
         if (backend && !signal.aborted && !(await backend.reset())) {
@@ -672,6 +691,11 @@ export class BenchmarkEngine {
    */
   #stopReason(runId: string): StopReason {
     return this.#stopReasons.get(runId)?.reason ?? (this.#stopping ? "restart" : "user");
+  }
+
+  /** У задачи своя причина главнее: иначе исчерпанный лимит выглядел бы ручной остановкой. */
+  #taskStopReason(runId: string, taskRunId: string): StopReason {
+    return this.#taskStopReasons.get(taskRunId) ?? this.#stopReason(runId);
   }
 
   // ponytail: отмена одного промпта не трогает supervisor.stopAll() — раннер сам гасит свой процесс по сигналу, а бэкенд нужен следующим промптам.

@@ -1,7 +1,12 @@
 import { z } from "zod";
+// Схемы вердикта собираются здесь, поэтому их мало реэкспортировать — нужны и в этом модуле.
+import { failureReasonSchema, verdictSchema } from "./outcome.js";
 export { DEFAULT_LLAMA_TEMPERATURE } from "./constants.js";
 export {
   classifyTaskRun,
+  failureReasonLabels,
+  failureReasonSchema,
+  humanFailureReasons,
   isCounted,
   isModelFailure,
   isSuccess,
@@ -11,10 +16,16 @@ export {
   REPRESENTATIVE_MIN,
   REPRESENTATIVE_SHARE,
   representativeThreshold,
+  resolveVerdict,
   stopReasonSchema,
+  taskRunOutcome,
+  verdictSchema,
+  type FailureReason,
   type OutcomeInput,
   type StopReason,
   type TaskOutcome,
+  type TaskVerdict,
+  type Verdict,
 } from "./outcome.js";
 
 export const taskKindSchema = z.enum(["prompt", "coding"]);
@@ -301,6 +312,18 @@ export const reviewSchema = z.object({
   completion: z.enum(["full", "partial"]),
 });
 
+/**
+ * Ручной вердикт. Причина обязательна у провала и бессмысленна у успеха; система хранит только
+ * ручные причины — технические она выводит из исхода сама.
+ */
+export const saveVerdictSchema = z.object({
+  verdict: verdictSchema,
+  reason: failureReasonSchema.nullable().default(null),
+  comment: z.string().trim().max(10_000).default(""),
+}).strict().superRefine((value, context) => {
+  if (value.verdict === "fail" && !value.reason) context.addIssue({ code: "custom", message: "Провал требует причины" });
+});
+
 export const commandSpecSchema = z.object({
   argv: z.array(z.string()).min(1),
   cwd: z.string().optional(),
@@ -401,5 +424,6 @@ export type FixtureCheck = z.infer<typeof fixtureCheckSchema>;
 export type NormalizedRunResult = z.infer<typeof normalizedRunResultSchema>;
 export type WatchdogDiagnostics = z.infer<typeof watchdogDiagnosticsSchema>;
 export type Review = z.infer<typeof reviewSchema>;
+export type SaveVerdict = z.infer<typeof saveVerdictSchema>;
 export type SelectResultVersion = z.infer<typeof selectResultVersionSchema>;
 export type PreviewResultVersion = z.infer<typeof previewResultVersionSchema>;

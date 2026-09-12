@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyTaskRun,
+  resolveVerdict,
   isCounted,
   isModelFailure,
   isSuccess,
@@ -68,7 +69,7 @@ describe("classifyTaskRun", () => {
 describe("predicates", () => {
   it("counts success and model failure into the denominator, and a manual stop into neither", () => {
     const counted = outcomeOrder.filter(isCounted);
-    expect(counted).toEqual(["full", "partial", "completed", "check_failed", "error", "watchdog", "broken", "aborted_auto"]);
+    expect(counted).toEqual(["full", "partial", "completed", "check_failed", "error", "watchdog", "timeout", "broken", "aborted_auto"]);
     expect(outcomeOrder.filter(isUserAbort)).toEqual(["aborted_user"]);
   });
 
@@ -80,5 +81,49 @@ describe("predicates", () => {
     const labelled = Object.keys(outcomeLabels) as TaskOutcome[];
     expect(outcomeOrder.toSorted()).toEqual(labelled.toSorted());
     expect(new Set(outcomeOrder).size).toBe(outcomeOrder.length);
+  });
+});
+
+describe("лимит времени задачи", () => {
+  const base = { status: "cancelled", brokenAt: null, completion: null, resultJson: null } as const;
+
+  it("отличает исчерпанный лимит от остановки снаружи", () => {
+    expect(classifyTaskRun({ ...base, stopReason: "timeout" })).toBe("timeout");
+    expect(classifyTaskRun({ ...base, stopReason: "user" })).toBe("aborted_user");
+    expect(classifyTaskRun({ ...base, stopReason: "overheat" })).toBe("aborted_auto");
+  });
+
+  it("считает исчерпанный лимит неудачей модели", () => {
+    expect(isModelFailure("timeout")).toBe(true);
+    expect(isCounted("timeout")).toBe(true);
+  });
+});
+
+describe("вердикт бенчмарка", () => {
+  it("выводит технические провалы из исхода, не спрашивая человека", () => {
+    expect(resolveVerdict("watchdog")).toMatchObject({ verdict: "fail", reason: "watchdog-kill", human: false });
+    expect(resolveVerdict("timeout")).toMatchObject({ verdict: "fail", reason: "timeout", human: false });
+    expect(resolveVerdict("check_failed")).toMatchObject({ verdict: "fail", reason: "tests-failed", human: false });
+    expect(resolveVerdict("error")).toMatchObject({ verdict: "fail", reason: "agent-crash", human: false });
+    expect(resolveVerdict("broken")).toMatchObject({ verdict: "fail", reason: "runtime-error", human: false });
+  });
+
+  it("ждёт человека на успешно завершённой задаче", () => {
+    // Пройденные проверки сами по себе не PASS: модель могла обойти задачу.
+    expect(resolveVerdict("completed")).toMatchObject({ verdict: null, human: false, counted: true });
+    expect(resolveVerdict("full")).toMatchObject({ verdict: null, human: false, counted: true });
+  });
+
+  it("оставляет вне процентов то, что не вина модели", () => {
+    expect(resolveVerdict("aborted_user")).toMatchObject({ verdict: null, counted: false });
+    expect(resolveVerdict("post_processing")).toMatchObject({ verdict: null, counted: false });
+  });
+
+  it("ставит человеческий вердикт выше автоматического", () => {
+    // Упавшая проверка иногда объясняется не моделью, и наоборот — зелёные тесты не гарантируют PASS.
+    expect(resolveVerdict("check_failed", { verdict: "pass", reason: null })).toMatchObject({ verdict: "pass", reason: null, human: true });
+    expect(resolveVerdict("completed", { verdict: "fail", reason: "wrong-solution" })).toMatchObject({ verdict: "fail", reason: "wrong-solution", human: true });
+    // Причина у PASS не хранится: она относится только к провалу.
+    expect(resolveVerdict("completed", { verdict: "pass", reason: "other" }).reason).toBeNull();
   });
 });

@@ -684,6 +684,7 @@ export const outcomeLabels: Record<TaskOutcome, string> = {
   error: "Ошибка",
   post_processing: "Ошибка обработки результата",
   watchdog: "Зациклился",
+  timeout: "Не уложился в лимит",
   broken: "Не работает",
   aborted_auto: "Остановлен автоматически",
   aborted_user: "Остановлен вручную",

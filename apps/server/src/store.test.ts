@@ -14,6 +14,11 @@ function testStore() {
   return createStore(join(directory, "arena.sqlite"));
 }
 
+/** Тот же store, но по заданному файлу: нужен, чтобы переоткрыть базу в одном тесте. */
+function testStoreAt(filename: string) {
+  return createStore(filename);
+}
+
 afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
@@ -244,6 +249,33 @@ describe("наборы задач", () => {
     expect(() => store.createRun({ suiteRevisionId: randomUUID(), modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" }))
       .toThrow(/Suite revision not found/u);
     expect(store.listRuns()).toHaveLength(0);
+  });
+
+  it("не теряет выполненные задачи и вердикты после перезапуска", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-store-suite-restart-"));
+    directories.push(directory);
+    const filename = join(directory, "arena.sqlite");
+    const store = testStoreAt(filename);
+    const suite = store.createSuite("Coding General");
+    const first = store.createTask({ name: "Первая", kind: "prompt", prompt: "Один", tags: [] });
+    const secondTask = store.createTask({ name: "Вторая", kind: "prompt", prompt: "Два", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const revision = store.createSuiteRevision(suite.id, [item(first.currentRevision.id), item(secondTask.currentRevision.id)]);
+    const run = store.createRun({ suiteRevisionId: revision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const done = store.createTaskRun(run.id, first.currentRevision.id, 0, join(directory, "artifact"), {});
+    store.saveTaskRunResult(done.id, {}, "completed");
+    store.saveVerdict(done.id, { verdict: "pass", reason: null, comment: "решил минимально" });
+    store.close();
+
+    const reopened = testStoreAt(filename);
+
+    // Незавершённый прогон помечается прерванным, но выполненное и оценённое остаётся.
+    reopened.recoverInterruptedRuns();
+    expect(reopened.listTaskRuns(run.id)).toHaveLength(1);
+    expect(reopened.getVerdict(done.id)).toMatchObject({ verdict: "pass", comment: "решил минимально" });
+    // Состав прогона тоже цел: возобновление пойдёт со второй позиции, а не с начала.
+    expect(reopened.listRunTasks(run.id).map((prompt) => prompt.name)).toEqual(["Первая", "Вторая"]);
+    reopened.close();
   });
 
   it("убирает архивный набор из списка, не теряя его ревизии", () => {

@@ -13,10 +13,12 @@ import {
   modelEconomicsSchema,
   type Review,
   type RunStatus,
+  type FailureReason,
   type StopReason,
   type SuiteItem,
   type TaskImage,
   type TaskRevision,
+  type Verdict,
 } from "@llm-arena/shared";
 
 type TaskRow = {
@@ -202,6 +204,14 @@ type SuiteRevisionRow = {
   created_at: string;
 };
 
+type VerdictRow = {
+  task_run_id: string;
+  verdict: Verdict;
+  reason: FailureReason | null;
+  comment: string;
+  updated_at: string;
+};
+
 type TaskAttemptRow = {
   id: string;
   task_run_id: string;
@@ -333,6 +343,7 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS suites (id TEXT PRIMARY KEY, name TEXT NOT NULL, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS suite_revisions (id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, revision INTEGER NOT NULL, items_json TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(suite_id, revision));
+    CREATE TABLE IF NOT EXISTS task_verdicts (task_run_id TEXT PRIMARY KEY, verdict TEXT NOT NULL, reason TEXT, comment TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
   `);
   // Описание — заметка «для себя», в модель не уходит и не должно замораживаться в версии промпта:
   // иначе у старых прогонов его не видно. Поэтому оно живёт на задаче, а старые значения переносим.
@@ -570,6 +581,21 @@ export function createStore(filename: string) {
     return row ? mapSuiteRevision(row) : undefined;
   }
 
+  function mapVerdict(row: VerdictRow) {
+    return {
+      taskRunId: row.task_run_id,
+      verdict: row.verdict,
+      reason: row.reason,
+      comment: row.comment,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  function getVerdict(taskRunId: string) {
+    const row = one<VerdictRow>("SELECT * FROM task_verdicts WHERE task_run_id = ?", taskRunId);
+    return row ? mapVerdict(row) : undefined;
+  }
+
   function getTaskRevision(id: string): TaskRevision | undefined {
     const row = one<TaskRevisionRow>("SELECT * FROM task_revisions WHERE id = ?", id);
     return row ? mapTaskRevision(row) : undefined;
@@ -634,6 +660,7 @@ export function createStore(filename: string) {
     sqlite.prepare("DELETE FROM gallery_featured WHERE task_run_id = ?").run(taskRunId);
     sqlite.prepare("DELETE FROM task_run_followups WHERE task_run_id = ?").run(taskRunId);
     sqlite.prepare("DELETE FROM reviews WHERE task_run_id = ?").run(taskRunId);
+    sqlite.prepare("DELETE FROM task_verdicts WHERE task_run_id = ?").run(taskRunId);
     sqlite.prepare("DELETE FROM check_runs WHERE task_run_id = ?").run(taskRunId);
   }
 
@@ -1238,6 +1265,28 @@ export function createStore(filename: string) {
         this.setTaskRunCompletion(taskRunId, review.completion);
         return this.saveReview(taskRunId, review);
       });
+    },
+    /**
+     * Ручной вердикт бенчмарка. Автоматические провалы тут не хранятся: их выводит
+     * resolveVerdict() из исхода, иначе поздняя отметка «не работает» разошлась бы с записью.
+     */
+    saveVerdict(taskRunId: string, input: { verdict: Verdict; reason: FailureReason | null; comment: string }) {
+      const updatedAt = now();
+      sqlite.prepare(`
+        INSERT INTO task_verdicts (task_run_id, verdict, reason, comment, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(task_run_id) DO UPDATE SET verdict = excluded.verdict, reason = excluded.reason, comment = excluded.comment, updated_at = excluded.updated_at
+      `).run(taskRunId, input.verdict, input.verdict === "fail" ? input.reason : null, input.comment, updatedAt);
+      return getVerdict(taskRunId)!;
+    },
+    clearVerdict(taskRunId: string) {
+      sqlite.prepare("DELETE FROM task_verdicts WHERE task_run_id = ?").run(taskRunId);
+    },
+    getVerdict,
+    listVerdicts(benchmarkRunId: string) {
+      return all<VerdictRow>(
+        "SELECT task_verdicts.* FROM task_verdicts JOIN task_runs ON task_runs.id = task_verdicts.task_run_id WHERE task_runs.benchmark_run_id = ?",
+        benchmarkRunId,
+      ).map(mapVerdict);
     },
     saveReview(taskRunId: string, review: Omit<Review, "completion">) {
       sqlite

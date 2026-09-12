@@ -12,7 +12,10 @@ import {
   createRunSchema,
   modelEconomicsSchema,
   createTaskSchema,
+  resolveVerdict,
   reviewSchema,
+  saveVerdictSchema,
+  taskRunOutcome,
   retryTaskRunSchema,
   createSuiteSchema,
   createSuiteRevisionSchema,
@@ -434,6 +437,30 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return reply.code(201).send(store.createSuiteRevision(request.params.id, currentSuiteItems(taskIds)));
   });
   app.get<{ Params: { id: string } }>("/api/suites/:id/revisions", async (request) => store.listSuiteRevisions(request.params.id));
+  app.get<{ Params: { id: string } }>("/api/benchmark/runs/:id", async (request, reply) => {
+    const run = store.getRun(request.params.id);
+    if (!run) return reply.code(404).send({ message: "Run not found" });
+    if (!run.suite_revision_id) return reply.code(400).send({ message: "Этот прогон не относится к набору задач" });
+    const revision = store.getSuiteRevision(run.suite_revision_id);
+    const planned = store.listRunTasks(run.id);
+    const tasks = store.listTaskRuns(run.id).map((taskRun) => ({
+      id: taskRun.id,
+      position: taskRun.position,
+      name: store.getTaskRevision(taskRun.task_revision_id)?.name ?? `Задача ${taskRun.position + 1}`,
+      status: taskRun.status,
+      outcome: taskRunOutcome(taskRun),
+      verdict: taskVerdict(taskRun),
+      startedAt: taskRun.started_at,
+      finishedAt: taskRun.finished_at,
+    }));
+    return {
+      run: withPublicError(run),
+      suite: revision ? { revisionId: revision.id, revision: revision.revision, contentHash: revision.contentHash } : null,
+      // Запланировано против выполненного: прерванный прогон не должен выглядеть завершённым.
+      plannedCount: planned.length,
+      tasks,
+    };
+  });
   app.get<{ Params: { id: string } }>("/api/suite-revisions/:id", async (request, reply) => {
     const revision = store.getSuiteRevision(request.params.id);
     if (!revision) return reply.code(404).send({ message: "Suite revision not found" });
@@ -836,6 +863,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       if (!run) throw new Error("Run not found");
       if (run.status === "pending" || run.status === "running") throw new Error("Active run must be cancelled before restart");
       if (hasActiveFollowup(run.id)) throw new Error("Active additional prompt must be cancelled before restart");
+      // Одна задача бенчмарка — одна попытка. Иначе неудачу можно переснять, и solve rate
+      // перестанет что-либо означать. Исследовать задачу можно обычным прогоном вне набора.
+      if (run.suite_revision_id) throw new Error("Задача набора выполняется один раз, а вердикт ставится на странице бенчмарка. Недоступно: перезапуск.");
       return taskRun;
     };
     const taskRun = assertRestartable();
@@ -1038,16 +1068,57 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     });
   });
   // Оценка и отметка полноты сохраняются одним запросом: результат без отметки не считается оценённым.
+  /**
+   * Итоговый вердикт задачи: ручной, если он есть, иначе выведенный из исхода. Технические
+   * провалы человека не ждут, а успешно завершённая задача ждёт: пройденные проверки сами по
+   * себе PASS не означают — модель могла обойти задачу.
+   */
+  /**
+   * Задача набора живёт по своим правилам: одна попытка и один бинарный вердикт. Оценка из
+   * обычного экрана результата меняла бы исход задним числом — и solve rate на экране бенчмарка
+   * расходился бы с тем, что считает остальная система.
+   */
+  const assertNotBenchmark = (taskRunId: string, what: string) => {
+    const taskRun = store.getTaskRun(taskRunId);
+    if (!taskRun) throw new Error("Task run not found");
+    if (store.getRun(taskRun.benchmark_run_id)?.suite_revision_id) {
+      throw new Error(`Задача набора выполняется один раз, а вердикт ставится на странице бенчмарка. Недоступно: ${what}.`);
+    }
+    return taskRun;
+  };
+  const taskVerdict = (taskRun: NonNullable<ReturnType<ArenaStore["getTaskRun"]>>) => {
+    const human = store.getVerdict(taskRun.id);
+    return {
+      ...resolveVerdict(taskRunOutcome(taskRun), human ? { verdict: human.verdict, reason: human.reason } : undefined),
+      comment: human?.comment ?? "",
+    };
+  };
+  app.get<{ Params: { id: string } }>("/api/task-runs/:id/verdict", async (request, reply) => {
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) return reply.code(404).send({ message: "Task run not found" });
+    return taskVerdict(taskRun);
+  });
+  app.put<{ Params: { id: string } }>("/api/task-runs/:id/verdict", async (request, reply) => {
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) return reply.code(404).send({ message: "Task run not found" });
+    if (taskRun.status === "pending" || taskRun.status === "running") throw new Error("Незавершённую задачу оценивать нечем");
+    const input = parse(saveVerdictSchema, request.body);
+    store.saveVerdict(taskRun.id, input);
+    return taskVerdict(store.getTaskRun(taskRun.id)!);
+  });
+  app.delete<{ Params: { id: string } }>("/api/task-runs/:id/verdict", async (request, reply) => {
+    store.clearVerdict(request.params.id);
+    return reply.code(204).send();
+  });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => {
     const review = parse(reviewSchema, request.body);
-    if (!store.getTaskRun(request.params.id)) throw new Error("Task run not found");
+    assertNotBenchmark(request.params.id, "оценка по критериям");
     return store.saveReviewWithCompletion(request.params.id, review);
   });
   // Отметка о выполнении промпта: полностью, частично или «не работает» (последняя убирает результат из галереи и сводок).
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/completion", async (request) => {
     const { completion } = parse(completionSchema, request.body);
-    const taskRun = store.getTaskRun(request.params.id);
-    if (!taskRun) throw new Error("Task run not found");
+    const taskRun = assertNotBenchmark(request.params.id, "отметка о выполнении");
     // Сменить чип на «выполнено» можно только у оценённого результата: иначе это обход обязательной оценки.
     if ((completion === "full" || completion === "partial") && !taskRun.review) throw new Error("Rate the result before marking it complete");
     return withSelectedVersion(store.setTaskRunCompletion(taskRun.id, completion)!);
@@ -1077,6 +1148,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   app.post<{ Params: { id: string } }>("/api/task-runs/:id/followups", async (request, reply) => {
     const { prompt } = parse(followupSchema, request.body);
+    // Иначе уточнение даёт модели вторую попытку, и запрет перезапуска ничего не стоит.
+    assertNotBenchmark(request.params.id, "уточнение");
     const followup = store.createFollowup(request.params.id, prompt);
     engine?.wake();
     return reply.code(202).send(followup);

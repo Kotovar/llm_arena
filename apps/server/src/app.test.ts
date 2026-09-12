@@ -15,6 +15,63 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("выводит вердикт из исхода и отдаёт последнее слово человеку", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-verdict-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const app = buildApp({ store, config });
+    const task = store.createTask({ name: "Гонка", kind: "prompt", prompt: "Найди", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const suite = store.createSuite("Coding General");
+    const revision = store.createSuiteRevision(suite.id, [{ taskRevisionId: task.currentRevision.id, fixtureId: null, fixtureRevision: null }]);
+    const run = store.createRun({ suiteRevisionId: revision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "artifact"), {});
+
+    // Зациклившаяся задача человека не ждёт: причина видна без него.
+    store.saveTaskRunResult(taskRun.id, {}, "agent_loop", "loop");
+    const automatic = await app.inject({ method: "GET", url: `/api/task-runs/${taskRun.id}/verdict` });
+    expect(automatic.json()).toMatchObject({ verdict: "fail", reason: "watchdog-kill", human: false, counted: true });
+
+    // Успешная задача ждёт: пройденные проверки сами по себе PASS не означают.
+    store.saveTaskRunResult(taskRun.id, {}, "completed");
+    const waiting = await app.inject({ method: "GET", url: `/api/task-runs/${taskRun.id}/verdict` });
+    expect(waiting.json()).toMatchObject({ verdict: null, human: false, counted: true });
+
+    const passed = await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/verdict`, payload: { verdict: "pass" } });
+    expect(passed.json()).toMatchObject({ verdict: "pass", reason: null, human: true });
+    const failed = await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/verdict`, payload: { verdict: "fail", reason: "wrong-solution", comment: "захардкодил" } });
+    expect(failed.json()).toMatchObject({ verdict: "fail", reason: "wrong-solution", human: true, comment: "захардкодил" });
+
+    // Провал без причины принимать нельзя: иначе распределение неудач станет бесполезным.
+    const noReason = await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/verdict`, payload: { verdict: "fail" } });
+    expect(noReason.statusCode).toBe(400);
+
+    await app.inject({ method: "DELETE", url: `/api/task-runs/${taskRun.id}/verdict` });
+    expect((await app.inject({ method: "GET", url: `/api/task-runs/${taskRun.id}/verdict` })).json()).toMatchObject({ verdict: null, human: false });
+
+    // Задача бенчмарка выполняется один раз, и обойти это нечем: уточнение дало бы вторую
+    // попытку, а отметка «не работает» задним числом разошлась бы с вердиктом.
+    store.updateRunStatus(run.id, "completed");
+    for (const attempt of [
+      { method: "POST" as const, url: `/api/task-runs/${taskRun.id}/retry`, payload: {} },
+      { method: "POST" as const, url: `/api/task-runs/${taskRun.id}/followups`, payload: { prompt: "доделай" } },
+      { method: "PUT" as const, url: `/api/task-runs/${taskRun.id}/completion`, payload: { completion: "broken" } },
+      { method: "PUT" as const, url: `/api/task-runs/${taskRun.id}/review`, payload: { correctness: 1, codeQuality: 1, uiQuality: 0, instructionFollowing: 1, comment: "", completion: "partial" } },
+    ]) {
+      const response = await app.inject(attempt);
+      expect([attempt.url, response.statusCode]).toEqual([attempt.url, 400]);
+    }
+    expect(store.listFollowups(taskRun.id)).toEqual([]);
+    expect(store.getTaskRun(taskRun.id)?.broken_at).toBeNull();
+
+    const benchmark = await app.inject({ method: "GET", url: `/api/benchmark/runs/${run.id}` });
+    expect(benchmark.json()).toMatchObject({ plannedCount: 1, suite: { revision: 1 }, tasks: [{ name: "Гонка", outcome: "completed" }] });
+    await app.close();
+    store.close();
+  });
+
   it("снимает состав набора по факту и показывает, что разъехалось", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-suites-api-"));
     directories.push(directory);

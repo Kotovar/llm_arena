@@ -240,6 +240,8 @@ export type Run = {
   warmup_attempt: number;
   /** Метка массового запуска; null у одиночных прогонов. */
   batch_id?: string | null;
+  /** Ревизия набора задач; null у обычного запуска. У прогона набора своя разметка результата. */
+  suite_revision_id?: string | null;
   status: string;
   activityStatus?: string;
   activeTaskName?: string | null;

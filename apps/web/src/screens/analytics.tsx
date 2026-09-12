@@ -349,8 +349,9 @@ function FailuresTable({ stats }: { stats: ModelStats[] }) {
   const cells: Array<[string, string, (row: ModelStats) => number]> = [
     ["Не работает", "Формально готовый результат, который не запускается.", (row) => row.outcomes.broken],
     ["Зациклился", "Промпт остановлен watchdog'ом.", (row) => row.outcomes.watchdog],
+    ["Лимит", "Промпт не уложился в отведённое задаче время.", (row) => row.outcomes.timeout],
     ["Проверки", "Fixture-проверки не прошли.", (row) => row.outcomes.check_failed],
-    ["Ошибки", "Падение раннера, таймаут, невалидный вызов инструмента.", (row) => row.outcomes.error],
+    ["Ошибки", "Падение раннера, невалидный вызов инструмента.", (row) => row.outcomes.error],
     ["Авто-стоп", "Гашение по перегреву или перезапуск приложения.", (row) => row.outcomes.aborted_auto],
   ];
   return <div className="analytics-scroll"><table className="analytics-table">

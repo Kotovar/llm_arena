@@ -36,7 +36,7 @@ function modelStats(overrides: Partial<ModelStats> = {}): ModelStats {
     harnessKey: null,
     harnessLabel: null,
     attempted: 12,
-    outcomes: { full: 8, partial: 1, completed: 1, check_failed: 1, error: 1, post_processing: 0, watchdog: 0, broken: 0, aborted_auto: 0, aborted_user: 2, pending: 0, running: 0 },
+    outcomes: { full: 8, partial: 1, completed: 1, check_failed: 1, error: 1, post_processing: 0, watchdog: 0, timeout: 0, broken: 0, aborted_auto: 0, aborted_user: 2, pending: 0, running: 0 },
     successCount: 10,
     successPercent: 83.3,
     failureCount: 2,

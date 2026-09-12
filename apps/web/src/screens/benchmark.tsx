@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api } from "../api.js";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import { useToast } from "../toast.js";
-import type { Task } from "../types.js";
+import type { Model, Profile, Runner, Task } from "../types.js";
 import { PromptPicker } from "./prompt-picker.js";
 
 type SuiteRevision = { id: string; revision: number; contentHash: string; createdAt: string; items: Array<{ taskRevisionId: string }> };
@@ -50,6 +50,48 @@ function RevisionDetail({ revisionId }: { revisionId: string }) {
       ? <div className="stack"><strong>Прогоны по этой ревизии ({revision.runs.length})</strong><div className="stack">{revision.runs.map((run) => <Link key={run.id} className="item" to="/runs/$runId" params={{ runId: run.id }}><div><span className="mono">{run.status}</span><time>{new Date(run.created_at).toLocaleString("ru")}</time></div></Link>)}</div><small>Сравнивать между собой можно только их: у прогонов по другой ревизии состав другой.</small></div>
       : <Empty>Прогонов по этой ревизии ещё нет.</Empty>}
   </div>;
+}
+
+/**
+ * Окружение бенчмарка фиксировано: минимальная обвязка `pi` с четырьмя инструментами. Выбор
+ * обвязки тут не предлагается намеренно — иначе результат характеризовал бы связку «модель плюс
+ * обвязка», а не модель, и прогоны перестали бы быть сравнимыми.
+ */
+function StartRun({ suiteRevisionId }: { suiteRevisionId: string }) {
+  const models = useData<Model[]>("models", "/models");
+  const runners = useData<Runner[]>("runners", "/runners");
+  const [modelId, setModelId] = useState("");
+  const profiles = useQuery({
+    queryKey: ["profiles", modelId],
+    queryFn: () => api<Profile[]>(`/profiles?modelId=${modelId}`),
+    enabled: Boolean(modelId),
+  });
+  const [profileId, setProfileId] = useState("");
+  const runner = runners.data?.find((item) => item.kind === "pi");
+  const local = models.data?.filter((model) => model.kind === "local-gguf" && model.capabilities.toolUse);
+  const start = useMutation({
+    mutationFn: () => api<{ id: string }>("/runs", {
+      method: "POST",
+      body: JSON.stringify({ suiteRevisionId, modelId, executionProfileId: profileId || null, runnerId: runner!.id, resultMode: "text" }),
+    }),
+  });
+  if (!runner) return <p className="error">Обвязка pi не настроена, запускать бенчмарк нечем.</p>;
+  return <form className="stack" onSubmit={(event) => { event.preventDefault(); start.mutate(); }}>
+    <div className="actions">
+      <label>Модель<select value={modelId} onChange={(event) => { setModelId(event.currentTarget.value); setProfileId(""); }} required>
+        <option value="">Выберите модель</option>
+        {local?.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+      </select></label>
+      <label>Профиль<select value={profileId} onChange={(event) => setProfileId(event.currentTarget.value)} disabled={!modelId} required>
+        <option value="">Выберите профиль</option>
+        {profiles.data?.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+      </select></label>
+      <button className="primary" disabled={start.isPending || !modelId || !profileId}>{start.isPending ? "Запускаем…" : "Запустить прогон"}</button>
+    </div>
+    <small>Окружение: {runner.name}. Каждая задача выполняется один раз, перезапуск недоступен.</small>
+    {start.error ? <p className="error">{start.error.message}</p> : null}
+    {start.data ? <Link to="/benchmark/runs/$runId" params={{ runId: start.data.id }}>Открыть прогон</Link> : null}
+  </form>;
 }
 
 function SuiteCard({ suite, tasks }: { suite: Suite; tasks: Task[] | undefined }) {
@@ -99,6 +141,7 @@ function SuiteCard({ suite, tasks }: { suite: Suite; tasks: Task[] | undefined }
         </div>
         {createRevision.error ? <p className="error">{createRevision.error.message}</p> : null}
       </form> : null}
+      {latest && !composing ? <StartRun suiteRevisionId={latest.id} /> : null}
       {latest ? <RevisionDetail revisionId={latest.id} /> : null}
     </div>
   </Panel>;

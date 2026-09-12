@@ -45,6 +45,11 @@ beforeEach(() => {
       return json([suite]);
     }
     if (url === "/api/tasks") return json([task, second]);
+    // Экран предлагает запуск в фиксированном окружении, поэтому ему нужны модель и профиль.
+    if (url === "/api/models") return json([{ id: "model-1", name: "Локальная", kind: "local-gguf", capabilities: { toolUse: true, vision: false, reasoning: false } }]);
+    if (url === "/api/runners") return json([{ id: "pi-local", name: "pi-среда", kind: "pi", exec: ["pi"] }]);
+    if (url.startsWith("/api/profiles")) return json([{ id: "profile-1", name: "Automatic" }]);
+    if (url === "/api/runs" && init?.method === "POST") return json({ id: "run-1" }, 202);
     if (url === "/api/suites/suite-1/revisions" && init?.method === "POST") {
       revisionBodies.push(JSON.parse(String(init.body)));
       return json({ ...suite.latestRevision, id: "suite-revision-2", revision: 2 }, 201);

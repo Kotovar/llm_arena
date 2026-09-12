@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { taskRunOutcome } from "@llm-arena/shared";
 import { loadConfig } from "./config.js";
 import { BenchmarkEngine } from "./engine.js";
 import { ProcessSupervisor } from "./process-supervisor.js";
@@ -318,6 +319,33 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_t
     await engine.stop();
     store.close();
   });
+
+  it("гасит задачу по её лимиту времени, а не по паузе без вывода", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-task-limit-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    // Агент бодро пишет в stdout: под taskTimeoutMs он не попадает никогда.
+    writeFileSync(script, `setInterval(() => process.stdout.write("работаю\\n"), 50);`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    config.fixtures = config.fixtures.map((fixture) => fixture.id === "web-app" ? { ...fixture, limits: { maxDurationMs: 700 } } : fixture);
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Долгая", kind: "prompt", prompt: "Сделай", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("task-limit-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    expect(taskRun).toMatchObject({ status: "cancelled", stop_reason: "timeout" });
+    // Исход отличается от ручной остановки: модель не уложилась, и это её неудача.
+    expect(taskRunOutcome(taskRun)).toBe("timeout");
+    expect(readFileSync(join(taskRun.artifact_path, "display.log"), "utf8")).toContain("исчерпан лимит");
+    await engine.stop();
+    store.close();
+  }, 60_000);
 
   it("creates real web files from a coding prompt and serves the saved result", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-web-engine-"));
