@@ -296,9 +296,17 @@ export class BenchmarkEngine {
       for (const [position, task] of tasks.entries()) {
         if (signal.aborted) break;
         if (executed.has(position)) continue;
+        /**
+         * Режим результата переопределяет вид задачи только там, где своего исходного проекта у
+         * неё нет: «web» — это готовое приложение на общем fixture, «text» — ответ без проекта.
+         * У задачи со своим fixture он и используется, иначе поле `fixtureId` ничего не значило
+         * бы, а модель получала бы пустой каталог и промпт про несуществующий проект.
+         */
         const effectiveTask = run.result_mode === "web"
           ? { ...task, kind: "coding" as const, fixtureId: "web-app" }
-          : { ...task, kind: "prompt" as const, fixtureId: undefined };
+          : task.kind === "coding" && task.fixtureId
+            ? task
+            : { ...task, kind: "prompt" as const, fixtureId: undefined };
         const artifactRoot = join(runRoot, randomTaskDirectory(position, task.id));
         const fixture = effectiveTask.kind === "coding" ? this.config.fixtures.find((item) => item.id === effectiveTask.fixtureId) : undefined;
         if (effectiveTask.kind === "coding" && !fixture) throw new Error(`Fixture ${effectiveTask.fixtureId} not found`);

@@ -320,6 +320,41 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_t
     store.close();
   });
 
+  it("даёт задаче её собственный исходный проект, а не пустой каталог", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-own-fixture-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    // Агент только рапортует: важно, что он получил, а не что сделал.
+    writeFileSync(script, `import { readdirSync } from "node:fs";
+let input = ""; for await (const chunk of process.stdin) input += chunk;
+console.log(JSON.stringify({ type: "thread.started", thread_id: "thread" }));
+console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: readdirSync(".").toSorted().join(",") } }));
+console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }));`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Гонка", kind: "coding", fixtureId: "stale-search-results", prompt: "Найди причину", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    // Режим «text» раньше превращал любую задачу в промпт без проекта: модель получала пустой
+    // каталог и уходила искать проект по файловой системе — вместе со скрытыми проверками.
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("own-fixture-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    const saved = JSON.parse(taskRun.result_json!) as { finalAnswer: string; checks: Array<{ id: string; status: string; hidden: boolean }>; fixtureRevision?: string };
+    expect(saved.finalAnswer).toContain("package.json");
+    expect(saved.finalAnswer).toContain("src");
+    // Проверки fixture отработали, включая скрытую: без исходного проекта их просто не было бы.
+    expect(saved.checks.map((check) => [check.id, check.hidden])).toEqual([["tests", false], ["regression", true]]);
+    expect(saved.fixtureRevision).toMatch(/^[0-9a-f]{40,64}$/u);
+    expect(JSON.parse(taskRun.snapshot_json).fixture.id).toBe("stale-search-results");
+    await engine.stop();
+    store.close();
+  }, 120_000);
+
   it("гасит задачу по её лимиту времени, а не по паузе без вывода", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-task-limit-"));
     directories.push(root);

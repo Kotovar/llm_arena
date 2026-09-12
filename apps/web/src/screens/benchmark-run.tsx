@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { api } from "../api.js";
+import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Skeleton } from "../shell.js";
 import type { TaskOutcome } from "@llm-arena/shared";
 import { outcomeLabels } from "../ui.js";
@@ -51,6 +51,85 @@ function duration(task: BenchmarkTask): string {
   if (!task.startedAt || !task.finishedAt) return "—";
   const seconds = Math.round((Date.parse(task.finishedAt) - Date.parse(task.startedAt)) / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+type TaskRunRecord = {
+  snapshot_json: string;
+  result_json: string | null;
+  error: string | null;
+};
+
+/**
+ * На что смотреть, когда техника молчит. Упавшая скрытая проверка уже даёт автоматический
+ * провал и решения не требует; решать приходится обратный случай — проверки зелёные, а
+ * задача могла быть обойдена.
+ */
+function WhatToCheck({ task }: { task: BenchmarkTask }) {
+  if (!task.verdict.counted) return <p>Задача вне процентов: её остановил человек или упал служебный шаг арены, к модели это не относится.</p>;
+  if (task.verdict.verdict === "fail" && !task.verdict.human) {
+    return <p>Провал виден без вас: {reasonLabels[task.verdict.reason ?? ""] ?? task.verdict.reason}. Смотреть тут нечего, разве что вы считаете причину несправедливой к модели.</p>;
+  }
+  return <ul>
+    <li>Проверки прошли — значит смотреть надо не на них, а на <strong>изменения</strong>.</li>
+    <li>Правка по делу или обход? Модель могла ослабить или переписать существующие тесты, захардкодить ответ, убрать функциональность, поменять публичный интерфейс.</li>
+    <li>Соответствует ли объём задаче: локальная правка там, где просили локальную.</li>
+    <li>Выполнены ли ограничения из формулировки — они перечислены в самом задании выше.</li>
+  </ul>;
+}
+
+function TaskEvidence({ task }: { task: BenchmarkTask }) {
+  const [diff, setDiff] = useState<string>();
+  const [log, setLog] = useState<{ id: string; text: string }>();
+  const record = useQuery({ queryKey: ["task-run", task.id], queryFn: () => api<TaskRunRecord>(`/task-runs/${task.id}`) });
+  if (record.isLoading) return <Skeleton rows={4} />;
+  if (record.error) return <p className="error">{record.error.message}</p>;
+  const snapshot = JSON.parse(record.data!.snapshot_json) as { task?: { prompt?: string; name?: string }; fixture?: { id?: string } };
+  const result = JSON.parse(record.data!.result_json ?? "{}") as {
+    finalAnswer?: string;
+    checks?: Array<{ id: string; label: string; status: string; hidden: boolean }>;
+    artifacts?: { changedFiles?: string[] };
+    metrics?: Record<string, { value: number | null; unit?: string }>;
+  };
+  const checks = result.checks ?? [];
+  const changed = result.artifacts?.changedFiles ?? [];
+  const tokens = result.metrics?.outputTokens?.value;
+  const openDiff = () => {
+    if (diff !== undefined) { setDiff(undefined); return; }
+    void apiText(`/task-runs/${task.id}/diff`).then(setDiff).catch((error: Error) => setDiff(error.message));
+  };
+  const openCheckLog = (id: string) => {
+    if (log?.id === id) { setLog(undefined); return; }
+    void apiText(`/task-runs/${task.id}/check-log?checkId=${encodeURIComponent(id)}`)
+      .then((text) => setLog({ id, text: text || "Вывод пустой." }))
+      .catch((error: Error) => setLog({ id, text: error.message }));
+  };
+  return <div className="stack roomy">
+    <WhatToCheck task={task} />
+    <details><summary><strong>Что требовалось</strong></summary><pre className="artifact">{snapshot.task?.prompt ?? "Текст задания не сохранился."}</pre></details>
+    {checks.length
+      ? <div className="stack">
+        <strong>Проверки</strong>
+        <table className="analytics-table"><thead><tr><th>Проверка</th><th>Результат</th><th /></tr></thead><tbody>
+          {checks.map((check) => <tr key={check.id}>
+            <td>{check.label}{check.hidden ? <span className="mono"> скрытая</span> : null}</td>
+            <td>{check.status === "pass" ? "прошла" : check.status === "timeout" ? "не уложилась в лимит" : "упала"}</td>
+            <td><button type="button" onClick={() => openCheckLog(check.id)}>{log?.id === check.id ? "Скрыть вывод" : "Вывод"}</button></td>
+          </tr>)}
+        </tbody></table>
+        {log ? <pre className="artifact">{log.text}</pre> : null}
+      </div>
+      : <p className="error">Проверок нет вообще. Значит задача шла без исходного проекта — такой результат оценивать нельзя.</p>}
+    <div className="stack">
+      <div className="actions">
+        <strong>Изменено файлов: {changed.length}</strong>
+        <button type="button" onClick={openDiff} disabled={!changed.length}>{diff === undefined ? "Показать изменения" : "Скрыть изменения"}</button>
+        {tokens ? <span className="mono">{Math.round(tokens / 100) / 10}k токенов</span> : null}
+      </div>
+      {changed.length ? <p className="mono">{changed.join(", ")}</p> : null}
+      {diff !== undefined ? <pre className="artifact">{diff}</pre> : null}
+    </div>
+    <details><summary><strong>Что ответила модель</strong></summary><pre className="artifact">{result.finalAnswer || record.data!.error || "Ответа нет."}</pre></details>
+  </div>;
 }
 
 function VerdictControl({ task, runId }: { task: BenchmarkTask; runId: string }) {
@@ -120,17 +199,14 @@ export function BenchmarkRunPage({ runId }: { runId: string }) {
         {data.tasks.length < data.plannedCount ? <> · прогон не дошёл до конца, процент считается по выполненному</> : null}
       </p>
     </Panel>
-    <Panel title="Задачи">
-      {data.tasks.length
-        ? <table className="analytics-table"><thead><tr><th>Задача</th><th>Исход</th><th>Время</th><th>Вердикт</th></tr></thead><tbody>
-          {data.tasks.map((task) => <tr key={task.id}>
-            <td>{task.position + 1}. {task.name}</td>
-            <td>{outcomeLabels[task.outcome]}</td>
-            <td>{duration(task)}</td>
-            <td><VerdictControl task={task} runId={runId} /></td>
-          </tr>)}
-        </tbody></table>
-        : <Empty>Прогон ещё не начал выполнять задачи.</Empty>}
-    </Panel>
+    {data.tasks.length
+      ? data.tasks.map((task) => <Panel
+        key={task.id}
+        title={`${task.position + 1}. ${task.name}`}
+        action={<div className="actions"><span className="mono">{outcomeLabels[task.outcome]} · {duration(task)}</span><VerdictControl task={task} runId={runId} /></div>}
+      >
+        <TaskEvidence task={task} />
+      </Panel>)
+      : <Panel title="Задачи"><Empty>Прогон ещё не начал выполнять задачи.</Empty></Panel>}
   </Page>;
 }

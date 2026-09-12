@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderInApp } from "../test-harness.js";
@@ -50,9 +50,30 @@ beforeEach(() => {
         tasks,
       });
     }
+    if (url.startsWith("/api/task-runs/") && url.endsWith("/diff")) {
+      return new Response("diff --git a/src/search.ts b/src/search.ts\n+let latest = 0;", { status: 200, headers: { "content-type": "text/plain" } });
+    }
+    if (url.includes("/check-log")) {
+      return new Response("не уложился в ожидание", { status: 200, headers: { "content-type": "text/plain" } });
+    }
     if (url.endsWith("/verdict") && init?.method === "PUT") {
       verdicts.push({ url, body: JSON.parse(String(init.body)) });
       return json({ verdict: "pass", reason: null, human: true, counted: true, comment: "" });
+    }
+    if (url.startsWith("/api/task-runs/")) {
+      return json({
+        snapshot_json: JSON.stringify({ task: { name: "Гонка поиска", prompt: "Найди причину и исправь" }, fixture: { id: "stale-search-results" } }),
+        result_json: JSON.stringify({
+          finalAnswer: "Добавил номер запроса",
+          checks: [
+            { id: "tests", label: "Существующие тесты", status: "pass", hidden: false },
+            { id: "regression", label: "Устаревший ответ", status: "pass", hidden: true },
+          ],
+          artifacts: { changedFiles: ["src/search.ts"] },
+          metrics: { outputTokens: { value: 4100 } },
+        }),
+        error: null,
+      });
     }
     return json({});
   }));
@@ -66,9 +87,9 @@ afterEach(() => {
 describe("прогон набора", () => {
   it("не спрашивает человека там, где причина видна из исхода", async () => {
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
-    await screen.findByText(/Гонка поиска/u);
+    await screen.findByRole("heading", { name: /Гонка поиска/u });
 
-    const loopedRow = screen.getByText(/Парсер/u).closest("tr")!;
+    const loopedRow = screen.getByRole("heading", { name: /Парсер/u }).closest("section")!;
     expect(within(loopedRow).getByText("FAIL — Зациклился")).toBeTruthy();
     expect(within(loopedRow).queryByRole("button", { name: "PASS" })).toBeNull();
     // Последнее слово всё равно за человеком: упавшая проверка иногда объясняется не моделью.
@@ -77,9 +98,9 @@ describe("прогон набора", () => {
 
   it("держит ручную остановку вне процентов", async () => {
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
-    await screen.findByText(/Отменённая/u);
+    await screen.findByRole("heading", { name: /Отменённая/u });
 
-    const row = screen.getByText(/Отменённая/u).closest("tr")!;
+    const row = screen.getByRole("heading", { name: /Отменённая/u }).closest("section")!;
     expect(within(row).getByText("вне процентов")).toBeTruthy();
     expect(within(row).queryByRole("button", { name: "PASS" })).toBeNull();
   });
@@ -87,16 +108,41 @@ describe("прогон набора", () => {
   it("считает ждущие вердикта и принимает провал с причиной", async () => {
     const user = userEvent.setup();
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
-    await screen.findByText(/Гонка поиска/u);
+    await screen.findByRole("heading", { name: /Гонка поиска/u });
 
     // Ждут только задачи, которые идут в проценты и ещё не оценены.
     expect(screen.getByText(/ждут вердикта: 1/u)).toBeTruthy();
-    const row = screen.getByText(/Гонка поиска/u).closest("tr")!;
+    const row = screen.getByRole("heading", { name: /Гонка поиска/u }).closest("section")!;
     await user.selectOptions(within(row).getByRole("combobox", { name: "Причина провала" }), "constraint-violation");
     await user.type(within(row).getByRole("textbox", { name: "Комментарий к вердикту" }), "поменял API");
-    await user.click(within(row).getByRole("button", { name: "FAIL" }));
+    await user.click(within(row).getByRole("button", { name: /^FAIL$/u }));
 
-    expect(verdicts).toEqual([{ url: "/api/task-runs/task-run-1/verdict", body: { verdict: "fail", reason: "constraint-violation", comment: "поменял API" } }]);
+    await waitFor(() => expect(verdicts).toEqual([{ url: "/api/task-runs/task-run-1/verdict", body: { verdict: "fail", reason: "constraint-violation", comment: "поменял API" } }]));
+  });
+
+  it("даёт материал для оценки рядом с кнопками вердикта", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<BenchmarkRunPage runId="run-1" />);
+    await screen.findByRole("heading", { name: /Гонка поиска/u });
+
+    // Кнопки без материала бесполезны: должно быть видно, что изменилось и что говорят проверки.
+    const card = screen.getByRole("heading", { name: /Гонка поиска/u }).closest("section")!;
+    expect(await within(card).findByText("Изменено файлов: 1")).toBeTruthy();
+    expect(within(card).getAllByText(/src\/search\.ts/u).length).toBeGreaterThan(0);
+    expect(within(card).getByText(/Существующие тесты/u)).toBeTruthy();
+    expect(within(card).getByText(/смотреть надо не на них/u)).toBeTruthy();
+
+    await user.click(within(card).getByRole("button", { name: "Показать изменения" }));
+
+    expect(await within(card).findByText(/let latest = 0/u)).toBeTruthy();
+  });
+
+  it("предупреждает, когда задача шла без исходного проекта", async () => {
+    await renderInApp(<BenchmarkRunPage runId="run-1" />);
+    await screen.findByRole("heading", { name: /Гонка поиска/u });
+
+    // Именно так выглядел первый живой прогон: fixture не подключился, и оценивать было нечего.
+    expect(screen.queryByText(/Проверок нет вообще/u)).toBeNull();
   });
 
   it("показывает главную метрику частным, а не составным баллом", async () => {

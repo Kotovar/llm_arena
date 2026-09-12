@@ -119,6 +119,16 @@ const externalLauncherActivationSchema = z.object({
   port: z.number().int().min(1).max(65535).default(8080),
 }).strict();
 
+/** Проверки из сохранённого результата; у старых записей их может не быть вовсе. */
+function resultChecks(resultJson: string | null): Array<{ id: string; label: string; status: string; hidden: boolean }> {
+  try {
+    const checks = (JSON.parse(resultJson ?? "{}") as { checks?: unknown }).checks;
+    return Array.isArray(checks) ? checks as Array<{ id: string; label: string; status: string; hidden: boolean }> : [];
+  } catch {
+    return [];
+  }
+}
+
 function filesUnder(root: string, directory = root): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     if (entry.name === ".git" || entry.name === "node_modules") return [];
@@ -899,6 +909,24 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       writeResultDiff(join(run.artifact_path, "control", "baseline.git"), version.baselineSha, version.resultSha, path);
     }
     return createReadStream(path);
+  });
+  /**
+   * Вывод одной проверки fixture. Нужен, чтобы судить по факту: «существующие тесты упали» без
+   * текста падения ничего не говорит. У скрытой проверки вывода нет — он содержит её ассерты,
+   * и вместе с копией результата он удаляется. Для вердикта это и не нужно: упавшая скрытая
+   * проверка уже даёт автоматический провал, а решать человеку приходится обратный случай.
+   */
+  app.get<{ Params: { id: string }; Querystring: { checkId?: string } }>("/api/task-runs/:id/check-log", async (request, reply) => {
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) return reply.code(404).send({ message: "Task run not found" });
+    const checkId = request.query.checkId;
+    const checks = resultChecks(taskRun.result_json);
+    const check = checks.find((item) => item.id === checkId);
+    if (!check) return reply.code(404).send({ message: "Проверка не найдена" });
+    reply.type("text/plain");
+    if (check.hidden) return "Вывод скрытой проверки не сохраняется: он содержит её ассерты.";
+    const path = join(taskRun.artifact_path, "checks", `${check.id}.log`);
+    return existsSync(path) ? createReadStream(path) : "Файл вывода не сохранился.";
   });
   app.get<{ Params: { id: string }; Querystring: { stream?: "stdout" | "stderr" | "display" } }>("/api/task-runs/:id/logs", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);
