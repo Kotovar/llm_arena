@@ -7,9 +7,10 @@ LLM Arena — pnpm-монорепозиторий с локальным API и �
 | `apps/server` | Fastify API, очередь запусков, runner-ы, SQLite и артефакты. |
 | `apps/web` | React/Vite интерфейс оператора. |
 | `packages/shared` | Общие схемы и контракты API. |
-| `fixtures` | Изолированные задания и проверки для web- и Node-результатов. |
+| `fixtures` | Изолированные задания и проверки для web- и Node-результатов, а также benchmark-fixtures. |
 | `scripts/omp-local` | Запуск сохранённого профиля локальной модели во внешнем OMP-сеансе. |
 | `scripts/pi-local` | То же на минимальной обвязке `pi`; сервер модели и порт общие с `omp-local`. |
+| `scripts/verify-fixture` | Проверка, что benchmark-fixture в объявленном состоянии. |
 
 ## Поток запуска
 

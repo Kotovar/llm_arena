@@ -89,13 +89,18 @@ function run(command: string, args: string[], cwd?: string): string {
   return result.stdout.trim();
 }
 
+/** Копия содержимого каталога поверх целевого; reflink делает её почти бесплатной. */
+export function copyTree(source: string, target: string): void {
+  run("cp", ["-a", "--reflink=auto", `${source}/.`, target]);
+}
+
 export function prepareWorkspace(fixtureSource: string, artifactRoot: string): PreparedWorkspace {
   const workspace = join(artifactRoot, "workspace");
   const control = join(artifactRoot, "control");
   const gitDir = join(control, "baseline.git");
   mkdirSync(workspace, { recursive: true });
   mkdirSync(control, { recursive: true });
-  run("cp", ["-a", "--reflink=auto", `${fixtureSource}/.`, workspace]);
+  copyTree(fixtureSource, workspace);
   rmSync(join(workspace, ".git"), { recursive: true, force: true });
   run("git", ["init", "-q"], workspace);
   run("git", ["config", "user.name", "LLM Arena"], workspace);

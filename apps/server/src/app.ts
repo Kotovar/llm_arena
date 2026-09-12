@@ -24,6 +24,7 @@ import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
 import { activeExportPath, renderAgentLayout, renderFishCommand, renderFishLauncher, renderPiContextSync, renderPiLauncher, stopAgentLocalSession, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 import { describeGenerationError } from "./generation-error.js";
+import { verifyFixture } from "./fixture-verify.js";
 import { assertWorkspaceCommit, writeResultDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
@@ -31,6 +32,7 @@ import { loadModelCatalog } from "./model-catalog.js";
 import { paramsFromPath, quantFromPath, readGgufFacts } from "./gguf.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import { storeTaskImage, taskImagePath } from "./task-images.js";
+import type { ProcessSupervisor } from "./process-supervisor.js";
 import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
@@ -153,8 +155,8 @@ function checksPassed(resultJson: string | null) {
   }
 }
 
-export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike; openWorkspace?: (workspace: string) => Promise<void> }) {
-  const { store, config, engine, preview, openWorkspace = openInZed } = options;
+export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike; supervisor?: ProcessSupervisor; openWorkspace?: (workspace: string) => Promise<void> }) {
+  const { store, config, engine, preview, supervisor, openWorkspace = openInZed } = options;
   const app = Fastify({ logger: false, bodyLimit: 28 * 1024 * 1024 });
   const effectiveModelDirectory = () => store.getSetting("modelDirectory") ?? config.modelDirectory;
   const parseTask = (body: unknown) => {
@@ -291,7 +293,22 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
 
   app.get("/api/health", async () => ({ status: "ok" }));
   app.get("/api/runners", async () => config.runners.map(({ env: _env, ...runner }) => runner));
-  app.get("/api/fixtures", async () => config.fixtures.map(({ source: _source, ...fixture }) => publicFixtureManifest(fixture)));
+  app.get("/api/fixtures", async () => config.fixtures.map(({ source: _source, hiddenSource: _hiddenSource, ...fixture }) => publicFixtureManifest(fixture)));
+  app.post<{ Params: { id: string } }>("/api/fixtures/:id/verify", async (request, reply) => {
+    const fixture = config.fixtures.find((item) => item.id === request.params.id);
+    if (!fixture) return reply.code(404).send({ message: "Fixture not found" });
+    if (!supervisor) throw new Error("Fixture verification is unavailable");
+    const verification = await verifyFixture({
+      fixture,
+      supervisor,
+      dataDir: config.dataDir,
+      defaultTimeoutMs: config.defaults.checkTimeoutMs,
+      signal: AbortSignal.timeout(config.defaults.checkTimeoutMs * 4),
+    });
+    // Рабочий каталог — путь на диске оператора, наружу он не нужен.
+    const { workspace: _workspace, ...result } = verification;
+    return result;
+  });
   app.get("/api/diagnostics", async () => ({
     node: process.version,
     platform: process.platform,

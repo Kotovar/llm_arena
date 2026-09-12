@@ -1,0 +1,16 @@
+{
+  "id": "stale-search-results",
+  "name": "Fix stale search results",
+  "instructions": "Work in the current directory. The project runs on Node.js 24 without installing anything: TypeScript files are executed directly. Run the existing checks before you finish.",
+  "checks": [
+    { "id": "tests", "label": "Существующие тесты", "command": { "argv": ["node", "--test"] } }
+  ],
+  "hidden": [
+    { "id": "regression", "label": "Устаревший ответ не перезаписывает результаты", "command": { "argv": ["node", "--test", "stale-response.test.ts"] } }
+  ],
+  "baseline": {
+    "tests": "pass",
+    "regression": "fail"
+  },
+  "limits": { "maxDurationMs": 600000 }
+}

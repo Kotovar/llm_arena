@@ -43,10 +43,17 @@ const configSchema = z.object({
     .default([]),
 });
 
-type Fixture = z.infer<typeof fixtureManifestSchema> & { source: string };
+type Fixture = z.infer<typeof fixtureManifestSchema> & {
+  source: string;
+  /** Каталог со скрытыми проверками. Лежит рядом с fixture и в workspace модели не копируется. */
+  hiddenSource?: string;
+};
 
 /** Единственное, что копируется в workspace модели; всё остальное рядом остаётся снаружи. */
 const FIXTURE_SUBDIRECTORY = "fixture";
+
+/** Проверки бенчмарка: соседний каталог, который модель не видит. */
+const VALIDATION_SUBDIRECTORY = "validation";
 
 /**
  * Fixtures репозитория: каталог с `benchmark.json` попадает в арену без правки локального
@@ -85,7 +92,11 @@ function discoverFixtures(root: string): Fixture[] {
     }
     const source = join(directory, FIXTURE_SUBDIRECTORY);
     if (!existsSync(source)) throw new Error(`${manifestPath}: missing the ${FIXTURE_SUBDIRECTORY}/ directory next to it`);
-    found.push({ ...manifest, source });
+    const hiddenSource = join(directory, VALIDATION_SUBDIRECTORY);
+    if (manifest.hidden.length && !existsSync(hiddenSource)) {
+      throw new Error(`${manifestPath}: declares hidden validation but has no ${VALIDATION_SUBDIRECTORY}/ directory next to it`);
+    }
+    found.push({ ...manifest, source, ...(existsSync(hiddenSource) ? { hiddenSource } : {}) });
   }
   return found.toSorted((left, right) => left.id.localeCompare(right.id));
 }

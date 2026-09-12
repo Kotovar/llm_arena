@@ -19,6 +19,7 @@ import { buildTaskPrompt } from "./task-prompt.js";
 import { POST_PROCESSING_PREFIX, describeGenerationError } from "./generation-error.js";
 import { taskImagePath } from "./task-images.js";
 import { AgentLoopError, createWatchdog } from "./watchdog.js";
+import { runChecks, runHiddenChecks } from "./checks.js";
 
 type RunEvent = { type: string; runId: string; taskRunId?: string; data?: unknown };
 
@@ -382,7 +383,22 @@ export class BenchmarkEngine {
           }
           if (backend) result.metrics.startupDurationMs = { value: backend.startupDurationMs, unit: "ms", source: "client-observed" };
           if (backend?.contextTokens) result.metrics.contextWindowTokens = { value: backend.contextTokens, unit: "tokens", source: "llama.cpp" };
-          const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, taskSignal) : [];
+          const checks = fixture
+            ? [
+              ...await this.#runChecks(fixture, prepared.workspace, artifactRoot, taskSignal),
+              // Проверки бенчмарка идут по копии: в оригинале workspace их файлов быть не должно,
+              // иначе они уедут и в diff, и в превью результата.
+              ...await runHiddenChecks({
+                supervisor: this.supervisor,
+                hidden: fixture.hidden,
+                hiddenSource: fixture.hiddenSource,
+                workspace: prepared.workspace,
+                root: join(this.config.dataDir, "hidden-checks", taskRun.id),
+                defaultTimeoutMs: this.config.defaults.checkTimeoutMs,
+                signal: taskSignal,
+              }),
+            ]
+            : [];
           const failedCheck = checks.find((check) => check.status !== "pass");
           const agentStatus = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
           // Сбой служебного шага после агента — не сбой агента, поэтому он отделён и подписан отдельно.
@@ -636,43 +652,16 @@ export class BenchmarkEngine {
     }
   }
 
+  /** Публичные проверки fixture; скрытые идут отдельным шагом и только у benchmark-прогона. */
   async #runChecks(fixture: PublicFixtureManifest, workspace: string, artifactRoot: string, signal: AbortSignal) {
-    const results: Array<{ id: string; label: string; status: string; exitCode: number | null; durationMs: number }> = [];
-    for (const check of fixture.checks) {
-      if (signal.aborted) break;
-      const logPath = join(artifactRoot, "checks", `${check.id}.log`);
-      mkdirSync(join(artifactRoot, "checks"), { recursive: true });
-      writeFileSync(logPath, "");
-      const cwd = check.command.cwd ? resolve(workspace, check.command.cwd) : workspace;
-      let child;
-      try {
-        child = this.supervisor.spawn({
-          argv: check.command.argv,
-          cwd,
-          timeoutMs: check.command.timeoutMs ?? this.config.defaults.checkTimeoutMs,
-          onStdout: (text) => appendFileSync(logPath, text),
-          onStderr: (text) => appendFileSync(logPath, text),
-        });
-      } catch (error) {
-        // Незапустившаяся проверка — провал проверки, а не потеря результата промпта.
-        appendFileSync(logPath, `${(error as Error).message}\n`);
-        results.push({ id: check.id, label: check.label, status: "fail", exitCode: null, durationMs: 0 });
-        continue;
-      }
-      const cancel = () => void child.stop();
-      signal.addEventListener("abort", cancel, { once: true });
-      child.stdin.end();
-      const result = await child.completed;
-      signal.removeEventListener("abort", cancel);
-      results.push({
-        id: check.id,
-        label: check.label,
-        status: result.exitCode === 0 ? "pass" : result.timedOut ? "timeout" : "fail",
-        exitCode: result.exitCode,
-        durationMs: result.durationMs,
-      });
-    }
-    return results;
+    return runChecks({
+      supervisor: this.supervisor,
+      checks: fixture.checks,
+      workspace,
+      artifactRoot,
+      defaultTimeoutMs: this.config.defaults.checkTimeoutMs,
+      signal,
+    });
   }
 
   /**

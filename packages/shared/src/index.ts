@@ -318,6 +318,13 @@ export const fixtureManifestSchema = z.object({
   for (const id of Object.keys(manifest.baseline)) {
     if (!ids.includes(id)) context.addIssue({ code: "custom", message: `Baseline names unknown check "${id}"` });
   }
+  // Скрытая проверка без объявленного baseline бессмысленна: именно ради неё и заводится
+  // исходное состояние, и без сверки fixture можно выпустить с уже исправленным багом.
+  for (const check of manifest.hidden) {
+    if (!(check.id in manifest.baseline)) {
+      context.addIssue({ code: "custom", message: `Hidden check "${check.id}" has no declared baseline state` });
+    }
+  }
 });
 
 /**

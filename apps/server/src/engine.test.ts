@@ -335,9 +335,22 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = join(root, ".data");
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
-    // Снимок промпта уезжает в ответ API целиком, поэтому скрытым проверкам в нём не место.
+    // Скрытая проверка живёт вне fixture и гоняется по копии результата: в снимке промпта и в
+    // самом рабочем каталоге её быть не должно, иначе модель прочитает ассерты.
+    const validation = join(root, "validation");
+    mkdirSync(validation, { recursive: true });
+    writeFileSync(join(validation, "order.test.js"), `import { ok } from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+test("проверка видит результат модели", () => ok(readFileSync("index.html", "utf8").includes("Готовое")));
+`);
     config.fixtures = config.fixtures.map((fixture) => fixture.id === "web-app"
-      ? { ...fixture, hidden: [{ id: "regression", label: "Regression", command: { argv: ["node", "--test", "hidden/order.test.js"] } }], baseline: { regression: "fail" } }
+      ? {
+        ...fixture,
+        hiddenSource: validation,
+        hidden: [{ id: "regression", label: "Regression", command: { argv: [process.execPath, "--test", "order.test.js"] } }],
+        baseline: { regression: "pass" as const },
+      }
       : fixture);
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай тетрис", tags: [] });
@@ -353,6 +366,12 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(JSON.parse(taskRun.snapshot_json).task).toMatchObject({ kind: "coding", fixtureId: "web-app" });
     expect(JSON.parse(taskRun.snapshot_json).fixture).not.toHaveProperty("hidden");
     expect(taskRun.snapshot_json).not.toContain("order.test.js");
+    // Скрытая проверка отработала по результату модели, но её файла в рабочем каталоге нет.
+    const saved = JSON.parse(taskRun.result_json!) as { checks: Array<{ id: string; status: string; hidden: boolean }> };
+    expect(saved.checks.find((check) => check.id === "regression")).toMatchObject({ status: "pass", hidden: true });
+    expect(existsSync(join(taskRun.artifact_path, "workspace", "order.test.js"))).toBe(false);
+    expect(existsSync(join(taskRun.artifact_path, "hidden"))).toBe(false);
+    expect(readFileSync(join(taskRun.artifact_path, "diff.patch"), "utf8")).not.toContain("order.test.js");
     // Ревизия fixture: без неё по результату не понять, на каком исходном состоянии он получен.
     const fixtureRevision = JSON.parse(taskRun.snapshot_json).fixtureRevision as string;
     expect(fixtureRevision).toMatch(/^[0-9a-f]{40,64}$/u);

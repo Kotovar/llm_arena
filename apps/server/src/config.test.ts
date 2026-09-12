@@ -49,7 +49,7 @@ describe("host configuration", () => {
 });
 
 describe("fixtures discovered in the repository", () => {
-  function createRoot(fixtures: Record<string, string | null>, options: { withFixtureDirectory?: boolean } = {}): string {
+  function createRoot(fixtures: Record<string, string | null>, options: { withFixtureDirectory?: boolean; withValidation?: boolean } = {}): string {
     const root = mkdtempSync(join(tmpdir(), "arena-fixtures-"));
     roots.push(root);
     writeFileSync(join(root, "arena.config.yaml"), [
@@ -65,6 +65,7 @@ describe("fixtures discovered in the repository", () => {
     ].join("\n"));
     for (const [name, manifest] of Object.entries(fixtures)) {
       mkdirSync(join(root, "fixtures", name, options.withFixtureDirectory === false ? "" : "fixture"), { recursive: true });
+      if (options.withValidation) mkdirSync(join(root, "fixtures", name, "validation"), { recursive: true });
       if (manifest !== null) writeFileSync(join(root, "fixtures", name, "benchmark.json"), manifest);
     }
     return join(root, "arena.config.yaml");
@@ -101,11 +102,12 @@ describe("fixtures discovered in the repository", () => {
         baseline: { tests: "pass", regression: "fail" },
         limits: { maxDurationMs: 600_000 },
       }),
-    });
+    }, { withValidation: true });
 
     const fixture = loadConfig(filename).fixtures.find((item) => item.id === "stale-search");
 
     expect(fixture?.hidden.map((check) => check.id)).toEqual(["regression"]);
+    expect(fixture?.hiddenSource).toMatch(/\/fixtures\/stale-search\/validation$/u);
     expect(fixture?.baseline).toEqual({ tests: "pass", regression: "fail" });
     expect(fixture?.limits?.maxDurationMs).toBe(600_000);
   });
@@ -140,6 +142,19 @@ describe("fixtures discovered in the repository", () => {
     expect(() => loadConfig(filename)).toThrow(/must not set "source"/u);
   });
 
+  it("refuses hidden validation that has nowhere to live", () => {
+    const filename = createRoot({
+      "stale-search": JSON.stringify({
+        id: "stale-search",
+        name: "Stale search",
+        hidden: [{ id: "regression", label: "Regression", command: { argv: ["node"] } }],
+        baseline: { regression: "fail" },
+      }),
+    });
+
+    expect(() => loadConfig(filename)).toThrow(/no validation\/ directory/u);
+  });
+
   it("refuses a fixture without the subdirectory that gets copied", () => {
     const filename = createRoot({ "stale-search": JSON.stringify({ id: "stale-search", name: "Stale search" }) }, { withFixtureDirectory: false });
 
@@ -152,6 +167,18 @@ describe("fixtures discovered in the repository", () => {
     });
 
     expect(() => loadConfig(filename)).toThrow(/unknown check \\"typo\\"/u);
+  });
+
+  it("refuses hidden validation whose expected state nobody declared", () => {
+    const filename = createRoot({
+      "stale-search": JSON.stringify({
+        id: "stale-search",
+        name: "Stale search",
+        hidden: [{ id: "regression", label: "Regression", command: { argv: ["node"] } }],
+      }),
+    }, { withValidation: true });
+
+    expect(() => loadConfig(filename)).toThrow(/has no declared baseline state/u);
   });
 
   it("refuses the same check id in public and hidden validation", () => {

@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+// Проверяет, что benchmark-fixture находится в том состоянии, которое объявил его автор.
+// Тот же код, что и у кнопки в интерфейсе: писать fixture можно, не поднимая арену.
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadConfig } from "../apps/server/dist/config.js";
+import { verifyFixture } from "../apps/server/dist/fixture-verify.js";
+import { ProcessSupervisor } from "../apps/server/dist/process-supervisor.js";
+
+const root = resolve(fileURLToPath(import.meta.url), "../..");
+const [id] = process.argv.slice(2);
+const config = loadConfig(process.env.LLM_ARENA_CONFIG ?? resolve(root, "arena.config.yaml"));
+
+if (!id) {
+  console.error(`Usage: verify-fixture <id>\nKnown fixtures: ${config.fixtures.map((item) => item.id).join(", ")}`);
+  process.exit(2);
+}
+const fixture = config.fixtures.find((item) => item.id === id);
+if (!fixture) {
+  console.error(`Unknown fixture "${id}". Known: ${config.fixtures.map((item) => item.id).join(", ")}`);
+  process.exit(2);
+}
+
+const supervisor = new ProcessSupervisor(`verify-fixture-${process.pid}`, config.defaults.processGraceMs);
+const result = await verifyFixture({
+  fixture,
+  supervisor,
+  dataDir: config.dataDir,
+  defaultTimeoutMs: config.defaults.checkTimeoutMs,
+  signal: AbortSignal.timeout(config.defaults.checkTimeoutMs * 4),
+});
+
+const expected = new Map(result.baseline.map((item) => [item.id, item]));
+const width = Math.max(0, ...result.checks.map((check) => check.label.length));
+console.log(`${fixture.name} (${fixture.id})\nrevision ${result.revision}\n`);
+for (const check of result.checks) {
+  const match = expected.get(check.id);
+  // Галочка у падения означает «упало, как и задумано»: у правки бага это и есть норма.
+  const verdict = !match ? "" : match.ok ? " ✓ as declared" : ` ✗ expected ${match.expected}`;
+  console.log(`  ${check.label.padEnd(width)}  ${check.status.toUpperCase().padEnd(7)}${check.hidden ? " (hidden)" : ""}${verdict}`);
+}
+if (result.problems.length) {
+  console.log(`\nNot ready:`);
+  for (const problem of result.problems) console.log(`  - ${problem}`);
+} else {
+  console.log(`\nFixture is in the declared state.`);
+}
+console.log(`\nLogs and workspace: ${result.workspace}`);
+await supervisor.stopAll();
+process.exit(result.ok ? 0 : 1);

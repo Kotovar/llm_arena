@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { finalizeWorkspace, prepareWorkspace } from "./artifacts.js";
 import { loadConfig } from "./config.js";
+import { ProcessSupervisor } from "./process-supervisor.js";
 import { createStore } from "./store.js";
 
 const directories: string[] = [];
@@ -13,6 +14,36 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("verifies that a fixture is in the state its author declared", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-fixture-verify-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const supervisor = new ProcessSupervisor("verify-api-test", 100);
+    const app = buildApp({ store, config, supervisor });
+
+    const missing = await app.inject({ method: "POST", url: "/api/fixtures/nothing-here/verify" });
+    const verified = await app.inject({ method: "POST", url: "/api/fixtures/stale-search-results/verify" });
+
+    expect(missing.statusCode).toBe(404);
+    expect(verified.statusCode).toBe(200);
+    const result = verified.json() as { ok: boolean; problems: string[]; baseline: Array<{ id: string; actual: string }>; revision: string };
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+    expect(result.baseline).toEqual([
+      { id: "tests", expected: "pass", actual: "pass", ok: true },
+      { id: "regression", expected: "fail", actual: "fail", ok: true },
+    ]);
+    // Путь к рабочему каталогу — деталь машины оператора, наружу она не нужна.
+    expect(verified.json()).not.toHaveProperty("workspace");
+    await supervisor.stopAll();
+    await app.close();
+    store.close();
+    // Настоящий fixture: скрытая проверка разводит задержки бэкенда на секунды, иначе обход
+    // через debounce проходил бы под ней случайно.
+  }, 120_000);
+
   it("never hands out the hidden validation of a fixture", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-hidden-validation-"));
     directories.push(directory);
