@@ -17,6 +17,7 @@ const waiting = {
   outcome: "completed",
   verdict: { verdict: null, reason: null, human: false, counted: true, comment: "" },
   baseline: { tests: "pass", regression: "fail" },
+  preview: { original: true, result: true },
   startedAt: "2026-09-03T10:00:00.000Z",
   finishedAt: "2026-09-03T10:02:18.000Z",
 };
@@ -175,6 +176,25 @@ describe("прогон набора", () => {
 
     // Результат адресуется своей версией, иначе аренда не продлилась бы и превью умерло само.
     expect(previewStops).toEqual([{ fixtureId: "stale-search-results" }]);
+  });
+
+  it("не предлагает запуск там, где он обречён", async () => {
+    tasks = [{ ...waiting, preview: { original: true, result: false } }];
+    await renderInApp(<BenchmarkRunPage runId="run-1" />);
+    const card = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
+
+    expect(await within(card).findByRole("button", { name: "Запустить оригинал" })).toBeTruthy();
+    // Кнопка, которая всегда отвечает ошибкой, хуже её отсутствия: объясняем причину.
+    expect(within(card).queryByRole("button", { name: "Запустить результат" })).toBeNull();
+    expect(within(card).getByText(/Нужен новый прогон/u)).toBeTruthy();
+  });
+
+  it("говорит, когда смотреть нечего", async () => {
+    tasks = [{ ...waiting, preview: { original: false, result: false } }];
+    await renderInApp(<BenchmarkRunPage runId="run-1" />);
+    const card = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
+
+    expect(await within(card).findByText(/нет запускаемого приложения/u)).toBeTruthy();
   });
 
   it("показывает главную метрику частным, а не составным баллом", async () => {

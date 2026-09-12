@@ -23,6 +23,8 @@ type BenchmarkTask = {
   verdict: Verdict;
   /** Каким состояние проверок было до модели: объявлено автором исходного проекта. */
   baseline: Record<string, "pass" | "fail">;
+  /** Что из «до» и «после» вообще можно запустить. */
+  preview: { original: boolean; result: boolean };
   startedAt: string | null;
   finishedAt: string | null;
 };
@@ -88,7 +90,7 @@ function WhatToCheck({ task }: { task: BenchmarkTask }) {
  * модели приложение вело себя неправильно, а после — правильно. Оба живут одновременно:
  * менеджер держит ровно два процесса превью.
  */
-function Previews({ taskRunId, fixtureId }: { taskRunId: string; fixtureId: string | undefined }) {
+function Previews({ taskRunId, fixtureId, available }: { taskRunId: string; fixtureId: string | undefined; available: BenchmarkTask["preview"] }) {
   const [original, setOriginal] = useState<string>();
   // Версию результата возвращает сервер: по ней же продлевается аренда и гасится превью.
   const [result, setResult] = useState<{ url: string; resultSha: string }>();
@@ -112,11 +114,16 @@ function Previews({ taskRunId, fixtureId }: { taskRunId: string; fixtureId: stri
     onSuccess: () => setResult(undefined),
   });
   if (!fixtureId) return null;
+  if (!available.original && !available.result) {
+    return <p>У этого исходного проекта нет запускаемого приложения: смотреть глазами нечего, судить придётся по проверкам и изменениям.</p>;
+  }
   return <div className="stack">
     <div className="actions">
       <strong>Посмотреть своими глазами</strong>
-      <button type="button" onClick={() => startOriginal.mutate()} disabled={startOriginal.isPending || Boolean(original)}>{startOriginal.isPending ? "Запускаем…" : "Запустить оригинал"}</button>
-      <button type="button" onClick={() => startResult.mutate()} disabled={startResult.isPending || Boolean(result)}>{startResult.isPending ? "Запускаем…" : "Запустить результат"}</button>
+      {available.original ? <button type="button" onClick={() => startOriginal.mutate()} disabled={startOriginal.isPending || Boolean(original)}>{startOriginal.isPending ? "Запускаем…" : "Запустить оригинал"}</button> : null}
+      {available.result
+        ? <button type="button" onClick={() => startResult.mutate()} disabled={startResult.isPending || Boolean(result)}>{startResult.isPending ? "Запускаем…" : "Запустить результат"}</button>
+        : <small>Результат этого прогона запустить нельзя: он получен до того, как у исходного проекта появилась команда запуска. Нужен новый прогон.</small>}
     </div>
     {startOriginal.error ? <p className="error">Оригинал: {startOriginal.error.message}</p> : null}
     {startResult.error ? <p className="error">Результат: {startResult.error.message}</p> : null}
@@ -153,7 +160,7 @@ function TaskEvidence({ task }: { task: BenchmarkTask }) {
   };
   return <div className="stack roomy">
     <WhatToCheck task={task} />
-    <Previews taskRunId={task.id} fixtureId={snapshot.fixture?.id} />
+    <Previews taskRunId={task.id} fixtureId={snapshot.fixture?.id} available={task.preview} />
     <details><summary><strong>Что требовалось</strong></summary><pre className="artifact">{snapshot.task?.prompt ?? "Текст задания не сохранился."}</pre></details>
     {checks.length
       ? <div className="stack">

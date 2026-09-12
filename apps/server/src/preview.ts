@@ -151,11 +151,11 @@ export class PreviewManager {
 
   #taskRunTarget(taskRunId: string, resultSha: string): PreviewTarget {
     const taskRun = this.store.getTaskRun(taskRunId);
-    if (!taskRun) throw new Error("Task run not found");
+    if (!taskRun) throw new Error("Задача прогона не найдена");
     const version = resolveCompletedResultVersion(taskRun, resultSha);
     const snapshot = JSON.parse(taskRun.snapshot_json) as { fixture?: FixtureManifest };
     const preview = snapshot.fixture?.preview;
-    if (!preview) throw new Error("This result has no trusted preview command");
+    if (!preview) throw new Error("У этого результата нет команды запуска: он получен до того, как её объявили в исходном проекте. Нужен новый прогон.");
     const gitDir = join(taskRun.artifact_path, "control", "baseline.git");
     return {
       ownerId: taskRunId,
@@ -172,8 +172,8 @@ export class PreviewManager {
    */
   #fixtureTarget(fixtureId: string): PreviewTarget {
     const fixture = this.config.fixtures.find((item) => item.id === fixtureId);
-    if (!fixture) throw new Error("Fixture not found");
-    if (!fixture.preview) throw new Error("This fixture has no trusted preview command");
+    if (!fixture) throw new Error("Исходный проект не найден");
+    if (!fixture.preview) throw new Error("У этого исходного проекта нет команды запуска. Если она только что появилась в манифесте, перезапустите сервер: конфигурация читается один раз при старте.");
     const ownerId = fixturePreviewOwner(fixtureId);
     return {
       ownerId,

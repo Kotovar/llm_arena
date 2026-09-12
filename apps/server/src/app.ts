@@ -454,7 +454,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const revision = store.getSuiteRevision(run.suite_revision_id);
     const planned = store.listRunTasks(run.id);
     const tasks = store.listTaskRuns(run.id).map((taskRun) => {
-      const snapshot = JSON.parse(taskRun.snapshot_json) as { fixture?: { id?: string } };
+      const snapshot = JSON.parse(taskRun.snapshot_json) as { fixture?: { id?: string; preview?: unknown } };
       const fixture = config.fixtures.find((item) => item.id === snapshot.fixture?.id);
       return {
         id: taskRun.id,
@@ -469,6 +469,12 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
          * fixture и в снимке промпта этого нет, чтобы не подсказывать модели, что именно ломать.
          */
         baseline: fixture?.baseline ?? {},
+        /**
+         * Можно ли вообще запустить «до» и «после». Оригинал берётся из текущего манифеста,
+         * результат — из снимка промпта: у прогона, сделанного до появления команды запуска,
+         * её там нет, и предлагать кнопку бессмысленно.
+         */
+        preview: { original: Boolean(fixture?.preview), result: Boolean(snapshot.fixture?.preview) },
         startedAt: taskRun.started_at,
         finishedAt: taskRun.finished_at,
       };
