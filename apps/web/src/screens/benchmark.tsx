@@ -47,7 +47,7 @@ function RevisionDetail({ revisionId }: { revisionId: string }) {
       ? <p>Снимок разошёлся с текущим состоянием. Сам он не меняется, но новые прогоны по нему уже не будут сравнимы с прогонами по обновлённому составу — соберите новую ревизию.</p>
       : null}
     {revision.runs.length
-      ? <div className="stack"><strong>Прогоны по этой ревизии ({revision.runs.length})</strong><div className="stack">{revision.runs.map((run) => <Link key={run.id} className="item" to="/runs/$runId" params={{ runId: run.id }}><div><span className="mono">{run.status}</span><time>{new Date(run.created_at).toLocaleString("ru")}</time></div></Link>)}</div><small>Сравнивать между собой можно только их: у прогонов по другой ревизии состав другой.</small></div>
+      ? <div className="stack"><strong>Прогоны по этой ревизии ({revision.runs.length})</strong><div className="stack">{revision.runs.map((run) => <Link key={run.id} className="item" to="/benchmark/runs/$runId" params={{ runId: run.id }}><div><span className="mono">{run.status}</span><time>{new Date(run.created_at).toLocaleString("ru")}</time></div></Link>)}</div><small>Сравнивать между собой можно только их: у прогонов по другой ревизии состав другой.</small></div>
       : <Empty>Прогонов по этой ревизии ещё нет.</Empty>}
   </div>;
 }

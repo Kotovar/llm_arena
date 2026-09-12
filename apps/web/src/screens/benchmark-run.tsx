@@ -20,6 +20,8 @@ type BenchmarkTask = {
   status: string;
   outcome: TaskOutcome;
   verdict: Verdict;
+  /** Каким состояние проверок было до модели: объявлено автором исходного проекта. */
+  baseline: Record<string, "pass" | "fail">;
   startedAt: string | null;
   finishedAt: string | null;
 };
@@ -47,6 +49,8 @@ const reasonLabels: Record<string, string> = {
   "agent-crash": "Обвязка упала",
 };
 
+const checkStatus = (status: string) => status === "pass" ? "прошла" : status === "timeout" ? "не уложилась в лимит" : "упала";
+
 function duration(task: BenchmarkTask): string {
   if (!task.startedAt || !task.finishedAt) return "—";
   const seconds = Math.round((Date.parse(task.finishedAt) - Date.parse(task.startedAt)) / 1000);
@@ -70,7 +74,8 @@ function WhatToCheck({ task }: { task: BenchmarkTask }) {
     return <p>Провал виден без вас: {reasonLabels[task.verdict.reason ?? ""] ?? task.verdict.reason}. Смотреть тут нечего, разве что вы считаете причину несправедливой к модели.</p>;
   }
   return <ul>
-    <li>Проверки прошли — значит смотреть надо не на них, а на <strong>изменения</strong>.</li>
+    <li>Проверки, которые до модели падали, теперь проходят — заявленное она сделала. Осталось убедиться, что сделала по-настоящему.</li>
+    <li>Смотреть надо не на проверки, а на <strong>изменения</strong>.</li>
     <li>Правка по делу или обход? Модель могла ослабить или переписать существующие тесты, захардкодить ответ, убрать функциональность, поменять публичный интерфейс.</li>
     <li>Соответствует ли объём задаче: локальная правка там, где просили локальную.</li>
     <li>Выполнены ли ограничения из формулировки — они перечислены в самом задании выше.</li>
@@ -109,12 +114,23 @@ function TaskEvidence({ task }: { task: BenchmarkTask }) {
     {checks.length
       ? <div className="stack">
         <strong>Проверки</strong>
-        <table className="analytics-table"><thead><tr><th>Проверка</th><th>Результат</th><th /></tr></thead><tbody>
-          {checks.map((check) => <tr key={check.id}>
-            <td>{check.label}{check.hidden ? <span className="mono"> скрытая</span> : null}</td>
-            <td>{check.status === "pass" ? "прошла" : check.status === "timeout" ? "не уложилась в лимит" : "упала"}</td>
-            <td><button type="button" onClick={() => openCheckLog(check.id)}>{log?.id === check.id ? "Скрыть вывод" : "Вывод"}</button></td>
-          </tr>)}
+        {/* «Прошла» само по себе ничего не значит: важно, что до модели она падала. */}
+        <table className="analytics-table"><thead><tr><th>Проверка</th><th>До модели</th><th>После</th><th /></tr></thead><tbody>
+          {checks.map((check) => {
+            const before = task.baseline[check.id];
+            const after = checkStatus(check.status);
+            const fixed = before === "fail" && check.status === "pass";
+            const broke = before === "pass" && check.status !== "pass";
+            return <tr key={check.id}>
+              <td>{check.label}{check.hidden ? <span className="mono"> скрытая</span> : null}</td>
+              <td>{before ? checkStatus(before) : "не объявлено"}</td>
+              <td>
+                <span className={fixed ? "status status-completed" : broke ? "status status-failed" : ""}>{after}</span>
+                {fixed ? " — это и требовалось" : broke ? " — модель это сломала" : null}
+              </td>
+              <td><button type="button" onClick={() => openCheckLog(check.id)}>{log?.id === check.id ? "Скрыть вывод" : "Вывод"}</button></td>
+            </tr>;
+          })}
         </tbody></table>
         {log ? <pre className="artifact">{log.text}</pre> : null}
       </div>

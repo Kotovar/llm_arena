@@ -15,6 +15,7 @@ const waiting = {
   status: "completed",
   outcome: "completed",
   verdict: { verdict: null, reason: null, human: false, counted: true, comment: "" },
+  baseline: { tests: "pass", regression: "fail" },
   startedAt: "2026-09-03T10:00:00.000Z",
   finishedAt: "2026-09-03T10:02:18.000Z",
 };
@@ -129,8 +130,12 @@ describe("прогон набора", () => {
     const card = screen.getByRole("heading", { name: /Гонка поиска/u }).closest("section")!;
     expect(await within(card).findByText("Изменено файлов: 1")).toBeTruthy();
     expect(within(card).getAllByText(/src\/search\.ts/u).length).toBeGreaterThan(0);
+    // «Прошла» само по себе ничего не значит: человеку нужно, что до модели она падала.
+    const hidden = within(card).getByText(/Устаревший ответ/u).closest("tr")!;
+    expect(hidden.textContent).toContain("упала");
+    expect(hidden.textContent).toContain("это и требовалось");
     expect(within(card).getByText(/Существующие тесты/u)).toBeTruthy();
-    expect(within(card).getByText(/смотреть надо не на них/u)).toBeTruthy();
+    expect(within(card).getByText(/Смотреть надо не на проверки/u)).toBeTruthy();
 
     await user.click(within(card).getByRole("button", { name: "Показать изменения" }));
 

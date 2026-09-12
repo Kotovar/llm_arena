@@ -453,16 +453,26 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!run.suite_revision_id) return reply.code(400).send({ message: "Этот прогон не относится к набору задач" });
     const revision = store.getSuiteRevision(run.suite_revision_id);
     const planned = store.listRunTasks(run.id);
-    const tasks = store.listTaskRuns(run.id).map((taskRun) => ({
-      id: taskRun.id,
-      position: taskRun.position,
-      name: store.getTaskRevision(taskRun.task_revision_id)?.name ?? `Задача ${taskRun.position + 1}`,
-      status: taskRun.status,
-      outcome: taskRunOutcome(taskRun),
-      verdict: taskVerdict(taskRun),
-      startedAt: taskRun.started_at,
-      finishedAt: taskRun.finished_at,
-    }));
+    const tasks = store.listTaskRuns(run.id).map((taskRun) => {
+      const snapshot = JSON.parse(taskRun.snapshot_json) as { fixture?: { id?: string } };
+      const fixture = config.fixtures.find((item) => item.id === snapshot.fixture?.id);
+      return {
+        id: taskRun.id,
+        position: taskRun.position,
+        name: store.getTaskRevision(taskRun.task_revision_id)?.name ?? `Задача ${taskRun.position + 1}`,
+        status: taskRun.status,
+        outcome: taskRunOutcome(taskRun),
+        verdict: taskVerdict(taskRun),
+        /**
+         * Состояние проверок до модели. Без него «проверка прошла» ничего не говорит: важно, что
+         * до модели она падала. Отдаётся только здесь, на экране завершённого прогона: в списке
+         * fixture и в снимке промпта этого нет, чтобы не подсказывать модели, что именно ломать.
+         */
+        baseline: fixture?.baseline ?? {},
+        startedAt: taskRun.started_at,
+        finishedAt: taskRun.finished_at,
+      };
+    });
     return {
       run: withPublicError(run),
       suite: revision ? { revisionId: revision.id, revision: revision.revision, contentHash: revision.contentHash } : null,
