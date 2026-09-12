@@ -6,6 +6,7 @@ import { renderInApp } from "../test-harness.js";
 import { BenchmarkRunPage } from "./benchmark-run.js";
 
 let verdicts: unknown[];
+let previewStops: unknown[];
 let tasks: unknown[];
 
 const waiting = {
@@ -40,6 +41,7 @@ const aborted = {
 
 beforeEach(() => {
   verdicts = [];
+  previewStops = [];
   tasks = [waiting, looped, aborted];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
@@ -56,6 +58,12 @@ beforeEach(() => {
     }
     if (url.includes("/check-log")) {
       return new Response("не уложился в ожидание", { status: 200, headers: { "content-type": "text/plain" } });
+    }
+    if (url === "/api/fixtures/stale-search-results/preview") return json({ fixtureId: "stale-search-results", url: "http://127.0.0.1:41111/" });
+    if (url.endsWith("/preview") && init?.method === "POST") return json({ taskRunId: "task-run-1", resultSha: "b".repeat(40), url: "http://127.0.0.1:42222/" });
+    if (url === "/api/preview" && init?.method === "DELETE") {
+      previewStops.push(JSON.parse(String(init.body)));
+      return new Response(null, { status: 204 });
     }
     if (url.endsWith("/verdict") && init?.method === "PUT") {
       verdicts.push({ url, body: JSON.parse(String(init.body)) });
@@ -148,6 +156,25 @@ describe("прогон набора", () => {
 
     // Именно так выглядел первый живой прогон: fixture не подключился, и оценивать было нечего.
     expect(screen.queryByText(/Проверок нет вообще/u)).toBeNull();
+  });
+
+  it("показывает исходное состояние и результат рядом", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<BenchmarkRunPage runId="run-1" />);
+    const card = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
+
+    await user.click(await within(card).findByRole("button", { name: "Запустить оригинал" }));
+    await user.click(within(card).getByRole("button", { name: "Запустить результат" }));
+
+    // Оба превью живут одновременно: иначе «до» и «после» не сравнить.
+    expect(await screen.findByTitle("Preview: До модели")).toBeTruthy();
+    expect(screen.getByTitle("Preview: После модели")).toBeTruthy();
+
+    const before = screen.getByTitle("Preview: До модели").closest("section")!;
+    await user.click(within(before).getByRole("button", { name: "Остановить preview" }));
+
+    // Результат адресуется своей версией, иначе аренда не продлилась бы и превью умерло само.
+    expect(previewStops).toEqual([{ fixtureId: "stale-search-results" }]);
   });
 
   it("показывает главную метрику частным, а не составным баллом", async () => {

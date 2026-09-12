@@ -1,11 +1,9 @@
 import { deepEqual } from "node:assert/strict";
 import { test } from "node:test";
-import { createEditor, type Editor } from "./src/editor.ts";
-
-type WithHistory = Editor & { undo(): void; redo(): void };
+import { createEditor } from "./src/editor.js";
 
 const initial = [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }];
-const editor = () => createEditor(initial) as WithHistory;
+const editor = () => createEditor(initial);
 
 test("отменяет и повторяет последовательность пользовательских изменений", () => {
   const list = editor();

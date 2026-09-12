@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Skeleton } from "../shell.js";
+import { ResultPreview, stopPreviewTarget, useStopPreviewOnUnmount } from "./results.js";
 import type { TaskOutcome } from "@llm-arena/shared";
 import { outcomeLabels } from "../ui.js";
 
@@ -82,6 +83,48 @@ function WhatToCheck({ task }: { task: BenchmarkTask }) {
   </ul>;
 }
 
+/**
+ * Исходное состояние и результат рядом. Это главный способ судить, не читая код: видно, что до
+ * модели приложение вело себя неправильно, а после — правильно. Оба живут одновременно:
+ * менеджер держит ровно два процесса превью.
+ */
+function Previews({ taskRunId, fixtureId }: { taskRunId: string; fixtureId: string | undefined }) {
+  const [original, setOriginal] = useState<string>();
+  // Версию результата возвращает сервер: по ней же продлевается аренда и гасится превью.
+  const [result, setResult] = useState<{ url: string; resultSha: string }>();
+  const resultTarget = result ? { taskRunId, resultSha: result.resultSha } : undefined;
+  useStopPreviewOnUnmount(original && fixtureId ? { fixtureId } : undefined);
+  useStopPreviewOnUnmount(resultTarget);
+  const startOriginal = useMutation({
+    mutationFn: () => api<{ url: string }>(`/fixtures/${fixtureId}/preview`, { method: "POST" }),
+    onSuccess: (started) => setOriginal(started.url),
+  });
+  const startResult = useMutation({
+    mutationFn: () => api<{ resultSha: string; url: string }>(`/task-runs/${taskRunId}/preview`, { method: "POST", body: "{}" }),
+    onSuccess: (started) => setResult(started),
+  });
+  const stopOriginal = useMutation({
+    mutationFn: () => stopPreviewTarget({ fixtureId: fixtureId! }),
+    onSuccess: () => setOriginal(undefined),
+  });
+  const stopResult = useMutation({
+    mutationFn: () => stopPreviewTarget(resultTarget),
+    onSuccess: () => setResult(undefined),
+  });
+  if (!fixtureId) return null;
+  return <div className="stack">
+    <div className="actions">
+      <strong>Посмотреть своими глазами</strong>
+      <button type="button" onClick={() => startOriginal.mutate()} disabled={startOriginal.isPending || Boolean(original)}>{startOriginal.isPending ? "Запускаем…" : "Запустить оригинал"}</button>
+      <button type="button" onClick={() => startResult.mutate()} disabled={startResult.isPending || Boolean(result)}>{startResult.isPending ? "Запускаем…" : "Запустить результат"}</button>
+    </div>
+    {startOriginal.error ? <p className="error">Оригинал: {startOriginal.error.message}</p> : null}
+    {startResult.error ? <p className="error">Результат: {startResult.error.message}</p> : null}
+    {original ? <ResultPreview url={original} target={{ fixtureId }} onClose={() => stopOriginal.mutate()} closing={stopOriginal.isPending} title="До модели" /> : null}
+    {result ? <ResultPreview url={result.url} target={{ taskRunId, resultSha: result.resultSha }} onClose={() => stopResult.mutate()} closing={stopResult.isPending} title="После модели" /> : null}
+  </div>;
+}
+
 function TaskEvidence({ task }: { task: BenchmarkTask }) {
   const [diff, setDiff] = useState<string>();
   const [log, setLog] = useState<{ id: string; text: string }>();
@@ -110,6 +153,7 @@ function TaskEvidence({ task }: { task: BenchmarkTask }) {
   };
   return <div className="stack roomy">
     <WhatToCheck task={task} />
+    <Previews taskRunId={task.id} fixtureId={snapshot.fixture?.id} />
     <details><summary><strong>Что требовалось</strong></summary><pre className="artifact">{snapshot.task?.prompt ?? "Текст задания не сохранился."}</pre></details>
     {checks.length
       ? <div className="stack">

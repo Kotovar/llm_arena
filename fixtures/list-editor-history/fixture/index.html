@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Редактор списка</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <h1>Редактор списка</h1>
+      <p class="hint">Измените список, затем нажмите «Отменить». Ожидается, что последнее изменение откатится, а «Повторить» вернёт его.</p>
+      <div class="row">
+        <button id="add" type="button">Добавить</button>
+        <button id="undo" type="button">Отменить</button>
+        <button id="redo" type="button">Повторить</button>
+      </div>
+      <p id="note" class="note"></p>
+      <ul id="items"></ul>
+    </main>
+    <script type="module">
+      import { mountEditor } from "./src/app.js";
+      mountEditor(document.getElementById("app"));
+    </script>
+  </body>
+</html>

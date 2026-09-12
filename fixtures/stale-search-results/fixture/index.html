@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Поиск пользователей</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Поиск пользователей</h1>
+      <p class="hint">Наберите «ad» быстро, по одной букве. Ожидается список для «ad»: ada, adam.</p>
+      <input id="query" type="search" placeholder="Начните вводить имя" autocomplete="off" autofocus />
+      <output id="results">ничего не найдено</output>
+      <h2>Что показывал интерфейс</h2>
+      <ol id="log"></ol>
+    </main>
+    <script type="module">
+      import { mountSearch } from "./src/app.js";
+      const list = document.getElementById("log");
+      mountSearch(document.getElementById("query"), document.getElementById("results"), (line) => {
+        const item = document.createElement("li");
+        item.textContent = line;
+        list.prepend(item);
+      });
+    </script>
+  </body>
+</html>

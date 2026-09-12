@@ -1,32 +1,19 @@
 // Эталонная правка: модель её не видит, она нужна для проверки самого fixture.
-import { addItem, moveItem, removeItem, renameItem } from "./editorState.ts";
-import type { EditorState, Item } from "./types.ts";
-
-export type Editor = {
-  getState(): EditorState;
-  load(items: readonly Item[]): void;
-  add(item: Item): void;
-  remove(id: string): void;
-  rename(id: string, title: string): void;
-  move(id: string, toIndex: number): void;
-  titles(): string[];
-  undo(): void;
-  redo(): void;
-};
+import { addItem, moveItem, removeItem, renameItem } from "./editorState.js";
 
 /** Сколько предыдущих состояний держим: глубже история не нужна, а память не бесконечна. */
 const HISTORY_LIMIT = 20;
 
-export function createEditor(initial: readonly Item[] = []): Editor {
-  let state: EditorState = { items: [...initial] };
-  let past: EditorState[] = [];
-  let future: EditorState[] = [];
+export function createEditor(initial = []) {
+  let state = { items: [...initial] };
+  let past = [];
+  let future = [];
 
   /**
    * История ведётся на состоянии редактора целиком, а не на каждом типе действия: переходы
    * уже чистые, поэтому достаточно запомнить предыдущее состояние перед каждым изменением.
    */
-  const change = (next: (current: EditorState) => EditorState) => {
+  const change = (next) => {
     const previous = state;
     state = next(state);
     if (state === previous) return;

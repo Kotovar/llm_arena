@@ -1,16 +1,17 @@
 import { deepEqual } from "node:assert/strict";
 import { test } from "node:test";
-import { createSearchController } from "../src/search.ts";
-import { renderLine } from "../src/app.ts";
-import type { User } from "../src/api.ts";
+import { createSearchController } from "../src/search.js";
+import { renderLine } from "../src/app.js";
 
 function collect() {
-  const lines: string[] = [];
-  const view = {
-    renderResults: (users: User[]) => lines.push(renderLine(users)),
-    renderLoading: () => lines.push("поиск…"),
+  const lines = [];
+  return {
+    lines,
+    view: {
+      renderResults: (users) => lines.push(renderLine(users)),
+      renderLoading: () => lines.push("поиск…"),
+    },
   };
-  return { lines, view };
 }
 
 test("показывает совпадения по запросу", async () => {

@@ -1,10 +1,9 @@
 import { deepEqual, equal, ok } from "node:assert/strict";
 import { test } from "node:test";
-import { createSearchController } from "./src/search.ts";
-import { renderLine } from "./src/app.ts";
-import type { User } from "./src/api.ts";
+import { createSearchController } from "./src/search.js";
+import { renderLine } from "./src/app.js";
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Дольше самого медленного ответа бэкенда, чтобы устаревший ответ успел проявиться. */
 const settle = () => wait(2000);
 /** Пауза между вводами: больше обычного debounce, но меньше разницы задержек бэкенда. */
@@ -15,24 +14,21 @@ const BETWEEN_KEYSTROKES = 500;
  * и тогда проверка висела бы до таймаута вместо того, чтобы честно упасть.
  */
 function typing() {
-  const lines: string[] = [];
+  const lines = [];
   const controller = createSearchController({
-    renderResults: (users: User[]) => lines.push(renderLine(users)),
+    renderResults: (users) => lines.push(renderLine(users)),
     renderLoading: () => lines.push("поиск…"),
   });
   return {
     results: () => lines.filter((line) => line !== "поиск…"),
     loadings: () => lines.filter((line) => line === "поиск…").length,
-    type: (text: string) => void Promise.resolve(controller.query(text)).catch(() => undefined),
+    type: (text) => void Promise.resolve(controller.query(text)).catch(() => undefined),
   };
 }
 
 /**
  * Порядок завершения запросов обратный порядку ввода: под «a» бэкенд отвечает заметно
  * медленнее, чем под «ad». Правильное поведение — показаны результаты последнего запроса.
- *
- * Пауза между вводами больше обычного debounce: оба запроса успевают уйти, и отложить
- * второй вместо того, чтобы разобраться с порядком ответов, уже не помогает.
  */
 test("ответ на устаревший запрос не перезаписывает результаты последнего", async () => {
   const session = typing();
@@ -59,8 +55,7 @@ test("каждый введённый запрос показывает инди
 
 /**
  * Промпт запрещает обходить проблему искусственными задержками. Ответ на последний ввод
- * должен появляться примерно за время ответа бэкенда: запас втрое больше настоящей задержки,
- * так что медленная машина проверку не завалит, а отложенный на полсекунды запрос — да.
+ * должен появляться примерно за время ответа бэкенда.
  */
 test("результаты последнего запроса не откладываются искусственно", async () => {
   const session = typing();

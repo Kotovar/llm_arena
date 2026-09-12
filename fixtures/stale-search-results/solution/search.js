@@ -1,20 +1,11 @@
 // Эталонная правка: модель её не видит, она нужна для проверки самого fixture.
-import { searchUsers, type User } from "./api.ts";
+import { searchUsers } from "./api.js";
 
-export type SearchView = {
-  renderResults(users: User[]): void;
-  renderLoading(): void;
-};
-
-export type SearchController = {
-  query(text: string): Promise<void>;
-};
-
-export function createSearchController(view: SearchView): SearchController {
+export function createSearchController(view) {
   // Номер последнего запроса: ответ, за которым уже был новый ввод, не отображается.
   let latest = 0;
   return {
-    async query(text: string): Promise<void> {
+    async query(text) {
       const request = ++latest;
       if (!text) {
         view.renderResults([]);

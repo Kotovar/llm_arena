@@ -1,6 +1,6 @@
 import { deepEqual } from "node:assert/strict";
 import { test } from "node:test";
-import { createEditor } from "../src/editor.ts";
+import { createEditor } from "../src/editor.js";
 
 const initial = [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }];
 
