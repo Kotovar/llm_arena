@@ -1,0 +1,16 @@
+{
+  "id": "dependency-resolver",
+  "name": "Implement dependency resolution order",
+  "instructions": "Work in the current directory. The project runs on Node.js 24 without installing anything: TypeScript files are executed directly, so use plain type annotations only — enums, namespaces and constructor parameter properties are not supported. Run the existing checks before you finish.",
+  "checks": [
+    { "id": "tests", "label": "Существующие тесты", "command": { "argv": ["node", "--test"] } }
+  ],
+  "hidden": [
+    { "id": "resolution", "label": "Порядок, ошибки и края", "command": { "argv": ["node", "--test", "resolve-order.test.ts"] } }
+  ],
+  "baseline": {
+    "tests": "pass",
+    "resolution": "fail"
+  },
+  "limits": { "maxDurationMs": 600000 }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "list-editor-history",
+  "name": "Implement undo and redo history",
+  "instructions": "Work in the current directory. The project runs on Node.js 24 without installing anything: TypeScript files are executed directly, so use plain type annotations only — enums, namespaces and constructor parameter properties are not supported. Run the existing checks before you finish.",
+  "checks": [
+    { "id": "tests", "label": "Существующие тесты", "command": { "argv": ["node", "--test"] } }
+  ],
+  "hidden": [
+    { "id": "history", "label": "История отмены и повтора", "command": { "argv": ["node", "--test", "history.test.ts"] } }
+  ],
+  "baseline": {
+    "tests": "pass",
+    "history": "fail"
+  },
+  "limits": { "maxDurationMs": 600000 }
+}
