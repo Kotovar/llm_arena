@@ -12,6 +12,7 @@ import { GalleryPage } from "./screens/gallery.js";
 import { LeaderboardPage } from "./screens/leaderboard.js";
 import { ModelsPage } from "./screens/models.js";
 import { RunDetail, RunsPage } from "./screens/results.js";
+import { FixturesPage } from "./screens/fixtures.js";
 import { SettingsPage } from "./screens/settings.js";
 import { Empty, Page, Panel, Shell, useData } from "./shell.js";
 import { ToastProvider, useToast } from "./toast.js";
@@ -184,8 +185,9 @@ const batchRoute = createRoute({
   // Без `id` страница показывает форму, с ним — прогресс уже созданного батча.
   validateSearch: (search: Record<string, unknown>) => ({ ...(typeof search.id === "string" ? { id: search.id } : {}) } as { id?: string }),
 });
+const fixturesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/fixtures", component: FixturesPage });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, analyticsRoute, galleryRoute, batchRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, analyticsRoute, galleryRoute, batchRoute, fixturesRoute, settingsRoute]);
 const router = createRouter({ routeTree, defaultPreload: "intent" });
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }
 

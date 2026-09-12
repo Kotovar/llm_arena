@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "./config.js";
 
@@ -179,6 +179,32 @@ describe("fixtures discovered in the repository", () => {
     }, { withValidation: true });
 
     expect(() => loadConfig(filename)).toThrow(/has no declared baseline state/u);
+  });
+
+  it("refuses a fixture that links out of the directory the model gets", () => {
+    const filename = createRoot({ leaky: JSON.stringify({ id: "leaky", name: "Leaky" }) }, { withValidation: true });
+    const fixtures = join(dirname(filename), "fixtures", "leaky");
+    writeFileSync(join(fixtures, "validation", "hidden.test.js"), "// секретный ассерт\n");
+    // Имя ссылки ничего не выдаёт: проверка по именам файлов такую утечку не заметила бы.
+    symlinkSync(join(fixtures, "validation"), join(fixtures, "fixture", "docs"));
+
+    expect(() => loadConfig(filename)).toThrow(/must not link outside itself: docs -> /u);
+  });
+
+  it("refuses a broken link inside the fixture", () => {
+    const filename = createRoot({ leaky: JSON.stringify({ id: "leaky", name: "Leaky" }) });
+    symlinkSync("/nowhere/at/all", join(dirname(filename), "fixtures", "leaky", "fixture", "gone"));
+
+    expect(() => loadConfig(filename)).toThrow(/gone \(broken link\)/u);
+  });
+
+  it("allows a link that stays inside the fixture", () => {
+    const filename = createRoot({ tidy: JSON.stringify({ id: "tidy", name: "Tidy" }) });
+    const fixture = join(dirname(filename), "fixtures", "tidy", "fixture");
+    writeFileSync(join(fixture, "real.txt"), "content\n");
+    symlinkSync(join(fixture, "real.txt"), join(fixture, "alias.txt"));
+
+    expect(loadConfig(filename).fixtures.map((item) => item.id)).toEqual(["from-yaml", "tidy"]);
   });
 
   it("refuses the same check id in public and hidden validation", () => {

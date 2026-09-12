@@ -194,16 +194,24 @@ function MetricStrip({ result, conditions }: { result: Record<string, unknown> |
   return <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Новые входные токены во всех обращениях агента к модели, отдельно взятые из кеша и отдельно цена обвязки — вход первого обращения, то есть системный промпт и схемы инструментов"><span>Вход</span><strong>{metric(result, "inputTokens")}</strong><small>из кеша {metric(result, "cachedInputTokens")}</small><small>обвязка {metric(result, "harnessPromptTokens")}</small></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div><div title="Сколько токенов держал контекст в последнем обращении к модели"><span>Контекст в финале</span><strong>{!fill ? "N/A" : fill.percent === null ? fill.label : `${fill.percent}%`}</strong>{fill?.percent === null || !fill ? null : <small>{fill.label}</small>}</div><div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong>{conditions ? <small>{conditions}</small> : null}</div></div>;
 }
 
+/** Адрес preview: результат промпта с версией или исходное состояние fixture. */
+export type PreviewTarget = { taskRunId: string; resultSha: string } | { fixtureId: string };
+
+/** Сервер принимает адрес строго, поэтому лишние поля вроде url в тело не попадают. */
+function previewBody(target: PreviewTarget) {
+  return "fixtureId" in target
+    ? { fixtureId: target.fixtureId }
+    : { taskRunId: target.taskRunId, resultSha: target.resultSha };
+}
+
 /** Продлеваем аренду только своих preview: чужие не должны жить за счёт нашей вкладки. */
-export function usePreviewHeartbeat(targets: Array<{ taskRunId: string; resultSha: string }>) {
-  const key = targets.map((target) => `${target.taskRunId}:${target.resultSha}`).join(",");
+export function usePreviewHeartbeat(targets: readonly PreviewTarget[]) {
+  const key = JSON.stringify(targets.map(previewBody));
   useEffect(() => {
-    if (!key) return;
+    const bodies = JSON.parse(key) as unknown[];
+    if (!bodies.length) return;
     const heartbeat = window.setInterval(() => {
-      for (const target of key.split(",")) {
-        const [taskRunId, resultSha] = target.split(":") as [string, string];
-        void api("/preview/heartbeat", { method: "POST", body: JSON.stringify({ taskRunId, resultSha }) });
-      }
+      for (const body of bodies) void api("/preview/heartbeat", { method: "POST", body: JSON.stringify(body) });
     }, 15_000);
     return () => window.clearInterval(heartbeat);
   }, [key]);
@@ -212,13 +220,13 @@ export function usePreviewHeartbeat(targets: Array<{ taskRunId: string; resultSh
 // Preview-сервер один на всё приложение (см. PreviewManager.leaseMs) — если оставить страницу,
 // пока preview активен, он проработает ещё до 2 минут без пользы. Останавливаем адресно при уходе.
 /** Останавливаем ровно свой preview: пустой DELETE погасил бы и соседний, запущенный рядом. */
-export function stopPreviewTarget(preview: { taskRunId: string; resultSha: string } | undefined) {
+export function stopPreviewTarget(preview: PreviewTarget | undefined) {
   return preview
-    ? api("/preview", { method: "DELETE", body: JSON.stringify({ taskRunId: preview.taskRunId, resultSha: preview.resultSha }) })
+    ? api("/preview", { method: "DELETE", body: JSON.stringify(previewBody(preview)) })
     : Promise.resolve();
 }
 
-export function useStopPreviewOnUnmount(preview: PreviewState | undefined) {
+export function useStopPreviewOnUnmount(preview: PreviewTarget | undefined) {
   const ref = useRef(preview);
   useEffect(() => { ref.current = preview; }, [preview]);
   useEffect(() => () => {
@@ -249,7 +257,7 @@ function LogDialog({ path, onClose }: { path: string; onClose: () => void }) {
   </dialog>;
 }
 
-export function ResultPreview({ url, target, onClose, closing, title = "Готовое web-приложение", viewport }: { url: string; target: { taskRunId: string; resultSha: string }; onClose: () => void; closing?: boolean; title?: string; viewport?: { width: number; height: number } }) {
+export function ResultPreview({ url, target, onClose, closing, title = "Готовое web-приложение", viewport }: { url: string; target: PreviewTarget; onClose: () => void; closing?: boolean; title?: string; viewport?: { width: number; height: number } }) {
   usePreviewHeartbeat([target]);
   const frame = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);

@@ -24,6 +24,7 @@ import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
 import { activeExportPath, renderAgentLayout, renderFishCommand, renderFishLauncher, renderPiContextSync, renderPiLauncher, stopAgentLocalSession, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 import { describeGenerationError } from "./generation-error.js";
+import { FIXTURE_PREVIEW_VERSION, fixturePreviewOwner } from "./preview.js";
 import { verifyFixture } from "./fixture-verify.js";
 import { assertWorkspaceCommit, writeResultDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
@@ -57,9 +58,10 @@ type EngineLike = {
 
 type PreviewLike = {
   start(taskRunId: string, resultSha: string): Promise<unknown>;
+  startFixture?(fixtureId: string): Promise<unknown>;
   stop(): Promise<void>;
-  stopIf?(taskRunId: string, resultSha: string): Promise<void>;
-  heartbeat(target?: { taskRunId: string; resultSha: string }): void;
+  stopIf?(ownerId: string, versionId: string): Promise<void>;
+  heartbeat(target?: { ownerId: string; versionId: string }): void;
   removeTaskRunPreviews?(taskRunIds: string[]): Promise<void>;
 };
 
@@ -72,7 +74,16 @@ function parse<T>(schema: ZodType<T>, value: unknown): T {
 
 const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict();
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
-const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
+const previewStopSchema = z.union([
+  z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict(),
+  z.object({ fixtureId: z.string().trim().min(1) }).strict(),
+]);
+/** Адрес превью внутри менеджера: снаружи он называется промптом с версией или просто fixture. */
+function previewOwner(target: z.infer<typeof previewStopSchema>) {
+  return "fixtureId" in target
+    ? { ownerId: fixturePreviewOwner(target.fixtureId), versionId: FIXTURE_PREVIEW_VERSION }
+    : { ownerId: target.taskRunId, versionId: target.resultSha };
+}
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
 const completionSchema = z.object({ completion: z.enum(["full", "partial", "broken"]).nullable() }).strict();
 const updateModelEconomicsSchema = z.object({ economics: modelEconomicsSchema.nullable() }).strict();
@@ -294,6 +305,25 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/health", async () => ({ status: "ok" }));
   app.get("/api/runners", async () => config.runners.map(({ env: _env, ...runner }) => runner));
   app.get("/api/fixtures", async () => config.fixtures.map(({ source: _source, hiddenSource: _hiddenSource, ...fixture }) => publicFixtureManifest(fixture)));
+  /**
+   * Исходный проект задачи целиком: человек должен увидеть проблему до модели. Отдаём только
+   * то, что модель и так получит, — каталог `validation/` лежит снаружи и сюда не попадает.
+   */
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>("/api/fixtures/:id/files", async (request, reply) => {
+    const fixture = config.fixtures.find((item) => item.id === request.params.id);
+    if (!fixture) return reply.code(404).send({ message: "Fixture not found" });
+    if (!request.query.path) return filesUnder(fixture.source);
+    const path = contained(fixture.source, request.query.path);
+    if (!statSync(path).isFile()) throw new Error("Fixture path is not a file");
+    reply.type("text/plain");
+    return createReadStream(path);
+  });
+  app.post<{ Params: { id: string } }>("/api/fixtures/:id/preview", async (request, reply) => {
+    const fixture = config.fixtures.find((item) => item.id === request.params.id);
+    if (!fixture) return reply.code(404).send({ message: "Fixture not found" });
+    if (!preview?.startFixture) throw new Error("Preview manager is unavailable");
+    return preview.startFixture(fixture.id);
+  });
   app.post<{ Params: { id: string } }>("/api/fixtures/:id/verify", async (request, reply) => {
     const fixture = config.fixtures.find((item) => item.id === request.params.id);
     if (!fixture) return reply.code(404).send({ message: "Fixture not found" });
@@ -1023,12 +1053,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   app.post<{ Body: unknown }>("/api/preview/heartbeat", async (request) => {
     const target = request.body === undefined ? undefined : parse(previewStopSchema, request.body);
-    preview?.heartbeat(target);
+    preview?.heartbeat(target && previewOwner(target));
     return { status: "ok" };
   });
   app.delete<{ Body: unknown }>("/api/preview", async (request, reply) => {
     const target = request.body === undefined ? undefined : parse(previewStopSchema, request.body);
-    if (target && preview?.stopIf) await preview.stopIf(target.taskRunId, target.resultSha);
+    const owner = target && previewOwner(target);
+    if (owner && preview?.stopIf) await preview.stopIf(owner.ownerId, owner.versionId);
     else await preview?.stop();
     return reply.code(204).send();
   });

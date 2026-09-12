@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createModelSchema, fixtureManifestSchema, llamaProfileSchema, runnerDefinitionSchema } from "@llm-arena/shared";
 import { parse } from "yaml";
 import { z } from "zod";
@@ -92,6 +92,10 @@ function discoverFixtures(root: string): Fixture[] {
     }
     const source = join(directory, FIXTURE_SUBDIRECTORY);
     if (!existsSync(source)) throw new Error(`${manifestPath}: missing the ${FIXTURE_SUBDIRECTORY}/ directory next to it`);
+    const escaping = escapingSymlinks(source);
+    if (escaping.length) {
+      throw new Error(`${manifestPath}: ${FIXTURE_SUBDIRECTORY}/ must not link outside itself: ${escaping.join(", ")}`);
+    }
     const hiddenSource = join(directory, VALIDATION_SUBDIRECTORY);
     if (manifest.hidden.length && !existsSync(hiddenSource)) {
       throw new Error(`${manifestPath}: declares hidden validation but has no ${VALIDATION_SUBDIRECTORY}/ directory next to it`);
@@ -99,6 +103,34 @@ function discoverFixtures(root: string): Fixture[] {
     found.push({ ...manifest, source, ...(existsSync(hiddenSource) ? { hiddenSource } : {}) });
   }
   return found.toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+/**
+ * Симлинк из копируемого подкаталога наружу обходит всё остальное: `cp -a` сохраняет саму
+ * ссылку, и в рабочем каталоге модели она снова указывает на настоящую цель. Так читаются
+ * скрытые проверки — причём проверка по именам файлов такую ссылку не увидит, потому что
+ * называться она может как угодно. Ссылка наружу ещё и даёт dev-серверу писать в неизменяемый
+ * оригинал, поэтому запрет один на оба случая.
+ */
+function escapingSymlinks(source: string): string[] {
+  const root = realpathSync(source);
+  const escaping: string[] = [];
+  // Рекурсивный обход не заходит внутрь ссылок, поэтому каталог-ссылка тоже попадёт в список.
+  for (const entry of readdirSync(source, { recursive: true, withFileTypes: true })) {
+    if (!entry.isSymbolicLink()) continue;
+    const path = join(entry.parentPath, entry.name);
+    const relativePath = relative(source, path);
+    let target;
+    try {
+      target = realpathSync(path);
+    } catch {
+      // Битая ссылка — тоже дефект fixture: куда она укажет после копирования, предсказать нельзя.
+      escaping.push(`${relativePath} (broken link)`);
+      continue;
+    }
+    if (target !== root && !target.startsWith(`${root}${sep}`)) escaping.push(`${relativePath} -> ${target}`);
+  }
+  return escaping;
 }
 
 function mergeFixtures(configured: Fixture[], discovered: Fixture[]): Fixture[] {

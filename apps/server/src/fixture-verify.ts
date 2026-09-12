@@ -26,7 +26,8 @@ export type FixtureVerification = {
   workspace: string;
 };
 
-function filesUnder(directory: string): string[] {
+/** Все файлы каталога без исключений: утечку ищем именно среди всего, что там лежит. */
+function everyFileUnder(directory: string): string[] {
   return readdirSync(directory, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => relative(directory, join(entry.parentPath, entry.name)));
@@ -38,8 +39,8 @@ function filesUnder(directory: string): string[] {
  */
 function leakedValidationFiles(workspace: string, hiddenSource: string | undefined): string[] {
   if (!hiddenSource) return [];
-  const inWorkspace = new Set(filesUnder(workspace));
-  return filesUnder(hiddenSource).filter((path) => inWorkspace.has(path));
+  const inWorkspace = new Set(everyFileUnder(workspace));
+  return everyFileUnder(hiddenSource).filter((path) => inWorkspace.has(path));
 }
 
 /**

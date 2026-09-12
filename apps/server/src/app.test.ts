@@ -1,10 +1,11 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { finalizeWorkspace, prepareWorkspace } from "./artifacts.js";
 import { loadConfig } from "./config.js";
+import { PreviewManager } from "./preview.js";
 import { ProcessSupervisor } from "./process-supervisor.js";
 import { createStore } from "./store.js";
 
@@ -14,6 +15,72 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("addresses a fixture preview by the fixture, not by a task run", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-fixture-lease-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const calls: Array<{ method: string; owner: unknown }> = [];
+    const preview = {
+      start: async () => ({}),
+      startFixture: async () => ({}),
+      stop: async () => undefined,
+      stopIf: async (ownerId: string, versionId: string) => void calls.push({ method: "stopIf", owner: { ownerId, versionId } }),
+      heartbeat: (target?: { ownerId: string; versionId: string }) => void calls.push({ method: "heartbeat", owner: target }),
+    };
+    const app = buildApp({ store, config, preview });
+
+    await app.inject({ method: "POST", url: "/api/preview/heartbeat", payload: { fixtureId: "web-app" } });
+    await app.inject({ method: "DELETE", url: "/api/preview", payload: { fixtureId: "web-app" } });
+    const stray = await app.inject({ method: "POST", url: "/api/preview/heartbeat", payload: { fixtureId: "web-app", url: "http://127.0.0.1:1/" } });
+
+    // Промах в адресе не ломает страницу сразу: preview просто тихо умрёт по истечении аренды.
+    const owner = { ownerId: "fixture-web-app", versionId: "original" };
+    expect(calls).toEqual([{ method: "heartbeat", owner }, { method: "stopIf", owner }]);
+    // Адрес принимается строго: лишнее поле в теле — ошибка, а не молча проигнорированное.
+    expect(stray.statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
+  it("shows the starter project and runs it without touching the fixture itself", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-fixture-preview-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const supervisor = new ProcessSupervisor("fixture-preview-test", 100);
+    const preview = new PreviewManager(store, config, supervisor);
+    const app = buildApp({ store, config, preview, supervisor });
+    const fixture = config.fixtures.find((item) => item.id === "web-app")!;
+
+    const listed = await app.inject({ method: "GET", url: "/api/fixtures/web-app/files" });
+    const file = await app.inject({ method: "GET", url: "/api/fixtures/web-app/files?path=index.html" });
+    const escaping = await app.inject({ method: "GET", url: "/api/fixtures/web-app/files?path=../../package.json" });
+    const missing = await app.inject({ method: "GET", url: "/api/fixtures/nothing-here/files" });
+
+    expect(listed.json()).toContain("index.html");
+    expect(file.body).toContain("<");
+    expect(escaping.statusCode).toBe(400);
+    expect(missing.statusCode).toBe(404);
+
+    const started = await app.inject({ method: "POST", url: "/api/fixtures/web-app/preview" });
+    expect(started.statusCode).toBe(200);
+    const { url } = started.json() as { fixtureId: string; url: string };
+    expect(await (await fetch(url)).text()).toContain("<");
+    // Оригинал запускается из копии: сам fixture остаётся неизменяемым.
+    expect(existsSync(join(directory, "previews", "fixture-web-app", "original", "workspace", "index.html"))).toBe(true);
+    expect(readdirSync(fixture.source).toSorted()).toEqual(["check-assets.mjs", "index.html", "server.mjs"]);
+
+    await app.inject({ method: "DELETE", url: "/api/preview", payload: { fixtureId: "web-app" } });
+    await expect(fetch(url)).rejects.toThrow();
+    expect(existsSync(join(directory, "previews", "fixture-web-app"))).toBe(false);
+    await supervisor.stopAll();
+    await app.close();
+    store.close();
+  }, 120_000);
+
   it("verifies that a fixture is in the state its author declared", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-fixture-verify-api-"));
     directories.push(directory);

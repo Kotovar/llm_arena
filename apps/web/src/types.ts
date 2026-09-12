@@ -123,7 +123,7 @@ export type LeaderboardEntry = {
   estimatedCostPerRun: number | null;
   criteria: { correctness: number | null; codeQuality: number | null; uiQuality: number | null; instructionFollowing: number | null };
 };
-export type Fixture = { id: string; name: string; checks: Array<{ id: string; label: string }>; preview?: unknown };
+export type Fixture = { id: string; name: string; checks: Array<{ id: string; label: string }>; hidden?: Array<{ id: string; label: string }>; preview?: unknown };
 export type ModelOption = { id: string; name: string; efforts: string[]; defaultEffort: string | null };
 export type ModelCatalog = { claude: { models: ModelOption[] }; codex: { models: ModelOption[] } };
 
