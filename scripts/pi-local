@@ -21,6 +21,8 @@ if not command -q node
     exit 1
 end
 
+set -l port (string match -rg 'http://127\.0\.0\.1:([0-9]+)/v1/models' < "$exports/pi-local.kdl")
+
 # Обе обвязки делят один llama-server и один порт: второй сеанс поднял бы сервер на занятом
 # порту и молча остался бы без своей левой панели.
 set -l other_session_file "$exports/omp-local.session"
@@ -30,7 +32,6 @@ if test -f "$other_session_file"
     set -l other_line (zellij list-sessions --no-formatting 2>/dev/null | string match -- "$other_session *")
     if test -n "$other_session"; and test -n "$other_line"; and not string match -q '*EXITED*' -- "$other_line"
         # Мешает не сам сеанс, а занятый им сервер модели: отсоединённый пустой сеанс не помеха.
-        set -l port (string match -rg 'http://127\.0\.0\.1:([0-9]+)/v1/models' < "$exports/pi-local.kdl")
         if test -n "$port"; and curl -fsS --max-time 1 "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1
             echo "pi-local: сеанс omp-local ($other_session) держит сервер модели на порту $port — обвязки делят один llama-server." >&2
             echo "pi-local: закрытие окна лишь отсоединяет сеанс; завершите его: zellij delete-session --force $other_session" >&2
@@ -40,13 +41,35 @@ if test -f "$other_session_file"
 end
 
 set -l session_file "$exports/pi-local.session"
+set -l port_retries 1
 if test -f "$session_file"
     set -l previous_session (string trim < "$session_file")
     if string match -rq '^pi-local-[0-9]+-[0-9]+$' -- "$previous_session"
         zellij delete-session --force "$previous_session" >/dev/null 2>&1
+        # Убитый сервер освобождает порт не мгновенно — только в этом случае его и ждём.
+        set port_retries 20
+    end
+end
+
+# Чужой процесс на порту: llama-server упадёт на bind, а правая панель будет молча ждать модель,
+# которой неоткуда взяться.
+if test -n "$port"; and command -q ss
+    set -l busy 1
+    for attempt in (seq $port_retries)
+        if test -z (ss -ltnH "sport = :$port" 2>/dev/null | string collect)
+            set busy 0
+            break
+        end
+        sleep 0.25
+    end
+    if test $busy -eq 1
+        echo "pi-local: порт $port занят другим процессом — освободите его или смените порт в настройках LLM Arena." >&2
+        exit 1
     end
 end
 
 set -l session_name "pi-local-"(date +%s)"-"$fish_pid
 printf '%s\n' "$session_name" > "$session_file"
-exec zellij --session "$session_name" --new-session-with-layout "$exports/pi-local.kdl"
+# on-force-close quit: иначе закрытие окна лишь отсоединяет сеанс, а llama-server продолжает
+# держать всю VRAM и блокирует прогоны в самой Arena.
+exec zellij --session "$session_name" --new-session-with-layout "$exports/pi-local.kdl" options --on-force-close quit

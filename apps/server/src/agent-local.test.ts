@@ -47,7 +47,7 @@ describe.each([
       expect(result.status, result.stderr).toBe(0);
       const calls = readFileSync(log, "utf8").trim().split("\n");
       expect(calls[0]).toBe(`delete-session --force ${flavor}-100-200`);
-      const started = calls[1]?.match(new RegExp(`^--session (${flavor}-[0-9]+-[0-9]+) --new-session-with-layout ${join(exports, `${flavor}.kdl`)}$`));
+      const started = calls[1]?.match(new RegExp(`^--session (${flavor}-[0-9]+-[0-9]+) --new-session-with-layout ${join(exports, `${flavor}.kdl`)} options --on-force-close quit$`));
       expect(started).not.toBeNull();
       expect(readFileSync(join(exports, `${flavor}.session`), "utf8").trim()).toBe(started?.[1]);
     } finally {
@@ -169,6 +169,9 @@ describe.each([
       // Сервера на порту нет — сеанс висит отсоединённым и пустым.
       writeFileSync(join(bin, "curl"), "#!/bin/sh\nexit 7\n");
       chmodSync(join(bin, "curl"), 0o755);
+      // Свой `ss`, чтобы проверка порта не зависела от того, что слушает 8080 на машине с тестами.
+      writeFileSync(join(bin, "ss"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(bin, "ss"), 0o755);
 
       const result = spawnSync("fish", ["--no-config", launcher], {
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ZELLIJ_LOG: log },
@@ -177,6 +180,46 @@ describe.each([
 
       expect(result.status, result.stderr).toBe(0);
       expect(readFileSync(log, "utf8")).toContain("--new-session-with-layout");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Занятый порт иначе виден только как упавшая левая панель и правая, ждущая модель навсегда.
+  it("отказывается стартовать, когда порт занят чужим процессом", () => {
+    const root = mkdtempSync(join(tmpdir(), `llm-arena-${flavor}-port-`));
+    try {
+      const exports = join(root, ".data", "exports");
+      const bin = join(root, "bin");
+      mkdirSync(exports, { recursive: true });
+      mkdirSync(join(root, "scripts"));
+      mkdirSync(bin);
+      const launcher = join(root, "scripts", flavor);
+      cpSync(resolve(`../../scripts/${flavor}`), launcher);
+      chmodSync(launcher, 0o755);
+      for (const filename of ["active-model.fish", agent]) {
+        writeFileSync(join(exports, filename), "#!/usr/bin/env fish\n");
+        chmodSync(join(exports, filename), 0o755);
+      }
+      writeFileSync(join(exports, `${flavor}.kdl`), 'layout { pane { args "-lc" "curl http://127.0.0.1:8080/v1/models" } }\n');
+      for (const filename of extra) {
+        mkdirSync(dirname(join(exports, filename)), { recursive: true });
+        writeFileSync(join(exports, filename), "{}\n");
+      }
+      const zellij = join(bin, "zellij");
+      writeFileSync(zellij, "#!/bin/sh\nexit 0\n");
+      chmodSync(zellij, 0o755);
+      writeFileSync(join(bin, "ss"), "#!/bin/sh\nprintf '%s\\n' 'LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:*'\n");
+      chmodSync(join(bin, "ss"), 0o755);
+
+      const result = spawnSync("fish", ["--no-config", launcher], {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("порт 8080 занят");
+      expect(existsSync(join(exports, `${flavor}.session`))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

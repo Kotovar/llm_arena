@@ -230,7 +230,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       command: renderFishCommand(argv),
       fish: renderFishLauncher(argv),
       ompFish: renderFishLauncher([...omp.exec, "--model", `llama.cpp/${externalAlias}`]),
-      layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "OMP", launcher: "active-omp.fish" }),
+      layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "OMP", launcher: "active-omp.fish" }, config.llamaServer.startupTimeoutMs),
       // pi берёт модель из своего `models.json`, поэтому у него есть и второй экспортируемый файл.
       pi: pi ? {
         fish: renderPiLauncher(join(config.dataDir, "exports", "pi-local"), piArgv),
@@ -242,7 +242,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           ...(typeof profile.parameters.context === "number" ? { contextTokens: profile.parameters.context } : {}),
           ...(model.capabilities.vision && model.mmprojPath ? { vision: true } : {}),
         }), null, 2)}\n`,
-        layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "pi", launcher: "active-pi.fish" }),
+        layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "pi", launcher: "active-pi.fish" }, config.llamaServer.startupTimeoutMs),
       } : null,
     };
   };

@@ -27,11 +27,15 @@ export function activeExportPath(dataDir: string, filename: string): string {
  * Layout zellij на две панели: слева `llama-server`, справа обвязка, которая ждёт, пока сервер
  * отдаст нужную модель. Обвязка параметризуется — сервер и порт у omp-local и pi-local общие.
  */
-export function renderAgentLayout(dataDir: string, port: number, modelAlias: string, agent: { pane: string; launcher: string }): string {
+export function renderAgentLayout(dataDir: string, port: number, modelAlias: string, agent: { pane: string; launcher: string }, startupTimeoutMs = 900_000): string {
   const server = activeLauncherPath(dataDir);
   const launcher = activeExportPath(dataDir, agent.launcher);
   const expectedModel = quoteFishArg(`*"id":${JSON.stringify(modelAlias)}*`);
-  const wait = `while not curl -fsS http://127.0.0.1:${port}/v1/models 2>/dev/null | string replace -ar ${quoteFishArg("\\s")} '' | string match -q -- ${expectedModel}; sleep 0.5; end; exec ${quoteFishArg(launcher)}`;
+  // Без предельного срока упавший сервер (занятый порт, нехватка VRAM) оставляет панель
+  // в вечном ожидании модели, которой уже неоткуда взяться.
+  const seconds = Math.max(1, Math.round(startupTimeoutMs / 1000));
+  const giveUp = `echo ${quoteFishArg(`${agent.pane}: сервер модели не поднялся за ${seconds} с — причина в левой панели.`)} >&2; exit 1`;
+  const wait = `set -l deadline (math (date +%s) + ${seconds}); while not curl -fsS http://127.0.0.1:${port}/v1/models 2>/dev/null | string replace -ar ${quoteFishArg("\\s")} '' | string match -q -- ${expectedModel}; if test (date +%s) -gt $deadline; ${giveUp}; end; sleep 0.5; end; exec ${quoteFishArg(launcher)}`;
   return `layout {\n    pane split_direction="vertical" {\n        pane name="Local model server" size="30%" command=${JSON.stringify(server)}\n        pane name=${JSON.stringify(agent.pane)} size="70%" focus=true command="fish" {\n            args "-lc" ${JSON.stringify(wait)}\n        }\n    }\n}\n`;
 }
 
