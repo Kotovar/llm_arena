@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -7,8 +7,9 @@ import { createServer, type Server } from "node:http";
 import { renderPiContextSync, renderPiLauncher } from "./external-launcher.js";
 import { buildPiModelsConfig } from "./runners/pi-provider.js";
 
-// Два скрипта — две обвязки над одним и тем же сервером модели. Общего тела у них намеренно нет:
-// команда, которую человек набирает руками, важнее экономии двадцати пяти строк fish.
+// Две обвязки над одним и тем же сервером модели — один скрипт: различий между ними три, а общего
+// тела сорок строк. Обвязку выбирает имя, по которому скрипт вызвали, поэтому omp-local и pi-local
+// остаются отдельными командами для человека и отдельными симлинками в scripts/.
 describe.each([
   { flavor: "omp-local", other: "pi-local", agent: "active-omp.fish", extra: [] as string[] },
   { flavor: "pi-local", other: "omp-local", agent: "active-pi.fish", extra: [join("pi-local", "models.json"), join("pi-local", "sync-context.mjs")] },
@@ -22,7 +23,8 @@ describe.each([
       mkdirSync(join(root, "scripts"));
       mkdirSync(bin);
       const launcher = join(root, "scripts", flavor);
-      cpSync(resolve(`../../scripts/${flavor}`), launcher);
+      // Копируем общий файл под именем обвязки: имя вызова — это и есть её выбор.
+      cpSync(resolve("../../scripts/agent-local"), launcher);
       chmodSync(launcher, 0o755);
       for (const filename of ["active-model.fish", agent]) {
         writeFileSync(join(exports, filename), "#!/usr/bin/env fish\n");
@@ -65,7 +67,8 @@ describe.each([
       mkdirSync(join(root, "scripts"));
       mkdirSync(bin);
       const launcher = join(root, "scripts", flavor);
-      cpSync(resolve(`../../scripts/${flavor}`), launcher);
+      // Копируем общий файл под именем обвязки: имя вызова — это и есть её выбор.
+      cpSync(resolve("../../scripts/agent-local"), launcher);
       chmodSync(launcher, 0o755);
       for (const filename of ["active-model.fish", agent]) {
         writeFileSync(join(exports, filename), "#!/usr/bin/env fish\n");
@@ -110,7 +113,8 @@ describe.each([
       mkdirSync(join(root, "scripts"));
       mkdirSync(bin);
       const launcher = join(root, "scripts", flavor);
-      cpSync(resolve(`../../scripts/${flavor}`), launcher);
+      // Копируем общий файл под именем обвязки: имя вызова — это и есть её выбор.
+      cpSync(resolve("../../scripts/agent-local"), launcher);
       chmodSync(launcher, 0o755);
       for (const filename of ["active-model.fish", agent]) {
         writeFileSync(join(exports, filename), "#!/usr/bin/env fish\n");
@@ -150,7 +154,8 @@ describe.each([
       mkdirSync(join(root, "scripts"));
       mkdirSync(bin);
       const launcher = join(root, "scripts", flavor);
-      cpSync(resolve(`../../scripts/${flavor}`), launcher);
+      // Копируем общий файл под именем обвязки: имя вызова — это и есть её выбор.
+      cpSync(resolve("../../scripts/agent-local"), launcher);
       chmodSync(launcher, 0o755);
       for (const filename of ["active-model.fish", agent]) {
         writeFileSync(join(exports, filename), "#!/usr/bin/env fish\n");
@@ -195,7 +200,8 @@ describe.each([
       mkdirSync(join(root, "scripts"));
       mkdirSync(bin);
       const launcher = join(root, "scripts", flavor);
-      cpSync(resolve(`../../scripts/${flavor}`), launcher);
+      // Копируем общий файл под именем обвязки: имя вызова — это и есть её выбор.
+      cpSync(resolve("../../scripts/agent-local"), launcher);
       chmodSync(launcher, 0o755);
       for (const filename of ["active-model.fish", agent]) {
         writeFileSync(join(exports, filename), "#!/usr/bin/env fish\n");
@@ -225,6 +231,11 @@ describe.each([
     }
   });
 
+  // Имя вызова выбирает обвязку: копия вместо симлинка разъехалась бы с общим файлом молча.
+  it("остаётся симлинком на общий скрипт", () => {
+    expect(readlinkSync(resolve(`../../scripts/${flavor}`))).toBe("agent-local");
+  });
+
   // Без экспортов скрипт не должен молча открывать пустой zellij.
   it("отказывается стартовать без экспортов", () => {
     const root = mkdtempSync(join(tmpdir(), `llm-arena-${flavor}-empty-`));
@@ -232,7 +243,8 @@ describe.each([
       mkdirSync(join(root, ".data", "exports"), { recursive: true });
       mkdirSync(join(root, "scripts"));
       const launcher = join(root, "scripts", flavor);
-      cpSync(resolve(`../../scripts/${flavor}`), launcher);
+      // Копируем общий файл под именем обвязки: имя вызова — это и есть её выбор.
+      cpSync(resolve("../../scripts/agent-local"), launcher);
       chmodSync(launcher, 0o755);
 
       const result = spawnSync("fish", ["--no-config", launcher], { encoding: "utf8" });
@@ -436,5 +448,24 @@ it.each([
   } finally {
     await closeServer(session.server);
     rmSync(session.root, { recursive: true, force: true });
+  }
+});
+
+// Скрипт узнаёт обвязку только по имени вызова: под чужим именем он не должен угадывать.
+it("отказывается работать под именем, которое не называет обвязку", () => {
+  const root = mkdtempSync(join(tmpdir(), "llm-arena-unknown-flavor-"));
+  try {
+    mkdirSync(join(root, ".data", "exports"), { recursive: true });
+    mkdirSync(join(root, "scripts"));
+    const launcher = join(root, "scripts", "shiny-local");
+    cpSync(resolve("../../scripts/agent-local"), launcher);
+    chmodSync(launcher, 0o755);
+
+    const result = spawnSync("fish", ["--no-config", launcher], { encoding: "utf8" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("omp-local или pi-local");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

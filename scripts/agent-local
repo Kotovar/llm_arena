@@ -1,0 +1,109 @@
+#!/usr/bin/env fish
+
+# Один файл на две обвязки: различий между ними три — имя, набор обязательных экспортов и нужда
+# в node, — а общего тела сорок строк. Имя берём из пути вызова: scripts/omp-local и
+# scripts/pi-local это симлинки сюда, и `status filename` сохраняет имя ссылки, по которой
+# запустили, тогда как realpath ведёт к этому файлу.
+set -l flavor (path basename (status filename))
+set -l script_path (realpath (status filename))
+set -l arena_root (path resolve (path dirname "$script_path")/..)
+set -l exports "$arena_root/.data/exports"
+
+set -l other
+set -l agent
+set -l extra
+set -l needs_node 0
+switch $flavor
+    case omp-local
+        set other pi-local
+        set agent active-omp.fish
+    case pi-local
+        set other omp-local
+        set agent active-pi.fish
+        set extra pi-local/models.json pi-local/sync-context.mjs
+        set needs_node 1
+    case '*'
+        echo "agent-local: запускайте по имени обвязки — omp-local или pi-local." >&2
+        exit 1
+end
+
+set -l missing 0
+for file in active-model.fish $agent
+    if not test -x "$exports/$file"
+        set missing 1
+    end
+end
+for file in "$flavor.kdl" $extra
+    if not test -f "$exports/$file"
+        set missing 1
+    end
+end
+if test $missing -eq 1
+    echo "$flavor: сначала выберите модель и нажмите «Использовать в терминале» в LLM Arena." >&2
+    exit 1
+end
+
+if not command -q zellij
+    echo "$flavor: команда zellij не найдена." >&2
+    exit 1
+end
+
+# Проверяем здесь, а не в правой панели: иначе неудачный запуск успел бы поднять llama-server
+# и оставить файл сессии.
+if test $needs_node -eq 1; and not command -q node
+    echo "$flavor: команда node не найдена — окно контекста не синхронизировать." >&2
+    exit 1
+end
+
+set -l port (string match -rg 'http://127\.0\.0\.1:([0-9]+)/v1/models' < "$exports/$flavor.kdl")
+
+# Обе обвязки делят один llama-server и один порт: второй сеанс поднял бы сервер на занятом
+# порту и молча остался бы без своей левой панели.
+set -l other_session_file "$exports/$other.session"
+if test -f "$other_session_file"
+    set -l other_session (string trim < "$other_session_file")
+    # Живой сеанс отличаем от завершённого: zellij перечисляет и мёртвые, помечая их EXITED.
+    set -l other_line (zellij list-sessions --no-formatting 2>/dev/null | string match -- "$other_session *")
+    if test -n "$other_session"; and test -n "$other_line"; and not string match -q '*EXITED*' -- "$other_line"
+        # Мешает не сам сеанс, а занятый им сервер модели: отсоединённый пустой сеанс не помеха.
+        if test -n "$port"; and curl -fsS --max-time 1 "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1
+            echo "$flavor: сеанс $other ($other_session) держит сервер модели на порту $port — обвязки делят один llama-server." >&2
+            echo "$flavor: закрытие окна лишь отсоединяет сеанс; завершите его: zellij delete-session --force $other_session" >&2
+            exit 1
+        end
+    end
+end
+
+set -l session_file "$exports/$flavor.session"
+set -l port_retries 1
+if test -f "$session_file"
+    set -l previous_session (string trim < "$session_file")
+    if string match -rq "^$flavor-[0-9]+-[0-9]+\$" -- "$previous_session"
+        zellij delete-session --force "$previous_session" >/dev/null 2>&1
+        # Убитый сервер освобождает порт не мгновенно — только в этом случае его и ждём.
+        set port_retries 20
+    end
+end
+
+# Чужой процесс на порту: llama-server упадёт на bind, а правая панель будет молча ждать модель,
+# которой неоткуда взяться.
+if test -n "$port"; and command -q ss
+    set -l busy 1
+    for attempt in (seq $port_retries)
+        if test -z (ss -ltnH "sport = :$port" 2>/dev/null | string collect)
+            set busy 0
+            break
+        end
+        sleep 0.25
+    end
+    if test $busy -eq 1
+        echo "$flavor: порт $port занят другим процессом — освободите его или смените порт в настройках LLM Arena." >&2
+        exit 1
+    end
+end
+
+set -l session_name "$flavor-"(date +%s)"-"$fish_pid
+printf '%s\n' "$session_name" > "$session_file"
+# on-force-close quit: иначе закрытие окна лишь отсоединяет сеанс, а llama-server продолжает
+# держать всю VRAM и блокирует прогоны в самой Arena.
+exec zellij --session "$session_name" --new-session-with-layout "$exports/$flavor.kdl" options --on-force-close quit
