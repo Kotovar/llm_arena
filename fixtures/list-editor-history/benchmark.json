@@ -2,6 +2,7 @@
   "id": "list-editor-history",
   "name": "Implement undo and redo history",
   "instructions": "Work in the current directory. The project runs on Node.js 24 and in the browser without installing anything: plain ES modules, no build step. Do not delete server.mjs — the original and the result are opened through it. Run the existing checks before you finish.",
+  "reproduction": "Переименуйте первую задачу, затем нажмите «Отменить» и «Повторить». В исходном состоянии под списком видно, что история не реализована.",
   "checks": [
     {
       "id": "tests",

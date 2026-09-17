@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateModelStats,
   attemptMetrics,
+  benchmarkRunSummary,
   mean,
   median,
   type MetricRow,
@@ -47,6 +48,34 @@ describe("числовые помощники", () => {
     expect(resultMetric(metrics(null, 1_000), "generationTokensPerSecond")).toBeNull();
     expect(resultMetric(null, "totalDurationMs")).toBeNull();
     expect(resultMetric("{сломано", "totalDurationMs")).toBeNull();
+  });
+});
+
+describe("сводка benchmark-прогона", () => {
+  it("считает процент и цену только по подтверждённым успехам, сохраняя все исходы", () => {
+    const pass = { verdict: "pass", reason: null, human: true, counted: true } as const;
+    const waiting = { verdict: null, reason: null, human: false, counted: true } as const;
+    const failed = { verdict: "fail", reason: "timeout", human: false, counted: true } as const;
+    const excluded = { verdict: null, reason: null, human: false, counted: false } as const;
+    const summary = benchmarkRunSummary([
+      { outcome: "completed", verdict: pass, resultJson: JSON.stringify({ metrics: { outputTokens: { value: 125 }, totalDurationMs: { value: 1_001 } } }) },
+      { outcome: "completed", verdict: waiting, resultJson: metrics(20, 2_000) },
+      { outcome: "timeout", verdict: failed, resultJson: metrics(30, 3_000) },
+      { outcome: "aborted_user", verdict: excluded, resultJson: metrics(40, 4_000) },
+    ]);
+
+    expect(summary).toMatchObject({
+      solved: 1,
+      counted: 3,
+      waiting: 1,
+      solveRate: 33.3,
+      outcomes: { completed: 2, timeout: 1, aborted_user: 1 },
+      successful: { count: 1, averageOutputTokens: 125, averageDurationMs: 1_001 },
+    });
+  });
+
+  it("у прогона без задач нет процента, а не ноль", () => {
+    expect(benchmarkRunSummary([])).toMatchObject({ solved: 0, counted: 0, solveRate: null, successful: { count: 0, averageOutputTokens: null, averageDurationMs: null } });
   });
 });
 

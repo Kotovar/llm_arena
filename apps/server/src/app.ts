@@ -53,6 +53,7 @@ import { type SliceQuery, tagSliceSchema } from "./routes/slice.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 import { readGpuInfo } from "./system-metrics.js";
 import { loadOwnerId, stopOwnedLlamaServers } from "./lifecycle.js";
+import { benchmarkRunSummary } from "./metrics.js";
 
 type EngineLike = {
   wake(): void;
@@ -434,6 +435,17 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!fixture) return at("fixture-missing");
     return fixtureRevision(fixture.source) === item.fixtureRevision ? [] : at("fixture");
   });
+  const benchmarkModel = (run: { model_id: string; model_ref: string | null }) => ({
+    id: run.model_id,
+    name: store.getModel(run.model_id)?.name ?? run.model_ref ?? run.model_id.slice(0, 8),
+  });
+  const benchmarkEnvironment = (run: { runner_id: string; use_omp_agent: number }) => {
+    const runner = config.runners.find((item) => item.id === run.runner_id);
+    return { runnerId: run.runner_id, runnerName: runner?.name ?? run.runner_id, useOmpAgent: Boolean(run.use_omp_agent) };
+  };
+  const benchmarkSummaryFor = (runId: string) => benchmarkRunSummary(store.listTaskRuns(runId).map((taskRun) => ({
+    outcome: taskRunOutcome(taskRun), verdict: taskVerdict(taskRun), resultJson: taskRun.result_json,
+  })));
 
   app.get("/api/suites", async () => store.listSuites());
   app.post("/api/suites", async (request, reply) => reply.code(201).send(store.createSuite(parse(createSuiteSchema, request.body).name)));
@@ -447,13 +459,65 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return reply.code(201).send(store.createSuiteRevision(request.params.id, currentSuiteItems(taskIds)));
   });
   app.get<{ Params: { id: string } }>("/api/suites/:id/revisions", async (request) => store.listSuiteRevisions(request.params.id));
+  app.get<{ Querystring: { suiteRevisionId?: string; modelId?: string; status?: string } }>("/api/benchmark/runs", async (request) => {
+    const { suiteRevisionId, modelId, status } = request.query;
+    return store.listRuns().filter((run) => run.suite_revision_id)
+      .filter((run) => !suiteRevisionId || run.suite_revision_id === suiteRevisionId)
+      .filter((run) => !modelId || run.model_id === modelId)
+      .filter((run) => !status || run.status === status)
+      .map((run) => {
+        const revision = store.getSuiteRevision(run.suite_revision_id!);
+        const suite = revision ? store.getSuite(revision.suiteId) : undefined;
+        return {
+          id: run.id,
+          status: run.status,
+          createdAt: run.created_at,
+          suite: revision ? { revisionId: revision.id, name: suite?.name ?? "Набор", revision: revision.revision, contentHash: revision.contentHash } : null,
+          model: benchmarkModel(run),
+          environment: benchmarkEnvironment(run),
+          summary: benchmarkSummaryFor(run.id),
+        };
+      });
+  });
+  app.get<{ Querystring: { runIds?: string } }>("/api/benchmark/compare", async (request) => {
+    const runIds = (request.query.runIds ?? "").split(",").filter(Boolean);
+    if (runIds.length < 2 || runIds.length > 8 || new Set(runIds).size !== runIds.length) throw new Error("Choose from two to eight distinct benchmark runs");
+    const runs = runIds.map((id) => store.getRun(id));
+    if (runs.some((run) => !run || !run.suite_revision_id)) throw new Error("Every run must belong to a suite revision");
+    const suiteRevisionId = runs[0]!.suite_revision_id!;
+    if (runs.some((run) => run!.suite_revision_id !== suiteRevisionId)) throw new Error("Benchmark comparison requires one suite revision");
+    const revision = store.getSuiteRevision(suiteRevisionId);
+    if (!revision) throw new Error("Suite revision not found");
+    const environments = new Set(runs.map((run) => `${run!.runner_id}:${run!.use_omp_agent}`));
+    return {
+      suite: { revisionId: revision.id, name: store.getSuite(revision.suiteId)?.name ?? "Набор", revision: revision.revision, contentHash: revision.contentHash },
+      environmentWarning: environments.size > 1,
+      // Строки таблицы — из плана ревизии: у прерванного прогона выполненных задач меньше.
+      tasks: revision.items.map((item, position) => ({ position, name: store.getTaskRevision(item.taskRevisionId)?.name ?? `Задача ${position + 1}` })),
+      runs: runs.map((run) => ({
+        id: run!.id,
+        status: run!.status,
+        createdAt: run!.created_at,
+        model: benchmarkModel(run!),
+        environment: benchmarkEnvironment(run!),
+        summary: benchmarkSummaryFor(run!.id),
+        tasks: store.listTaskRuns(run!.id).map((taskRun) => ({
+          position: taskRun.position,
+          name: store.getTaskRevision(taskRun.task_revision_id)?.name ?? `Задача ${taskRun.position + 1}`,
+          status: taskRun.status,
+          outcome: taskRunOutcome(taskRun),
+          verdict: taskVerdict(taskRun),
+        })),
+      })),
+    };
+  });
   app.get<{ Params: { id: string } }>("/api/benchmark/runs/:id", async (request, reply) => {
     const run = store.getRun(request.params.id);
     if (!run) return reply.code(404).send({ message: "Run not found" });
     if (!run.suite_revision_id) return reply.code(400).send({ message: "Этот прогон не относится к набору задач" });
     const revision = store.getSuiteRevision(run.suite_revision_id);
     const planned = store.listRunTasks(run.id);
-    const tasks = store.listTaskRuns(run.id).map((taskRun) => {
+    const summaryRows = store.listTaskRuns(run.id).map((taskRun) => {
       const snapshot = JSON.parse(taskRun.snapshot_json) as { fixture?: { id?: string; preview?: unknown } };
       const fixture = config.fixtures.find((item) => item.id === snapshot.fixture?.id);
       return {
@@ -477,13 +541,17 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         preview: { original: Boolean(fixture?.preview), result: Boolean(snapshot.fixture?.preview) },
         startedAt: taskRun.started_at,
         finishedAt: taskRun.finished_at,
+        resultJson: taskRun.result_json,
       };
     });
+    const summary = benchmarkRunSummary(summaryRows.map((task) => ({ outcome: task.outcome, verdict: task.verdict, resultJson: task.resultJson })));
+    const tasks = summaryRows.map(({ resultJson: _, ...task }) => task);
     return {
       run: withPublicError(run),
       suite: revision ? { revisionId: revision.id, revision: revision.revision, contentHash: revision.contentHash } : null,
       // Запланировано против выполненного: прерванный прогон не должен выглядеть завершённым.
       plannedCount: planned.length,
+      summary,
       tasks,
     };
   });

@@ -40,6 +40,20 @@ const aborted = {
   verdict: { verdict: null, reason: null, human: false, counted: false, comment: "" },
 };
 
+function benchmarkSummary() {
+  const rows = tasks as Array<typeof waiting>;
+  const counted = rows.filter((task) => task.verdict.counted);
+  const solved = counted.filter((task) => task.verdict.verdict === "pass");
+  return {
+    solved: solved.length,
+    counted: counted.length,
+    waiting: counted.filter((task) => task.verdict.verdict === null).length,
+    solveRate: counted.length ? Math.round((solved.length / counted.length) * 1_000) / 10 : null,
+    outcomes: rows.reduce<Record<string, number>>((outcomes, task) => ({ ...outcomes, [task.outcome]: (outcomes[task.outcome] ?? 0) + 1 }), {}),
+    successful: { count: solved.length, averageOutputTokens: solved.length ? 4_100 : null, averageDurationMs: solved.length ? 138_000 : null },
+  };
+}
+
 beforeEach(() => {
   verdicts = [];
   previewStops = [];
@@ -51,6 +65,7 @@ beforeEach(() => {
         run: { id: "run-1", status: "completed", model_id: "model-1", created_at: "2026-09-03T09:00:00.000Z" },
         suite: { revisionId: "rev-1", revision: 1, contentHash: "a".repeat(64) },
         plannedCount: 4,
+        summary: benchmarkSummary(),
         tasks,
       });
     }
@@ -72,7 +87,7 @@ beforeEach(() => {
     }
     if (url.startsWith("/api/task-runs/")) {
       return json({
-        snapshot_json: JSON.stringify({ task: { name: "Гонка поиска", prompt: "Найди причину и исправь" }, fixture: { id: "stale-search-results" } }),
+        snapshot_json: JSON.stringify({ task: { name: "Гонка поиска", prompt: "Найди причину и исправь" }, fixture: { id: "stale-search-results", reproduction: "Введите a, затем ab." } }),
         result_json: JSON.stringify({
           finalAnswer: "Добавил номер запроса",
           checks: [
@@ -96,11 +111,13 @@ afterEach(() => {
 
 describe("прогон набора", () => {
   it("не спрашивает человека там, где причина видна из исхода", async () => {
+    const user = userEvent.setup();
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
     await screen.findByRole("heading", { name: /Гонка поиска/u });
 
     const loopedRow = screen.getByRole("heading", { name: /Парсер/u }).closest("section")!;
-    expect(within(loopedRow).getByText("FAIL — Зациклился")).toBeTruthy();
+    await user.click(within(loopedRow).getByRole("button", { name: "Разобрать" }));
+    expect(within(loopedRow).getAllByText("FAIL — Зациклился")).toHaveLength(2);
     expect(within(loopedRow).queryByRole("button", { name: "PASS" })).toBeNull();
     // Последнее слово всё равно за человеком: упавшая проверка иногда объясняется не моделью.
     expect(within(loopedRow).getByRole("button", { name: "Всё же PASS" })).toBeTruthy();
@@ -145,10 +162,12 @@ describe("прогон набора", () => {
     expect(hidden.textContent).toContain("это и требовалось");
     expect(within(card).getByText(/Существующие тесты/u)).toBeTruthy();
     expect(within(card).getByText(/Смотреть надо не на проверки/u)).toBeTruthy();
+    expect(within(card).getByText(/Введите a, затем ab/u)).toBeTruthy();
 
     await user.click(within(card).getByRole("button", { name: "Показать изменения" }));
 
     expect(await within(card).findByText(/let latest = 0/u)).toBeTruthy();
+    expect(card.querySelector(".diff-added")).toBeTruthy();
   });
 
   it("предупреждает, когда задача шла без исходного проекта", async () => {
@@ -164,18 +183,35 @@ describe("прогон набора", () => {
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
     const card = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
 
-    await user.click(await within(card).findByRole("button", { name: "Запустить оригинал" }));
-    await user.click(within(card).getByRole("button", { name: "Запустить результат" }));
+    await user.click(await within(card).findByRole("button", { name: "Сравнить до и после" }));
 
     // Оба превью живут одновременно: иначе «до» и «после» не сравнить.
     expect(await screen.findByTitle("Preview: До модели")).toBeTruthy();
     expect(screen.getByTitle("Preview: После модели")).toBeTruthy();
 
-    const before = screen.getByTitle("Preview: До модели").closest("section")!;
-    await user.click(within(before).getByRole("button", { name: "Остановить preview" }));
+    await user.click(within(card).getByRole("button", { name: "Остановить сравнение" }));
 
-    // Результат адресуется своей версией, иначе аренда не продлилась бы и превью умерло само.
-    expect(previewStops).toEqual([{ fixtureId: "stale-search-results" }]);
+    // Обе стороны адресуются отдельно: иначе можно было бы остановить соседнее превью.
+    await waitFor(() => expect(previewStops).toEqual([
+      { fixtureId: "stale-search-results" },
+      { taskRunId: "task-run-1", resultSha: "b".repeat(40) },
+    ]));
+  });
+
+  it("переходит к следующей неоценённой задаче, не раскрывая все карточки", async () => {
+    const user = userEvent.setup();
+    tasks = [waiting, { ...waiting, id: "task-run-4", position: 3, name: "Вторая проверка" }, looped];
+    await renderInApp(<BenchmarkRunPage runId="run-1" />);
+
+    const first = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
+    const second = screen.getByRole("heading", { name: /Вторая проверка/u }).closest("section")!;
+    expect(within(first).getByRole("button", { name: "Скрыть разбор" })).toBeTruthy();
+    expect(within(second).getByRole("button", { name: "Разобрать" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "К следующей неоценённой" }));
+
+    expect(within(first).getByRole("button", { name: "Разобрать" })).toBeTruthy();
+    expect(within(second).getByRole("button", { name: "Скрыть разбор" })).toBeTruthy();
   });
 
   it("не предлагает запуск там, где он обречён", async () => {
@@ -206,8 +242,9 @@ describe("прогон набора", () => {
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
 
     // Ручная остановка вне процентов, поэтому знаменатель два, а не три.
-    expect(await screen.findByText("1 / 2")).toBeTruthy();
-    expect(screen.getByText(/50%/u)).toBeTruthy();
+    expect(await screen.findByText("1 / 2 · 50%")).toBeTruthy();
+    expect(screen.getByText(/4.?100/u)).toBeTruthy();
+    expect(screen.getByText("Распределение исходов")).toBeTruthy();
   });
 
   it("показывает, сколько задач осталось от запланированных", async () => {

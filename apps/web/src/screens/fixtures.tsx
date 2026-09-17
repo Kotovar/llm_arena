@@ -85,6 +85,7 @@ function FixtureCard({ fixture }: { fixture: Fixture }) {
   </div>}>
     <div className="stack">
       <p><span className="mono">{fixture.id}</span>{hidden ? ` · ${hidden} скрытых проверок` : " · скрытых проверок нет"}</p>
+      {fixture.reproduction ? <p className="benchmark-reproduction"><strong>Как проверить:</strong> {fixture.reproduction}</p> : null}
       {!fixture.preview ? <small>У этого fixture нет запускаемого приложения: проблема видна по проверкам, а не в браузере.</small> : null}
       {startPreview.error ? <p className="error">{startPreview.error.message}</p> : null}
       {verify.error ? <p className="error">{verify.error.message}</p> : null}

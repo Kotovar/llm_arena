@@ -7,6 +7,7 @@ import { BenchmarkPage } from "./benchmark.js";
 
 let revisionBodies: unknown[];
 let drift: Array<{ taskRevisionId: string; reason: string }>;
+let historyRuns: unknown[];
 
 const task = {
   id: "task-1",
@@ -38,6 +39,7 @@ const suite = {
 beforeEach(() => {
   revisionBodies = [];
   drift = [];
+  historyRuns = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
     if (url === "/api/suites") {
@@ -45,6 +47,7 @@ beforeEach(() => {
       return json([suite]);
     }
     if (url === "/api/tasks") return json([task, second]);
+    if (url === "/api/benchmark/runs") return json(historyRuns);
     // Экран предлагает запуск в фиксированном окружении, поэтому ему нужны модель и профиль.
     if (url === "/api/models") return json([{ id: "model-1", name: "Локальная", kind: "local-gguf", capabilities: { toolUse: true, vision: false, reasoning: false } }]);
     if (url === "/api/runners") return json([{ id: "pi-local", name: "pi-среда", kind: "pi", exec: ["pi"] }]);
@@ -95,12 +98,37 @@ describe("наборы задач", () => {
     await screen.findByText("Гонка поиска");
 
     await user.click(screen.getByRole("button", { name: "Изменить состав" }));
-    const picker = screen.getByRole("group", { name: /Состав набора/u });
+    const picker = screen.getByRole("group", { name: /Состав бенчмарка/u });
     // Уже входящий в набор промпт отмечен заранее: состав правят, а не собирают с нуля.
     expect((within(picker).getByRole("checkbox", { name: /Гонка поиска/u }) as HTMLInputElement).checked).toBe(true);
     await user.click(within(picker).getByRole("checkbox", { name: /Отмена загрузки/u }));
     await user.click(screen.getByRole("button", { name: "Зафиксировать ревизию" }));
 
     expect(revisionBodies).toEqual([{ taskIds: ["task-1", "task-2"] }]);
+  });
+
+  it("фильтрует историю и собирает сравнение из трёх запусков одной ревизии", async () => {
+    const user = userEvent.setup();
+    const run = (id: string, modelId: string, name: string, omp = false) => ({
+      id,
+      status: "completed",
+      createdAt: "2026-09-03T00:00:00.000Z",
+      suite: { revisionId: "suite-revision-1", name: "Coding General", revision: 1, contentHash: "a".repeat(64) },
+      model: { id: modelId, name },
+      environment: { runnerId: omp ? "omp" : "pi-local", runnerName: omp ? "OMP" : "pi-среда", useOmpAgent: omp },
+      summary: { solved: 1, counted: 1, waiting: 0, solveRate: 100, successful: { averageOutputTokens: 100, averageDurationMs: 1_000 } },
+    });
+    historyRuns = [run("run-1", "model-1", "Alpha"), run("run-2", "model-2", "Beta"), run("run-3", "model-3", "Gamma", true)];
+    await renderInApp(<BenchmarkPage />);
+    await screen.findByRole("link", { name: "Alpha" });
+
+    await user.selectOptions(screen.getByLabelText("Модель в истории"), "model-2");
+    expect(screen.queryByRole("link", { name: "Alpha" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Beta" })).toBeTruthy();
+
+    await user.selectOptions(screen.getByLabelText("Модель в истории"), "");
+    for (const name of ["Alpha", "Beta", "Gamma"]) await user.click(screen.getByRole("checkbox", { name: `Выбрать ${name} для сравнения` }));
+    const compare = screen.getByRole("link", { name: "Сравнить: 3" });
+    expect(compare.getAttribute("href")).toMatch(/run-1.*run-2.*run-3/u);
   });
 });

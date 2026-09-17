@@ -13,6 +13,7 @@ import { LeaderboardPage } from "./screens/leaderboard.js";
 import { ModelsPage } from "./screens/models.js";
 import { RunDetail, RunsPage } from "./screens/results.js";
 import { BenchmarkPage } from "./screens/benchmark.js";
+import { BenchmarkComparePage } from "./screens/benchmark-compare.js";
 import { BenchmarkRunPage } from "./screens/benchmark-run.js";
 import { FixturesPage } from "./screens/fixtures.js";
 import { SettingsPage } from "./screens/settings.js";
@@ -187,12 +188,18 @@ const batchRoute = createRoute({
   // Без `id` страница показывает форму, с ним — прогресс уже созданного батча.
   validateSearch: (search: Record<string, unknown>) => ({ ...(typeof search.id === "string" ? { id: search.id } : {}) } as { id?: string }),
 });
+const benchmarkCompareRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/benchmark/compare",
+  component: BenchmarkComparePage,
+  validateSearch: (search: Record<string, unknown>) => ({ ...(typeof search.runIds === "string" ? { runIds: search.runIds } : {}) } as { runIds?: string }),
+});
 const benchmarkRoute = createRoute({ getParentRoute: () => rootRoute, path: "/benchmark", component: BenchmarkPage });
 function BenchmarkRunRoute() { const { runId } = benchmarkRunRoute.useParams(); return <BenchmarkRunPage runId={runId} />; }
 const benchmarkRunRoute = createRoute({ getParentRoute: () => rootRoute, path: "/benchmark/runs/$runId", component: BenchmarkRunRoute });
 const fixturesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/fixtures", component: FixturesPage });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, analyticsRoute, galleryRoute, batchRoute, benchmarkRoute, benchmarkRunRoute, fixturesRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, tasksRoute, modelsRoute, runsRoute, runRoute, leaderboardRoute, compareRoute, analyticsRoute, galleryRoute, batchRoute, benchmarkCompareRoute, benchmarkRunRoute, benchmarkRoute, fixturesRoute, settingsRoute]);
 const router = createRouter({ routeTree, defaultPreload: "intent" });
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }
 

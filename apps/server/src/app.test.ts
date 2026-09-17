@@ -67,7 +67,63 @@ describe("REST API", () => {
     expect(store.getTaskRun(taskRun.id)?.broken_at).toBeNull();
 
     const benchmark = await app.inject({ method: "GET", url: `/api/benchmark/runs/${run.id}` });
-    expect(benchmark.json()).toMatchObject({ plannedCount: 1, suite: { revision: 1 }, tasks: [{ name: "Гонка", outcome: "completed" }] });
+    expect(benchmark.json()).toMatchObject({
+      plannedCount: 1,
+      suite: { revision: 1 },
+      summary: { solved: 0, counted: 1, waiting: 1, outcomes: { completed: 1 } },
+      tasks: [{ name: "Гонка", outcome: "completed" }],
+    });
+    await app.close();
+    store.close();
+  });
+
+  it("сводит в таблицу только прогоны одной ревизии и помечает другую обвязку", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-benchmark-compare-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+    const task = store.createTask({ name: "Порядок", kind: "prompt", prompt: "Answer", tags: [] });
+    const other = store.createTask({ name: "Другая задача", kind: "prompt", prompt: "Answer", tags: [] });
+    const suite = store.createSuite("Coding General");
+    const revision = store.createSuiteRevision(suite.id, [{ taskRevisionId: task.currentRevision.id, fixtureId: null, fixtureRevision: null }]);
+    const otherRevision = store.createSuiteRevision(suite.id, [{ taskRevisionId: other.currentRevision.id, fixtureId: null, fixtureRevision: null }]);
+    const alpha = store.createModel({ name: "Alpha", kind: "cloud", provider: "openai", modelRef: "alpha" });
+    const beta = store.createModel({ name: "Beta", kind: "cloud", provider: "openai", modelRef: "beta" });
+    const gamma = store.createModel({ name: "Gamma", kind: "cloud", provider: "openai", modelRef: "gamma" });
+    const complete = async (modelId: string, runnerId: string, useOmpAgent = false) => {
+      const run = store.createRun({ suiteRevisionId: revision.id, modelId, executionProfileId: null, runnerId, resultMode: "text", useOmpAgent });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, run.id), {});
+      store.saveTaskRunResult(taskRun.id, { metrics: { outputTokens: { value: 100 }, totalDurationMs: { value: 1_000 } } }, "completed");
+      await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/verdict`, payload: { verdict: "pass" } });
+      store.updateRunStatus(run.id, "completed");
+      return run;
+    };
+    const first = await complete(alpha.id, "pi-local");
+    const second = await complete(beta.id, "pi-local");
+    const third = await complete(gamma.id, "omp", true);
+    const interrupted = store.createRun({ suiteRevisionId: revision.id, modelId: alpha.id, executionProfileId: null, runnerId: "pi-local", resultMode: "text" });
+
+    const history = await app.inject({ method: "GET", url: `/api/benchmark/runs?suiteRevisionId=${revision.id}&modelId=${beta.id}` });
+    expect(history.json()).toEqual([expect.objectContaining({ model: { id: beta.id, name: "Beta" }, summary: expect.objectContaining({ solveRate: 100 }) })]);
+
+    const compared = await app.inject({ method: "GET", url: `/api/benchmark/compare?runIds=${first.id},${second.id},${third.id}` });
+    expect(compared.json()).toMatchObject({
+      suite: { revisionId: revision.id, name: "Coding General" },
+      environmentWarning: true,
+      runs: [
+        { model: { name: "Alpha" }, tasks: [{ name: "Порядок", verdict: { verdict: "pass" } }] },
+        { model: { name: "Beta" } },
+        { model: { name: "Gamma" }, environment: { useOmpAgent: true } },
+      ],
+    });
+
+    const foreign = store.createRun({ suiteRevisionId: otherRevision.id, modelId: alpha.id, executionProfileId: null, runnerId: "pi-local", resultMode: "text" });
+    expect((await app.inject({ method: "GET", url: `/api/benchmark/compare?runIds=${first.id},${foreign.id}` })).statusCode).toBe(400);
+
+    // Прерванный прогон первым: строки всё равно из плана ревизии, а не из его пустого списка.
+    const partial = await app.inject({ method: "GET", url: `/api/benchmark/compare?runIds=${interrupted.id},${first.id}` });
+    expect(partial.json()).toMatchObject({ tasks: [{ position: 0, name: "Порядок" }], runs: [{ tasks: [] }, { tasks: [{ position: 0 }] }] });
     await app.close();
     store.close();
   });

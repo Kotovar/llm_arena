@@ -341,6 +341,8 @@ export const fixtureManifestSchema = z.object({
   name: z.string().trim().min(1),
   source: z.string().trim().min(1),
   instructions: z.string().trim().min(1).optional(),
+  /** Короткий сценарий, по которому человек видит разницу между исходным состоянием и результатом. */
+  reproduction: z.string().trim().min(1).optional(),
   install: commandSpecSchema.optional(),
   /** Проверки внутри workspace: модель их видит и может запускать сама. */
   checks: z.array(fixtureCheckSchema).default([]),

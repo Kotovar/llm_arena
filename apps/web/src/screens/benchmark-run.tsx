@@ -4,8 +4,8 @@ import { useState } from "react";
 import { api, apiText } from "../api.js";
 import { Empty, Page, Panel, Skeleton } from "../shell.js";
 import { ResultPreview, stopPreviewTarget, useStopPreviewOnUnmount } from "./results.js";
-import type { TaskOutcome } from "@llm-arena/shared";
-import { outcomeLabels } from "../ui.js";
+import { outcomeOrder, type TaskOutcome } from "@llm-arena/shared";
+import { formatDuration, outcomeLabels } from "../ui.js";
 
 type Verdict = {
   verdict: "pass" | "fail" | null;
@@ -32,6 +32,14 @@ type BenchmarkRun = {
   run: { id: string; status: string; model_id: string; created_at: string };
   suite: { revisionId: string; revision: number; contentHash: string } | null;
   plannedCount: number;
+  summary: {
+    solved: number;
+    counted: number;
+    waiting: number;
+    solveRate: number | null;
+    outcomes: Record<TaskOutcome, number>;
+    successful: { count: number; averageOutputTokens: number | null; averageDurationMs: number | null };
+  };
   tasks: BenchmarkTask[];
 };
 
@@ -105,6 +113,27 @@ function Previews({ taskRunId, fixtureId, available }: { taskRunId: string; fixt
     mutationFn: () => api<{ resultSha: string; url: string }>(`/task-runs/${taskRunId}/preview`, { method: "POST", body: "{}" }),
     onSuccess: (started) => setResult(started),
   });
+  const startComparison = useMutation({
+    mutationFn: async () => {
+      const [startedOriginal, startedResult] = await Promise.allSettled([
+        api<{ url: string }>(`/fixtures/${fixtureId}/preview`, { method: "POST" }),
+        api<{ resultSha: string; url: string }>(`/task-runs/${taskRunId}/preview`, { method: "POST", body: "{}" }),
+      ]);
+      if (startedOriginal.status === "fulfilled" && startedResult.status === "fulfilled") {
+        return { original: startedOriginal.value, result: startedResult.value };
+      }
+      // Если успела подняться только одна сторона, не оставляем процесс без управления в UI.
+      await Promise.allSettled([
+        startedOriginal.status === "fulfilled" ? stopPreviewTarget({ fixtureId: fixtureId! }) : undefined,
+        startedResult.status === "fulfilled" ? stopPreviewTarget({ taskRunId, resultSha: startedResult.value.resultSha }) : undefined,
+      ]);
+      throw new Error("Не удалось запустить оба превью. Попробуйте ещё раз.");
+    },
+    onSuccess: (started) => {
+      setOriginal(started.original.url);
+      setResult(started.result);
+    },
+  });
   const stopOriginal = useMutation({
     mutationFn: () => stopPreviewTarget({ fixtureId: fixtureId! }),
     onSuccess: () => setOriginal(undefined),
@@ -113,23 +142,51 @@ function Previews({ taskRunId, fixtureId, available }: { taskRunId: string; fixt
     mutationFn: () => stopPreviewTarget(resultTarget),
     onSuccess: () => setResult(undefined),
   });
+  const stopComparison = useMutation({
+    mutationFn: () => Promise.allSettled([
+      original ? stopPreviewTarget({ fixtureId: fixtureId! }) : undefined,
+      resultTarget ? stopPreviewTarget(resultTarget) : undefined,
+    ]),
+    onSuccess: () => {
+      setOriginal(undefined);
+      setResult(undefined);
+    },
+  });
   if (!fixtureId) return null;
   if (!available.original && !available.result) {
     return <p>У этого исходного проекта нет запускаемого приложения: смотреть глазами нечего, судить придётся по проверкам и изменениям.</p>;
   }
+  const comparisonAvailable = available.original && available.result;
+  const comparisonActive = Boolean(original && result);
   return <div className="stack">
     <div className="actions">
       <strong>Посмотреть своими глазами</strong>
-      {available.original ? <button type="button" onClick={() => startOriginal.mutate()} disabled={startOriginal.isPending || Boolean(original)}>{startOriginal.isPending ? "Запускаем…" : "Запустить оригинал"}</button> : null}
-      {available.result
+      {comparisonAvailable
+        ? <button type="button" className="primary" onClick={() => startComparison.mutate()} disabled={startComparison.isPending || Boolean(original) || Boolean(result)}>{startComparison.isPending ? "Запускаем сравнение…" : "Сравнить до и после"}</button>
+        : available.original ? <button type="button" onClick={() => startOriginal.mutate()} disabled={startOriginal.isPending || Boolean(original)}>{startOriginal.isPending ? "Запускаем…" : "Запустить оригинал"}</button> : null}
+      {!comparisonAvailable && available.result
         ? <button type="button" onClick={() => startResult.mutate()} disabled={startResult.isPending || Boolean(result)}>{startResult.isPending ? "Запускаем…" : "Запустить результат"}</button>
-        : <small>Результат этого прогона запустить нельзя: он получен до того, как у исходного проекта появилась команда запуска. Нужен новый прогон.</small>}
+        : !comparisonAvailable && !available.result ? <small>Результат этого прогона запустить нельзя: он получен до того, как у исходного проекта появилась команда запуска. Нужен новый прогон.</small> : null}
+      {comparisonActive ? <button type="button" onClick={() => stopComparison.mutate()} disabled={stopComparison.isPending}>{stopComparison.isPending ? "Останавливаем…" : "Остановить сравнение"}</button> : null}
     </div>
     {startOriginal.error ? <p className="error">Оригинал: {startOriginal.error.message}</p> : null}
     {startResult.error ? <p className="error">Результат: {startResult.error.message}</p> : null}
-    {original ? <ResultPreview url={original} target={{ fixtureId }} onClose={() => stopOriginal.mutate()} closing={stopOriginal.isPending} title="До модели" /> : null}
-    {result ? <ResultPreview url={result.url} target={{ taskRunId, resultSha: result.resultSha }} onClose={() => stopResult.mutate()} closing={stopResult.isPending} title="После модели" /> : null}
+    {startComparison.error ? <p className="error">{startComparison.error.message}</p> : null}
+    <div className={comparisonActive ? "benchmark-preview-pair" : "stack"}>
+      {original ? <ResultPreview url={original} target={{ fixtureId }} onClose={() => stopOriginal.mutate()} closing={stopOriginal.isPending} title="До модели" /> : null}
+      {result ? <ResultPreview url={result.url} target={{ taskRunId, resultSha: result.resultSha }} onClose={() => stopResult.mutate()} closing={stopResult.isPending} title="После модели" /> : null}
+    </div>
   </div>;
+}
+
+function HighlightedDiff({ diff }: { diff: string }) {
+  return <pre className="artifact artifact-diff">{diff.split("\n").map((line, index) => {
+    const kind = line.startsWith("+") && !line.startsWith("+++") ? "added"
+      : line.startsWith("-") && !line.startsWith("---") ? "removed"
+        : line.startsWith("@@") ? "hunk"
+          : line.startsWith("diff ") || line.startsWith("+++") || line.startsWith("---") ? "meta" : "plain";
+    return <span key={`${index}-${line}`} className={`diff-line diff-${kind}`}>{line || " "}</span>;
+  })}</pre>;
 }
 
 function TaskEvidence({ task }: { task: BenchmarkTask }) {
@@ -138,7 +195,7 @@ function TaskEvidence({ task }: { task: BenchmarkTask }) {
   const record = useQuery({ queryKey: ["task-run", task.id], queryFn: () => api<TaskRunRecord>(`/task-runs/${task.id}`) });
   if (record.isLoading) return <Skeleton rows={4} />;
   if (record.error) return <p className="error">{record.error.message}</p>;
-  const snapshot = JSON.parse(record.data!.snapshot_json) as { task?: { prompt?: string; name?: string }; fixture?: { id?: string } };
+  const snapshot = JSON.parse(record.data!.snapshot_json) as { task?: { prompt?: string; name?: string }; fixture?: { id?: string; reproduction?: string } };
   const result = JSON.parse(record.data!.result_json ?? "{}") as {
     finalAnswer?: string;
     checks?: Array<{ id: string; label: string; status: string; hidden: boolean }>;
@@ -160,6 +217,7 @@ function TaskEvidence({ task }: { task: BenchmarkTask }) {
   };
   return <div className="stack roomy">
     <WhatToCheck task={task} />
+    {snapshot.fixture?.reproduction ? <p className="benchmark-reproduction"><strong>Как проверить:</strong> {snapshot.fixture.reproduction}</p> : null}
     <Previews taskRunId={task.id} fixtureId={snapshot.fixture?.id} available={task.preview} />
     <details><summary><strong>Что требовалось</strong></summary><pre className="artifact">{snapshot.task?.prompt ?? "Текст задания не сохранился."}</pre></details>
     {checks.length
@@ -193,7 +251,7 @@ function TaskEvidence({ task }: { task: BenchmarkTask }) {
         {tokens ? <span className="mono">{Math.round(tokens / 100) / 10}k токенов</span> : null}
       </div>
       {changed.length ? <p className="mono">{changed.join(", ")}</p> : null}
-      {diff !== undefined ? <pre className="artifact">{diff}</pre> : null}
+      {diff !== undefined ? <HighlightedDiff diff={diff} /> : null}
     </div>
     <details><summary><strong>Что ответила модель</strong></summary><pre className="artifact">{result.finalAnswer || record.data!.error || "Ответа нет."}</pre></details>
   </div>;
@@ -227,18 +285,42 @@ function VerdictControl({ task, runId }: { task: BenchmarkTask; runId: string })
     </div>;
   }
   if (!task.verdict.counted) return <span className="status status-pending">вне процентов</span>;
-  return <form className="actions" onSubmit={(event) => { event.preventDefault(); save.mutate({ verdict: "fail", reason }); }}>
+  return <form className="benchmark-verdict-controls" onSubmit={(event) => { event.preventDefault(); save.mutate({ verdict: "fail", reason }); }}>
     <button type="button" className="primary" onClick={() => save.mutate({ verdict: "pass", reason: null })} disabled={save.isPending}>PASS</button>
-    <select value={reason} onChange={(event) => setReason(event.currentTarget.value)} aria-label="Причина провала">
-      {humanReasons.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-    </select>
+    <label>Причина
+      <select value={reason} onChange={(event) => setReason(event.currentTarget.value)} aria-label="Причина провала">
+        {humanReasons.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select>
+    </label>
+    <label>Комментарий
+      <input value={comment} onChange={(event) => setComment(event.currentTarget.value)} placeholder="Необязательно" aria-label="Комментарий к вердикту" />
+    </label>
     <button disabled={save.isPending}>FAIL</button>
-    <input value={comment} onChange={(event) => setComment(event.currentTarget.value)} placeholder="Комментарий" aria-label="Комментарий к вердикту" />
     {save.error ? <span className="error">{save.error.message}</span> : null}
   </form>;
 }
 
+function VerdictSummary({ task }: { task: BenchmarkTask }) {
+  if (task.status === "pending" || task.status === "running") return <span className="status status-running">выполняется</span>;
+  if (!task.verdict.counted) return <span className="status status-pending">вне процентов</span>;
+  if (task.verdict.verdict === "pass") return <span className="status status-completed">PASS</span>;
+  if (task.verdict.verdict === "fail") return <span className="status status-failed">FAIL — {reasonLabels[task.verdict.reason ?? ""] ?? task.verdict.reason}</span>;
+  return <span className="status status-pending">ждёт вердикта</span>;
+}
+
+function TaskPanel({ task, runId, expanded, onToggle }: { task: BenchmarkTask; runId: string; expanded: boolean; onToggle: () => void }) {
+  return <Panel
+    title={`${task.position + 1}. ${task.name}`}
+    action={<div className="actions"><VerdictSummary task={task} /><span className="mono">{outcomeLabels[task.outcome]} · {duration(task)}</span><button type="button" onClick={onToggle} aria-expanded={expanded}>{expanded ? "Скрыть разбор" : "Разобрать"}</button></div>}
+  >
+    {expanded
+      ? <div className="stack roomy"><TaskEvidence task={task} /><section className="benchmark-verdict"><strong>Вердикт</strong><VerdictControl task={task} runId={runId} /></section></div>
+      : <p className="benchmark-task-hint">Откройте разбор, чтобы увидеть проверки, изменения и дать вердикт.</p>}
+  </Panel>;
+}
+
 export function BenchmarkRunPage({ runId }: { runId: string }) {
+  const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const details = useQuery({
     queryKey: ["benchmark-run", runId],
     queryFn: () => api<BenchmarkRun>(`/benchmark/runs/${runId}`),
@@ -248,32 +330,31 @@ export function BenchmarkRunPage({ runId }: { runId: string }) {
   if (details.error) return <p className="error">{details.error.message}</p>;
   const data = details.data!;
   const counted = data.tasks.filter((task) => task.verdict.counted);
-  const solved = counted.filter((task) => task.verdict.verdict === "pass").length;
-  const waiting = counted.filter((task) => task.verdict.verdict === null).length;
+  const firstWaitingTask = counted.find((task) => task.verdict.verdict === null);
+  const activeTaskId = data.tasks.some((task) => task.id === selectedTaskId) ? selectedTaskId : firstWaitingTask?.id ?? data.tasks[0]?.id;
+  const activeIndex = data.tasks.findIndex((task) => task.id === activeTaskId);
+  const nextTask = [...data.tasks.slice(activeIndex + 1), ...data.tasks.slice(0, activeIndex)].find((task) => task.verdict.counted && task.verdict.verdict === null);
   return <Page
-    title="Прогон набора"
+    title="Прогон бенчмарка"
     eyebrow="Бенчмарк"
     intro="Каждая задача выполняется один раз. Технические неудачи видны без человека, остальное он проставляет сам: пройденные проверки сами по себе PASS не означают."
   >
-    <Panel title="Прогон" action={<Link to="/runs/$runId" params={{ runId }}>Подробности выполнения</Link>}>
+    <Panel title="Прогон" action={<div className="actions">{nextTask ? <button type="button" className="primary" onClick={() => setSelectedTaskId(nextTask.id)}>К следующей неоценённой</button> : null}<Link to="/runs/$runId" params={{ runId }}>Подробности выполнения</Link></div>}>
       <p>
         Состояние: {data.run.status}. Задач выполнено {data.tasks.length} из {data.plannedCount}.
-        {data.suite ? <> Ревизия набора {data.suite.revision}, <span className="mono">{data.suite.contentHash.slice(0, 12)}</span>.</> : null}
+        {data.suite ? <> Ревизия бенчмарка {data.suite.revision}, <span className="mono">{data.suite.contentHash.slice(0, 12)}</span>.</> : null}
       </p>
-      {/* Главная метрика и есть частное: составной балл её бы только запутал. */}
-      <p><strong>{solved} / {counted.length}</strong>{counted.length ? <> — {Math.round((solved / counted.length) * 100)}%</> : null}
-        {waiting ? <> · ждут вердикта: {waiting}</> : null}
-        {data.tasks.length < data.plannedCount ? <> · прогон не дошёл до конца, процент считается по выполненному</> : null}
-      </p>
+      <dl className="launch-summary benchmark-summary" aria-label="Сводка прогона">
+        <div><dt>Решено</dt><dd>{data.summary.solved} / {data.summary.counted} · {data.summary.solveRate ?? "—"}%</dd></div>
+        <div><dt>Ревью</dt><dd>ждут вердикта: {data.summary.waiting}</dd></div>
+        <div><dt>Токенов на PASS</dt><dd>{data.summary.successful.averageOutputTokens?.toLocaleString("ru-RU") ?? "—"}</dd></div>
+        <div><dt>Времени на PASS</dt><dd>{data.summary.successful.averageDurationMs === null ? "—" : formatDuration(data.summary.successful.averageDurationMs)}</dd></div>
+      </dl>
+      {data.tasks.length < data.plannedCount ? <p>Прогон не дошёл до конца, процент считается по выполненному.</p> : null}
+      <details className="benchmark-outcomes"><summary>Распределение исходов</summary><div>{outcomeOrder.filter((outcome) => data.summary.outcomes[outcome]).map((outcome) => <span key={outcome}>{outcomeLabels[outcome]}: <strong>{data.summary.outcomes[outcome]}</strong></span>)}</div></details>
     </Panel>
     {data.tasks.length
-      ? data.tasks.map((task) => <Panel
-        key={task.id}
-        title={`${task.position + 1}. ${task.name}`}
-        action={<div className="actions"><span className="mono">{outcomeLabels[task.outcome]} · {duration(task)}</span><VerdictControl task={task} runId={runId} /></div>}
-      >
-        <TaskEvidence task={task} />
-      </Panel>)
+      ? data.tasks.map((task) => <TaskPanel key={task.id} task={task} runId={runId} expanded={task.id === activeTaskId} onToggle={() => setSelectedTaskId(task.id === activeTaskId ? undefined : task.id)} />)
       : <Panel title="Задачи"><Empty>Прогон ещё не начал выполнять задачи.</Empty></Panel>}
   </Page>;
 }
