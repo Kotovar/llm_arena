@@ -13,6 +13,7 @@ const waiting = {
   id: "task-run-1",
   position: 0,
   name: "Гонка поиска",
+  description: "Поиск показывает устаревшие результаты",
   status: "completed",
   outcome: "completed",
   verdict: { verdict: null, reason: null, human: false, counted: true, comment: "" },
@@ -51,6 +52,8 @@ function benchmarkSummary() {
     solveRate: counted.length ? Math.round((solved.length / counted.length) * 1_000) / 10 : null,
     outcomes: rows.reduce<Record<string, number>>((outcomes, task) => ({ ...outcomes, [task.outcome]: (outcomes[task.outcome] ?? 0) + 1 }), {}),
     successful: { count: solved.length, averageOutputTokens: solved.length ? 4_100 : null, averageDurationMs: solved.length ? 138_000 : null },
+    failed: counted.filter((task) => task.verdict.verdict === "fail").length,
+    total: { outputTokens: 12_300, durationMs: 414_000 },
   };
 }
 
@@ -116,7 +119,7 @@ describe("прогон набора", () => {
     await screen.findByRole("heading", { name: /Гонка поиска/u });
 
     const loopedRow = screen.getByRole("heading", { name: /Парсер/u }).closest("section")!;
-    await user.click(within(loopedRow).getByRole("button", { name: "Разобрать" }));
+    await user.click(within(loopedRow).getByRole("button", { name: "Развернуть" }));
     expect(within(loopedRow).getAllByText("FAIL — Зациклился")).toHaveLength(2);
     expect(within(loopedRow).queryByRole("button", { name: "PASS" })).toBeNull();
     // Последнее слово всё равно за человеком: упавшая проверка иногда объясняется не моделью.
@@ -138,9 +141,10 @@ describe("прогон набора", () => {
     await screen.findByRole("heading", { name: /Гонка поиска/u });
 
     // Ждут только задачи, которые идут в проценты и ещё не оценены.
-    expect(screen.getByText(/ждут вердикта: 1/u)).toBeTruthy();
+    expect(screen.getByLabelText("Сводка прогона").textContent).toMatch(/Ждут вашей оценки: 1/u);
     const row = screen.getByRole("heading", { name: /Гонка поиска/u }).closest("section")!;
-    await user.selectOptions(within(row).getByRole("combobox", { name: "Причина провала" }), "constraint-violation");
+    await user.click(await within(row).findByLabelText("Причина провала", { selector: "summary" }));
+    await user.click(within(row).getByRole("button", { name: "Нарушил условия" }));
     await user.type(within(row).getByRole("textbox", { name: "Комментарий к вердикту" }), "поменял API");
     await user.click(within(row).getByRole("button", { name: /^FAIL$/u }));
 
@@ -159,10 +163,12 @@ describe("прогон набора", () => {
     // «Прошла» само по себе ничего не значит: человеку нужно, что до модели она падала.
     const hidden = within(card).getByText(/Устаревший ответ/u).closest("tr")!;
     expect(hidden.textContent).toContain("упала");
-    expect(hidden.textContent).toContain("это и требовалось");
+    expect(hidden.textContent).toContain("прошла");
     expect(within(card).getByText(/Существующие тесты/u)).toBeTruthy();
-    expect(within(card).getByText(/Смотреть надо не на проверки/u)).toBeTruthy();
+    // Главное видно без раскрытия подробностей: о чём задача, что проверить и итог проверок.
+    expect(within(card).getAllByText("Поиск показывает устаревшие результаты").length).toBeGreaterThan(0);
     expect(within(card).getByText(/Введите a, затем ab/u)).toBeTruthy();
+    expect(within(card).getByText(/1 из 1 теперь проходят\. Существующее не сломано/u)).toBeTruthy();
 
     await user.click(within(card).getByRole("button", { name: "Показать изменения" }));
 
@@ -178,59 +184,66 @@ describe("прогон набора", () => {
     expect(screen.queryByText(/Проверок нет вообще/u)).toBeNull();
   });
 
-  it("показывает исходное состояние и результат рядом", async () => {
+  it("запускает до и после рядом одной кнопкой, но не при открытии страницы", async () => {
     const user = userEvent.setup();
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
     const card = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
 
-    await user.click(await within(card).findByRole("button", { name: "Сравнить до и после" }));
+    // Процессы превью не поднимаются, пока человек не попросил.
+    const start = await within(card).findByRole("button", { name: "Запустить до и после" });
+    expect(screen.queryByTitle("Preview: До модели")).toBeNull();
+    await user.click(start);
 
     // Оба превью живут одновременно: иначе «до» и «после» не сравнить.
     expect(await screen.findByTitle("Preview: До модели")).toBeTruthy();
-    expect(screen.getByTitle("Preview: После модели")).toBeTruthy();
+    expect(await screen.findByTitle("Preview: После модели")).toBeTruthy();
 
-    await user.click(within(card).getByRole("button", { name: "Остановить сравнение" }));
+    for (const stop of within(card).getAllByRole("button", { name: "Остановить preview" })) await user.click(stop);
 
     // Обе стороны адресуются отдельно: иначе можно было бы остановить соседнее превью.
-    await waitFor(() => expect(previewStops).toEqual([
+    await waitFor(() => expect(previewStops).toEqual(expect.arrayContaining([
       { fixtureId: "stale-search-results" },
       { taskRunId: "task-run-1", resultSha: "b".repeat(40) },
-    ]));
+    ])));
   });
 
-  it("переходит к следующей неоценённой задаче, не раскрывая все карточки", async () => {
+  it("у задачи без исходного приложения показывает только результат", async () => {
+    const user = userEvent.setup();
+    tasks = [{ ...waiting, preview: { original: false, result: true } }];
+    await renderInApp(<BenchmarkRunPage runId="run-1" />);
+    await user.click(await screen.findByRole("button", { name: "Запустить превью" }));
+
+    expect(await screen.findByTitle("Preview: После модели")).toBeTruthy();
+    expect(screen.queryByTitle("Preview: До модели")).toBeNull();
+  });
+
+  it("переходит к следующей неоценённой задаче и сворачивает открытую", async () => {
     const user = userEvent.setup();
     tasks = [waiting, { ...waiting, id: "task-run-4", position: 3, name: "Вторая проверка" }, looped];
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
 
     const first = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
     const second = screen.getByRole("heading", { name: /Вторая проверка/u }).closest("section")!;
-    expect(within(first).getByRole("button", { name: "Скрыть разбор" })).toBeTruthy();
-    expect(within(second).getByRole("button", { name: "Разобрать" })).toBeTruthy();
+    expect(within(first).getByRole("button", { name: "Свернуть" })).toBeTruthy();
+    expect(within(second).getByRole("button", { name: "Развернуть" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "К следующей неоценённой" }));
 
-    expect(within(first).getByRole("button", { name: "Разобрать" })).toBeTruthy();
-    expect(within(second).getByRole("button", { name: "Скрыть разбор" })).toBeTruthy();
+    expect(within(first).getByRole("button", { name: "Развернуть" })).toBeTruthy();
+    expect(within(second).getByRole("button", { name: "Свернуть" })).toBeTruthy();
+
+    // «Свернуть» сворачивает, а не открывает ту же карточку заново.
+    await user.click(within(second).getByRole("button", { name: "Свернуть" }));
+    expect(screen.queryByRole("button", { name: "Свернуть" })).toBeNull();
   });
 
-  it("не предлагает запуск там, где он обречён", async () => {
+  it("не запускает результат, у которого нет превью, и объясняет почему", async () => {
     tasks = [{ ...waiting, preview: { original: true, result: false } }];
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
     const card = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
 
-    expect(await within(card).findByRole("button", { name: "Запустить оригинал" })).toBeTruthy();
-    // Кнопка, которая всегда отвечает ошибкой, хуже её отсутствия: объясняем причину.
-    expect(within(card).queryByRole("button", { name: "Запустить результат" })).toBeNull();
-    expect(within(card).getByText(/Нужен новый прогон/u)).toBeTruthy();
-  });
-
-  it("говорит, когда смотреть нечего", async () => {
-    tasks = [{ ...waiting, preview: { original: false, result: false } }];
-    await renderInApp(<BenchmarkRunPage runId="run-1" />);
-    const card = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
-
-    expect(await within(card).findByText(/нет запускаемого приложения/u)).toBeTruthy();
+    expect(await within(card).findByText(/запустите бенчмарк заново/u)).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "Запустить" })).toBeNull();
   });
 
   it("показывает главную метрику частным, а не составным баллом", async () => {
@@ -242,7 +255,9 @@ describe("прогон набора", () => {
     await renderInApp(<BenchmarkRunPage runId="run-1" />);
 
     // Ручная остановка вне процентов, поэтому знаменатель два, а не три.
-    expect(await screen.findByText("1 / 2 · 50%")).toBeTruthy();
+    const score = await screen.findByLabelText("Сводка прогона");
+    expect(within(score).getByText("50%")).toBeTruthy();
+    expect(score.textContent).toMatch(/Решено 1 из 2/u);
     expect(screen.getByText(/4.?100/u)).toBeTruthy();
     expect(screen.getByText("Распределение исходов")).toBeTruthy();
   });

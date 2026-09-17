@@ -71,6 +71,8 @@ describe("сводка benchmark-прогона", () => {
       solveRate: 33.3,
       outcomes: { completed: 2, timeout: 1, aborted_user: 1 },
       successful: { count: 1, averageOutputTokens: 125, averageDurationMs: 1_001 },
+      failed: 1,
+      total: { outputTokens: 125, durationMs: 10_001 },
     });
   });
 

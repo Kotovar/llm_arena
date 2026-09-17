@@ -11,7 +11,7 @@ let historyRuns: unknown[];
 
 const task = {
   id: "task-1",
-  tags: ["cat:debugging"],
+  tags: ["cat:debugging", "benchmark"],
   archivedAt: null,
   createdAt: "2026-09-01T00:00:00.000Z",
   updatedAt: "2026-09-01T00:00:00.000Z",
@@ -51,7 +51,10 @@ beforeEach(() => {
     // Экран предлагает запуск в фиксированном окружении, поэтому ему нужны модель и профиль.
     if (url === "/api/models") return json([{ id: "model-1", name: "Локальная", kind: "local-gguf", capabilities: { toolUse: true, vision: false, reasoning: false } }]);
     if (url === "/api/runners") return json([{ id: "pi-local", name: "pi-среда", kind: "pi", exec: ["pi"] }]);
-    if (url.startsWith("/api/profiles")) return json([{ id: "profile-1", name: "Automatic" }]);
+    if (url.startsWith("/api/profiles")) return json([
+      { id: "profile-1", modelId: "model-1", name: "Automatic", revision: 1 },
+      { id: "profile-2", modelId: "model-1", name: "Automatic", revision: 2 },
+    ]);
     if (url === "/api/runs" && init?.method === "POST") return json({ id: "run-1" }, 202);
     if (url === "/api/suites/suite-1/revisions" && init?.method === "POST") {
       revisionBodies.push(JSON.parse(String(init.body)));
@@ -75,13 +78,22 @@ afterEach(() => {
 });
 
 describe("наборы задач", () => {
-  it("показывает состав ревизии и прогоны, сравнимые между собой", async () => {
+  it("предлагает только последнюю ревизию профиля", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<BenchmarkPage />);
+    await user.click(await screen.findByLabelText("Модель", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: "Локальная" }));
+    await user.click(screen.getByLabelText("Профиль", { selector: "summary" }));
+
+    expect(await screen.findAllByRole("button", { name: "Automatic" })).toHaveLength(1);
+  });
+
+  it("показывает состав ревизии", async () => {
     await renderInApp(<BenchmarkPage />);
     await screen.findByText("Гонка поиска");
 
     expect(screen.getByText(/Ревизия 1, промптов 1/u)).toBeTruthy();
     expect(screen.getByText(/снимок актуален/u)).toBeTruthy();
-    expect(screen.getByText(/Прогоны по этой ревизии \(1\)/u)).toBeTruthy();
   });
 
   it("объясняет расхождение снимка с текущим состоянием", async () => {
@@ -116,17 +128,19 @@ describe("наборы задач", () => {
       suite: { revisionId: "suite-revision-1", name: "Coding General", revision: 1, contentHash: "a".repeat(64) },
       model: { id: modelId, name },
       environment: { runnerId: omp ? "omp" : "pi-local", runnerName: omp ? "OMP" : "pi-среда", useOmpAgent: omp },
-      summary: { solved: 1, counted: 1, waiting: 0, solveRate: 100, successful: { averageOutputTokens: 100, averageDurationMs: 1_000 } },
+      summary: { solved: 1, failed: 0, counted: 1, waiting: 0, solveRate: 100, successful: { averageOutputTokens: 100, averageDurationMs: 1_000 }, total: { outputTokens: 100, durationMs: 1_000 } },
     });
     historyRuns = [run("run-1", "model-1", "Alpha"), run("run-2", "model-2", "Beta"), run("run-3", "model-3", "Gamma", true)];
     await renderInApp(<BenchmarkPage />);
     await screen.findByRole("link", { name: "Alpha" });
 
-    await user.selectOptions(screen.getByLabelText("Модель в истории"), "model-2");
+    await user.click(screen.getByLabelText("Фильтр истории: модель", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: "Beta" }));
     expect(screen.queryByRole("link", { name: "Alpha" })).toBeNull();
     expect(screen.getByRole("link", { name: "Beta" })).toBeTruthy();
 
-    await user.selectOptions(screen.getByLabelText("Модель в истории"), "");
+    await user.click(screen.getByLabelText("Фильтр истории: модель", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: "Все модели" }));
     for (const name of ["Alpha", "Beta", "Gamma"]) await user.click(screen.getByRole("checkbox", { name: `Выбрать ${name} для сравнения` }));
     const compare = screen.getByRole("link", { name: "Сравнить: 3" });
     expect(compare.getAttribute("href")).toMatch(/run-1.*run-2.*run-3/u);

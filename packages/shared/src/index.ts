@@ -1,7 +1,7 @@
 import { z } from "zod";
 // Схемы вердикта собираются здесь, поэтому их мало реэкспортировать — нужны и в этом модуле.
 import { failureReasonSchema, verdictSchema } from "./outcome.js";
-export { DEFAULT_LLAMA_TEMPERATURE } from "./constants.js";
+export { BENCHMARK_TAG, DEFAULT_LLAMA_TEMPERATURE } from "./constants.js";
 export {
   classifyTaskRun,
   failureReasonLabels,

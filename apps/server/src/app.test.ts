@@ -77,6 +77,26 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("не отдаёт промпт бенчмарка обычному запуску, но запускает его в наборе", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-benchmark-tag-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+    const task = store.createTask({ name: "Гонка", kind: "prompt", prompt: "Answer", tags: ["benchmark"] });
+    const model = store.createModel({ name: "Alpha", kind: "cloud", provider: "openai", modelRef: "alpha" });
+    const base = { modelId: model.id, executionProfileId: null, runnerId: "pi-local", resultMode: "text" };
+
+    const ordinary = await app.inject({ method: "POST", url: "/api/runs", payload: { ...base, taskRevisionIds: [task.currentRevision.id] } });
+    expect(ordinary.statusCode).toBe(400);
+    expect(ordinary.json().error).toMatch(/только в составе бенчмарка/u);
+
+    const suite = store.createSuite("Coding General");
+    const revision = store.createSuiteRevision(suite.id, [{ taskRevisionId: task.currentRevision.id, fixtureId: null, fixtureRevision: null }]);
+    expect((await app.inject({ method: "POST", url: "/api/runs", payload: { ...base, suiteRevisionId: revision.id } })).statusCode).toBe(202);
+    await app.close();
+    store.close();
+  });
+
   it("сводит в таблицу только прогоны одной ревизии и помечает другую обвязку", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-benchmark-compare-"));
     directories.push(directory);

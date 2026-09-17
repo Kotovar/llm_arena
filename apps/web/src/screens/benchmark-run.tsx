@@ -2,10 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { api, apiText } from "../api.js";
-import { Empty, Page, Panel, Skeleton } from "../shell.js";
+import { Empty, Page, Panel, SelectMenu, Skeleton } from "../shell.js";
 import { ResultPreview, stopPreviewTarget, useStopPreviewOnUnmount } from "./results.js";
 import { outcomeOrder, type TaskOutcome } from "@llm-arena/shared";
-import { formatDuration, outcomeLabels } from "../ui.js";
+import { formatDuration, outcomeLabels, statusLabel } from "../ui.js";
 
 type Verdict = {
   verdict: "pass" | "fail" | null;
@@ -18,6 +18,8 @@ type BenchmarkTask = {
   id: string;
   position: number;
   name: string;
+  /** Короткое описание промпта по-русски: о чём задача, без чтения всего задания. */
+  description: string | null;
   status: string;
   outcome: TaskOutcome;
   verdict: Verdict;
@@ -39,6 +41,8 @@ type BenchmarkRun = {
     solveRate: number | null;
     outcomes: Record<TaskOutcome, number>;
     successful: { count: number; averageOutputTokens: number | null; averageDurationMs: number | null };
+    failed: number;
+    total: { outputTokens: number; durationMs: number };
   };
   tasks: BenchmarkTask[];
 };
@@ -79,103 +83,75 @@ type TaskRunRecord = {
  * провал и решения не требует; решать приходится обратный случай — проверки зелёные, а
  * задача могла быть обойдена.
  */
-function WhatToCheck({ task }: { task: BenchmarkTask }) {
-  if (!task.verdict.counted) return <p>Задача вне процентов: её остановил человек или упал служебный шаг арены, к модели это не относится.</p>;
-  if (task.verdict.verdict === "fail" && !task.verdict.human) {
-    return <p>Провал виден без вас: {reasonLabels[task.verdict.reason ?? ""] ?? task.verdict.reason}. Смотреть тут нечего, разве что вы считаете причину несправедливой к модели.</p>;
-  }
-  return <ul>
-    <li>Проверки, которые до модели падали, теперь проходят — заявленное она сделала. Осталось убедиться, что сделала по-настоящему.</li>
-    <li>Смотреть надо не на проверки, а на <strong>изменения</strong>.</li>
-    <li>Правка по делу или обход? Модель могла ослабить или переписать существующие тесты, захардкодить ответ, убрать функциональность, поменять публичный интерфейс.</li>
-    <li>Соответствует ли объём задаче: локальная правка там, где просили локальную.</li>
-    <li>Выполнены ли ограничения из формулировки — они перечислены в самом задании выше.</li>
+function WhatToCheck() {
+  return <ul className="benchmark-hints">
+    <li>Правка по делу или обход? Модель могла ослабить тесты, захардкодить ответ, убрать функциональность или поменять публичный интерфейс.</li>
+    <li>Объём соответствует задаче: локальная правка там, где просили локальную.</li>
+    <li>Ограничения из текста задания выполнены.</li>
   </ul>;
 }
 
+type PreviewSideState = { url?: string; error?: string };
+
+/** Одна сторона сравнения: запущенное приложение, ожидание, ошибка или кнопка запуска. */
+function PreviewSide({ title, state, pending, target, onStart, onStop, stopping }: {
+  title: string;
+  state: PreviewSideState;
+  pending: boolean;
+  target: Parameters<typeof ResultPreview>[0]["target"] | undefined;
+  onStart: () => void;
+  onStop: () => void;
+  stopping: boolean;
+}) {
+  if (state.url && target) return <ResultPreview url={state.url} target={target} onClose={onStop} closing={stopping} title={title} />;
+  return <section className="benchmark-preview-empty">
+    <strong>{title}</strong>
+    {pending ? <Skeleton rows={3} /> : <>
+      {state.error ? <p className="error">{state.error}</p> : null}
+      <button type="button" onClick={onStart}>{state.error ? "Попробовать ещё раз" : "Запустить"}</button>
+    </>}
+  </section>;
+}
+
 /**
- * Исходное состояние и результат рядом. Это главный способ судить, не читая код: видно, что до
- * модели приложение вело себя неправильно, а после — правильно. Оба живут одновременно:
- * менеджер держит ровно два процесса превью.
+ * «До» и «после» рядом — главный способ судить, не читая код. Запускаются одной кнопкой, а не
+ * при открытии страницы: процессы не нужны, пока человек не собрался смотреть. У задачи «с нуля»
+ * есть только «после».
+ * Менеджер превью держит ровно два процесса, так что следующая карточка сменит эти.
  */
 function Previews({ taskRunId, fixtureId, available }: { taskRunId: string; fixtureId: string | undefined; available: BenchmarkTask["preview"] }) {
-  const [original, setOriginal] = useState<string>();
+  const hasOriginal = available.original && Boolean(fixtureId);
+  const [original, setOriginal] = useState<PreviewSideState>({});
   // Версию результата возвращает сервер: по ней же продлевается аренда и гасится превью.
-  const [result, setResult] = useState<{ url: string; resultSha: string }>();
-  const resultTarget = result ? { taskRunId, resultSha: result.resultSha } : undefined;
-  useStopPreviewOnUnmount(original && fixtureId ? { fixtureId } : undefined);
+  const [result, setResult] = useState<PreviewSideState & { resultSha?: string }>({});
+  const originalTarget = original.url && fixtureId ? { fixtureId } : undefined;
+  const resultTarget = result.resultSha ? { taskRunId, resultSha: result.resultSha } : undefined;
+  useStopPreviewOnUnmount(originalTarget);
   useStopPreviewOnUnmount(resultTarget);
   const startOriginal = useMutation({
     mutationFn: () => api<{ url: string }>(`/fixtures/${fixtureId}/preview`, { method: "POST" }),
-    onSuccess: (started) => setOriginal(started.url),
+    onSuccess: (started) => setOriginal({ url: started.url }),
+    onError: (error: Error) => setOriginal({ error: error.message }),
   });
   const startResult = useMutation({
     mutationFn: () => api<{ resultSha: string; url: string }>(`/task-runs/${taskRunId}/preview`, { method: "POST", body: "{}" }),
     onSuccess: (started) => setResult(started),
+    onError: (error: Error) => setResult({ error: error.message }),
   });
-  const startComparison = useMutation({
-    mutationFn: async () => {
-      const [startedOriginal, startedResult] = await Promise.allSettled([
-        api<{ url: string }>(`/fixtures/${fixtureId}/preview`, { method: "POST" }),
-        api<{ resultSha: string; url: string }>(`/task-runs/${taskRunId}/preview`, { method: "POST", body: "{}" }),
-      ]);
-      if (startedOriginal.status === "fulfilled" && startedResult.status === "fulfilled") {
-        return { original: startedOriginal.value, result: startedResult.value };
-      }
-      // Если успела подняться только одна сторона, не оставляем процесс без управления в UI.
-      await Promise.allSettled([
-        startedOriginal.status === "fulfilled" ? stopPreviewTarget({ fixtureId: fixtureId! }) : undefined,
-        startedResult.status === "fulfilled" ? stopPreviewTarget({ taskRunId, resultSha: startedResult.value.resultSha }) : undefined,
-      ]);
-      throw new Error("Не удалось запустить оба превью. Попробуйте ещё раз.");
-    },
-    onSuccess: (started) => {
-      setOriginal(started.original.url);
-      setResult(started.result);
-    },
-  });
-  const stopOriginal = useMutation({
-    mutationFn: () => stopPreviewTarget({ fixtureId: fixtureId! }),
-    onSuccess: () => setOriginal(undefined),
-  });
-  const stopResult = useMutation({
-    mutationFn: () => stopPreviewTarget(resultTarget),
-    onSuccess: () => setResult(undefined),
-  });
-  const stopComparison = useMutation({
-    mutationFn: () => Promise.allSettled([
-      original ? stopPreviewTarget({ fixtureId: fixtureId! }) : undefined,
-      resultTarget ? stopPreviewTarget(resultTarget) : undefined,
-    ]),
-    onSuccess: () => {
-      setOriginal(undefined);
-      setResult(undefined);
-    },
-  });
-  if (!fixtureId) return null;
-  if (!available.original && !available.result) {
-    return <p>У этого исходного проекта нет запускаемого приложения: смотреть глазами нечего, судить придётся по проверкам и изменениям.</p>;
+  const stopOriginal = useMutation({ mutationFn: () => stopPreviewTarget(originalTarget), onSuccess: () => setOriginal({}) });
+  const stopResult = useMutation({ mutationFn: () => stopPreviewTarget(resultTarget), onSuccess: () => setResult({}) });
+  const startAll = () => {
+    if (hasOriginal) startOriginal.mutate();
+    startResult.mutate();
+  };
+  const touched = [original.url, original.error, result.url, result.error].some(Boolean) || startOriginal.isPending || startResult.isPending;
+  if (!available.result) {
+    return <p className="benchmark-note">Этот прогон сделан до того, как у задачи появилось превью, поэтому результат запустить нельзя. Чтобы оценить его глазами, запустите бенчмарк заново.</p>;
   }
-  const comparisonAvailable = available.original && available.result;
-  const comparisonActive = Boolean(original && result);
-  return <div className="stack">
-    <div className="actions">
-      <strong>Посмотреть своими глазами</strong>
-      {comparisonAvailable
-        ? <button type="button" className="primary" onClick={() => startComparison.mutate()} disabled={startComparison.isPending || Boolean(original) || Boolean(result)}>{startComparison.isPending ? "Запускаем сравнение…" : "Сравнить до и после"}</button>
-        : available.original ? <button type="button" onClick={() => startOriginal.mutate()} disabled={startOriginal.isPending || Boolean(original)}>{startOriginal.isPending ? "Запускаем…" : "Запустить оригинал"}</button> : null}
-      {!comparisonAvailable && available.result
-        ? <button type="button" onClick={() => startResult.mutate()} disabled={startResult.isPending || Boolean(result)}>{startResult.isPending ? "Запускаем…" : "Запустить результат"}</button>
-        : !comparisonAvailable && !available.result ? <small>Результат этого прогона запустить нельзя: он получен до того, как у исходного проекта появилась команда запуска. Нужен новый прогон.</small> : null}
-      {comparisonActive ? <button type="button" onClick={() => stopComparison.mutate()} disabled={stopComparison.isPending}>{stopComparison.isPending ? "Останавливаем…" : "Остановить сравнение"}</button> : null}
-    </div>
-    {startOriginal.error ? <p className="error">Оригинал: {startOriginal.error.message}</p> : null}
-    {startResult.error ? <p className="error">Результат: {startResult.error.message}</p> : null}
-    {startComparison.error ? <p className="error">{startComparison.error.message}</p> : null}
-    <div className={comparisonActive ? "benchmark-preview-pair" : "stack"}>
-      {original ? <ResultPreview url={original} target={{ fixtureId }} onClose={() => stopOriginal.mutate()} closing={stopOriginal.isPending} title="До модели" /> : null}
-      {result ? <ResultPreview url={result.url} target={{ taskRunId, resultSha: result.resultSha }} onClose={() => stopResult.mutate()} closing={stopResult.isPending} title="После модели" /> : null}
-    </div>
+  if (!touched) return <div><button type="button" className="primary" onClick={startAll}>{hasOriginal ? "Запустить до и после" : "Запустить превью"}</button></div>;
+  return <div className={hasOriginal ? "benchmark-preview-pair" : "stack"}>
+    {hasOriginal ? <PreviewSide title="До модели" state={original} pending={startOriginal.isPending} target={originalTarget} onStart={() => startOriginal.mutate()} onStop={() => stopOriginal.mutate()} stopping={stopOriginal.isPending} /> : null}
+    <PreviewSide title="После модели" state={result} pending={startResult.isPending} target={resultTarget} onStart={() => startResult.mutate()} onStop={() => stopResult.mutate()} stopping={stopResult.isPending} />
   </div>;
 }
 
@@ -189,7 +165,17 @@ function HighlightedDiff({ diff }: { diff: string }) {
   })}</pre>;
 }
 
-function TaskEvidence({ task }: { task: BenchmarkTask }) {
+type Check = { id: string; label: string; status: string; hidden: boolean };
+
+/** Одной строкой: сделано ли заявленное и не сломано ли существующее. */
+function checksLine(checks: Check[], baseline: BenchmarkTask["baseline"]) {
+  const target = checks.filter((check) => baseline[check.id] === "fail");
+  const fixed = target.filter((check) => check.status === "pass").length;
+  const broken = checks.filter((check) => baseline[check.id] === "pass" && check.status !== "pass").length;
+  return `Проверки задачи: ${fixed} из ${target.length} теперь проходят. ${broken ? `Сломано существующих: ${broken}.` : "Существующее не сломано."}`;
+}
+
+function TaskReview({ task, runId }: { task: BenchmarkTask; runId: string }) {
   const [diff, setDiff] = useState<string>();
   const [log, setLog] = useState<{ id: string; text: string }>();
   const record = useQuery({ queryKey: ["task-run", task.id], queryFn: () => api<TaskRunRecord>(`/task-runs/${task.id}`) });
@@ -198,13 +184,14 @@ function TaskEvidence({ task }: { task: BenchmarkTask }) {
   const snapshot = JSON.parse(record.data!.snapshot_json) as { task?: { prompt?: string; name?: string }; fixture?: { id?: string; reproduction?: string } };
   const result = JSON.parse(record.data!.result_json ?? "{}") as {
     finalAnswer?: string;
-    checks?: Array<{ id: string; label: string; status: string; hidden: boolean }>;
+    checks?: Check[];
     artifacts?: { changedFiles?: string[] };
     metrics?: Record<string, { value: number | null; unit?: string }>;
   };
   const checks = result.checks ?? [];
   const changed = result.artifacts?.changedFiles ?? [];
   const tokens = result.metrics?.outputTokens?.value;
+  const finished = task.status !== "pending" && task.status !== "running";
   const openDiff = () => {
     if (diff !== undefined) { setDiff(undefined); return; }
     void apiText(`/task-runs/${task.id}/diff`).then(setDiff).catch((error: Error) => setDiff(error.message));
@@ -215,45 +202,50 @@ function TaskEvidence({ task }: { task: BenchmarkTask }) {
       .then((text) => setLog({ id, text: text || "Вывод пустой." }))
       .catch((error: Error) => setLog({ id, text: error.message }));
   };
-  return <div className="stack roomy">
-    <WhatToCheck task={task} />
-    {snapshot.fixture?.reproduction ? <p className="benchmark-reproduction"><strong>Как проверить:</strong> {snapshot.fixture.reproduction}</p> : null}
-    <Previews taskRunId={task.id} fixtureId={snapshot.fixture?.id} available={task.preview} />
-    <details><summary><strong>Что требовалось</strong></summary><pre className="artifact">{snapshot.task?.prompt ?? "Текст задания не сохранился."}</pre></details>
-    {checks.length
-      ? <div className="stack">
-        <strong>Проверки</strong>
-        {/* «Прошла» само по себе ничего не значит: важно, что до модели она падала. */}
-        <table className="analytics-table"><thead><tr><th>Проверка</th><th>До модели</th><th>После</th><th /></tr></thead><tbody>
+  return <div className="benchmark-review">
+    <section className="benchmark-block">
+      <h3>О чём задача</h3>
+      <p>{task.description ?? "Описания нет — добавьте его промпту в разделе «Промпты»."}</p>
+      <details><summary>Полный текст задания</summary><pre className="artifact">{snapshot.task?.prompt ?? "Текст задания не сохранился."}</pre></details>
+    </section>
+    <section className="benchmark-block">
+      <h3>Что проверить</h3>
+      <p>{snapshot.fixture?.reproduction ?? "Сценарий проверки не записан: сверяйте поведение с заданием."}</p>
+      {checks.length
+        ? <p className="benchmark-note">{checksLine(checks, task.baseline)}</p>
+        : finished ? <p className="error">Проверок нет вообще: задача шла без исходного проекта, такой результат оценивать нельзя.</p> : null}
+    </section>
+    {finished ? <Previews taskRunId={task.id} fixtureId={snapshot.fixture?.id} available={task.preview} /> : <p className="benchmark-note">Задача ещё выполняется — превью появится, когда модель закончит.</p>}
+    <section className="benchmark-verdict"><h3>Вердикт</h3><VerdictControl task={task} runId={runId} /></section>
+    <details className="benchmark-details">
+      <summary>Подробности: проверки, изменения, ответ модели</summary>
+      <div className="stack roomy">
+        <p className="mono">{outcomeLabels[task.outcome]} · {duration(task)}{tokens ? ` · ${tokens.toLocaleString("ru-RU")} токенов` : ""}</p>
+        {checks.length ? <table className="analytics-table"><thead><tr><th>Проверка</th><th>До модели</th><th>После</th><th /></tr></thead><tbody>
           {checks.map((check) => {
             const before = task.baseline[check.id];
-            const after = checkStatus(check.status);
             const fixed = before === "fail" && check.status === "pass";
             const broke = before === "pass" && check.status !== "pass";
             return <tr key={check.id}>
               <td>{check.label}{check.hidden ? <span className="mono"> скрытая</span> : null}</td>
               <td>{before ? checkStatus(before) : "не объявлено"}</td>
-              <td>
-                <span className={fixed ? "status status-completed" : broke ? "status status-failed" : ""}>{after}</span>
-                {fixed ? " — это и требовалось" : broke ? " — модель это сломала" : null}
-              </td>
+              <td><span className={fixed ? "status status-completed" : broke ? "status status-failed" : ""}>{checkStatus(check.status)}</span></td>
               <td><button type="button" onClick={() => openCheckLog(check.id)}>{log?.id === check.id ? "Скрыть вывод" : "Вывод"}</button></td>
             </tr>;
           })}
-        </tbody></table>
+        </tbody></table> : null}
         {log ? <pre className="artifact">{log.text}</pre> : null}
+        <div className="actions">
+          <strong>Изменено файлов: {changed.length}</strong>
+          <button type="button" onClick={openDiff} disabled={!changed.length}>{diff === undefined ? "Показать изменения" : "Скрыть изменения"}</button>
+        </div>
+        {changed.length ? <p className="mono">{changed.join(", ")}</p> : null}
+        {diff !== undefined ? <HighlightedDiff diff={diff} /> : null}
+        <details><summary>Что ответила модель</summary><pre className="artifact">{result.finalAnswer || record.data!.error || "Ответа нет."}</pre></details>
+        <strong>Если сомневаетесь</strong>
+        <WhatToCheck />
       </div>
-      : <p className="error">Проверок нет вообще. Значит задача шла без исходного проекта — такой результат оценивать нельзя.</p>}
-    <div className="stack">
-      <div className="actions">
-        <strong>Изменено файлов: {changed.length}</strong>
-        <button type="button" onClick={openDiff} disabled={!changed.length}>{diff === undefined ? "Показать изменения" : "Скрыть изменения"}</button>
-        {tokens ? <span className="mono">{Math.round(tokens / 100) / 10}k токенов</span> : null}
-      </div>
-      {changed.length ? <p className="mono">{changed.join(", ")}</p> : null}
-      {diff !== undefined ? <HighlightedDiff diff={diff} /> : null}
-    </div>
-    <details><summary><strong>Что ответила модель</strong></summary><pre className="artifact">{result.finalAnswer || record.data!.error || "Ответа нет."}</pre></details>
+    </details>
   </div>;
 }
 
@@ -287,11 +279,9 @@ function VerdictControl({ task, runId }: { task: BenchmarkTask; runId: string })
   if (!task.verdict.counted) return <span className="status status-pending">вне процентов</span>;
   return <form className="benchmark-verdict-controls" onSubmit={(event) => { event.preventDefault(); save.mutate({ verdict: "fail", reason }); }}>
     <button type="button" className="primary" onClick={() => save.mutate({ verdict: "pass", reason: null })} disabled={save.isPending}>PASS</button>
-    <label>Причина
-      <select value={reason} onChange={(event) => setReason(event.currentTarget.value)} aria-label="Причина провала">
-        {humanReasons.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-      </select>
-    </label>
+    <div className="benchmark-field"><span>Причина</span>
+      <SelectMenu label="Причина провала" value={reason} onSelect={setReason} options={humanReasons.map(([value, label]) => ({ value, label }))} />
+    </div>
     <label>Комментарий
       <input value={comment} onChange={(event) => setComment(event.currentTarget.value)} placeholder="Необязательно" aria-label="Комментарий к вердикту" />
     </label>
@@ -311,16 +301,58 @@ function VerdictSummary({ task }: { task: BenchmarkTask }) {
 function TaskPanel({ task, runId, expanded, onToggle }: { task: BenchmarkTask; runId: string; expanded: boolean; onToggle: () => void }) {
   return <Panel
     title={`${task.position + 1}. ${task.name}`}
-    action={<div className="actions"><VerdictSummary task={task} /><span className="mono">{outcomeLabels[task.outcome]} · {duration(task)}</span><button type="button" onClick={onToggle} aria-expanded={expanded}>{expanded ? "Скрыть разбор" : "Разобрать"}</button></div>}
+    action={<div className="benchmark-task-actions"><VerdictSummary task={task} /><button type="button" onClick={onToggle} aria-expanded={expanded}>{expanded ? "Свернуть" : "Развернуть"}</button></div>}
   >
     {expanded
-      ? <div className="stack roomy"><TaskEvidence task={task} /><section className="benchmark-verdict"><strong>Вердикт</strong><VerdictControl task={task} runId={runId} /></section></div>
-      : <p className="benchmark-task-hint">Откройте разбор, чтобы увидеть проверки, изменения и дать вердикт.</p>}
+      ? <TaskReview task={task} runId={runId} />
+      : task.description ? <p className="benchmark-task-hint">{task.description}</p> : null}
   </Panel>;
 }
 
+type ScoreSummary = {
+  solved: number;
+  failed: number;
+  counted: number;
+  waiting: number;
+  solveRate: number | null;
+  successful: { averageOutputTokens: number | null; averageDurationMs: number | null };
+  total: { outputTokens: number; durationMs: number };
+};
+
+const cost = (durationMs: number | null, tokens: number | null) =>
+  durationMs === null && tokens === null ? "—" : [durationMs === null ? null : formatDuration(durationMs), tokens === null ? null : `${tokens.toLocaleString("ru-RU")} токенов`].filter(Boolean).join(" · ");
+
+/**
+ * Главная цифра прогона — процент решённых — крупно, под ней из чего он сложился и во что обошёлся.
+ * Пока есть неоценённые задачи, процент предварительный, и зелёным его не красим.
+ */
+export function BenchmarkScore({ summary }: { summary: ScoreSummary }) {
+  const share = (value: number) => `${summary.counted ? (value / summary.counted) * 100 : 0}%`;
+  return <div className="benchmark-score" data-final={summary.waiting === 0 && summary.solved > 0} aria-label="Сводка прогона">
+    <div className="benchmark-score-head">
+      <strong>{summary.solveRate === null ? "—" : `${summary.solveRate}%`}</strong>
+      <span>Решено {summary.solved} из {summary.counted}{summary.waiting ? ", итог предварительный" : ""}</span>
+    </div>
+    <div className="benchmark-score-bar" aria-hidden>
+      <span className="pass" style={{ width: share(summary.solved) }} />
+      <span className="fail" style={{ width: share(summary.failed) }} />
+      <span className="waiting" style={{ width: share(summary.waiting) }} />
+    </div>
+    <ul className="benchmark-score-legend">
+      <li className="pass">Решено: <b>{summary.solved}</b></li>
+      <li className="fail">Провалено: <b>{summary.failed}</b></li>
+      {summary.waiting ? <li className="waiting">Ждут вашей оценки: <b>{summary.waiting}</b></li> : null}
+    </ul>
+    <dl>
+      <div><dt>Весь прогон</dt><dd>{cost(summary.total.durationMs, summary.total.outputTokens)}</dd></div>
+      <div><dt>В среднем на решённую задачу</dt><dd>{cost(summary.successful.averageDurationMs, summary.successful.averageOutputTokens)}</dd></div>
+    </dl>
+  </div>;
+}
+
 export function BenchmarkRunPage({ runId }: { runId: string }) {
-  const [selectedTaskId, setSelectedTaskId] = useState<string>();
+  // undefined — человек ещё не выбирал, открыта первая неоценённая; null — всё свёрнуто.
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>();
   const details = useQuery({
     queryKey: ["benchmark-run", runId],
     queryFn: () => api<BenchmarkRun>(`/benchmark/runs/${runId}`),
@@ -331,7 +363,7 @@ export function BenchmarkRunPage({ runId }: { runId: string }) {
   const data = details.data!;
   const counted = data.tasks.filter((task) => task.verdict.counted);
   const firstWaitingTask = counted.find((task) => task.verdict.verdict === null);
-  const activeTaskId = data.tasks.some((task) => task.id === selectedTaskId) ? selectedTaskId : firstWaitingTask?.id ?? data.tasks[0]?.id;
+  const activeTaskId = selectedTaskId === null ? undefined : data.tasks.some((task) => task.id === selectedTaskId) ? selectedTaskId : firstWaitingTask?.id ?? data.tasks[0]?.id;
   const activeIndex = data.tasks.findIndex((task) => task.id === activeTaskId);
   const nextTask = [...data.tasks.slice(activeIndex + 1), ...data.tasks.slice(0, activeIndex)].find((task) => task.verdict.counted && task.verdict.verdict === null);
   return <Page
@@ -339,22 +371,19 @@ export function BenchmarkRunPage({ runId }: { runId: string }) {
     eyebrow="Бенчмарк"
     intro="Каждая задача выполняется один раз. Технические неудачи видны без человека, остальное он проставляет сам: пройденные проверки сами по себе PASS не означают."
   >
+    <div className="benchmark-page">
     <Panel title="Прогон" action={<div className="actions">{nextTask ? <button type="button" className="primary" onClick={() => setSelectedTaskId(nextTask.id)}>К следующей неоценённой</button> : null}<Link to="/runs/$runId" params={{ runId }}>Подробности выполнения</Link></div>}>
       <p>
-        Состояние: {data.run.status}. Задач выполнено {data.tasks.length} из {data.plannedCount}.
+        Состояние: {statusLabel(data.run.status).toLowerCase()}. Задач выполнено {data.tasks.length} из {data.plannedCount}.
         {data.suite ? <> Ревизия бенчмарка {data.suite.revision}, <span className="mono">{data.suite.contentHash.slice(0, 12)}</span>.</> : null}
       </p>
-      <dl className="launch-summary benchmark-summary" aria-label="Сводка прогона">
-        <div><dt>Решено</dt><dd>{data.summary.solved} / {data.summary.counted} · {data.summary.solveRate ?? "—"}%</dd></div>
-        <div><dt>Ревью</dt><dd>ждут вердикта: {data.summary.waiting}</dd></div>
-        <div><dt>Токенов на PASS</dt><dd>{data.summary.successful.averageOutputTokens?.toLocaleString("ru-RU") ?? "—"}</dd></div>
-        <div><dt>Времени на PASS</dt><dd>{data.summary.successful.averageDurationMs === null ? "—" : formatDuration(data.summary.successful.averageDurationMs)}</dd></div>
-      </dl>
+      <BenchmarkScore summary={data.summary} />
       {data.tasks.length < data.plannedCount ? <p>Прогон не дошёл до конца, процент считается по выполненному.</p> : null}
       <details className="benchmark-outcomes"><summary>Распределение исходов</summary><div>{outcomeOrder.filter((outcome) => data.summary.outcomes[outcome]).map((outcome) => <span key={outcome}>{outcomeLabels[outcome]}: <strong>{data.summary.outcomes[outcome]}</strong></span>)}</div></details>
     </Panel>
     {data.tasks.length
-      ? data.tasks.map((task) => <TaskPanel key={task.id} task={task} runId={runId} expanded={task.id === activeTaskId} onToggle={() => setSelectedTaskId(task.id === activeTaskId ? undefined : task.id)} />)
+      ? data.tasks.map((task) => <TaskPanel key={task.id} task={task} runId={runId} expanded={task.id === activeTaskId} onToggle={() => setSelectedTaskId(task.id === activeTaskId ? null : task.id)} />)
       : <Panel title="Задачи"><Empty>Прогон ещё не начал выполнять задачи.</Empty></Panel>}
+    </div>
   </Page>;
 }

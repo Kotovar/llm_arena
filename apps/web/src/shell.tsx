@@ -4,11 +4,24 @@ import { useCallback, useEffect, useRef, useState, type ComponentProps, type Rea
 import { api } from "./api.js";
 import { ChevronDownIcon, ChevronUpIcon } from "./icons.js";
 import { useToast } from "./toast.js";
-import type { GpuInfo, Model, Run } from "./types.js";
+import { BENCHMARK_TAG } from "@llm-arena/shared";
+import type { GpuInfo, Model, Run, Task } from "./types.js";
 import { finishedSince, runIsActive, runModelName, statusLabel } from "./ui.js";
 
 export function useData<T>(key: string, path = key) {
   return useQuery({ queryKey: [key], queryFn: () => api<T>(path) });
+}
+
+/**
+ * Промпты бенчмарка и обычные живут в одном списке, но друг другу не подаются: у первых условия
+ * заточены под проверку набора. Кэш общий — фильтр только на выходе.
+ */
+export function usePrompts(scope: "ordinary" | "benchmark") {
+  return useQuery({
+    queryKey: ["tasks"],
+    queryFn: () => api<Task[]>("/tasks"),
+    select: (tasks) => tasks.filter((task) => task.tags.includes(BENCHMARK_TAG) === (scope === "benchmark")),
+  });
 }
 
 export function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
@@ -226,7 +239,7 @@ function ActivityCard() {
 
 export function Shell() {
   const groups = [
-    { label: "Запуск", links: [["/", "Новый запуск"], ["/batch", "Массовый запуск"], ["/benchmark", "Бенчмарки моделей"]] },
+    { label: "Запуск", links: [["/", "Новый запуск"], ["/batch", "Массовый запуск"], ["/benchmark", "Бенчмарк"]] },
     { label: "Анализ", links: [["/runs", "Результаты"], ["/leaderboard", "Лидерборд"], ["/compare", "Сравнение"], ["/analytics", "Аналитика"], ["/gallery", "Галерея"]] },
     { label: "Подготовка", links: [["/tasks", "Промпты"], ["/fixtures", "Исходные проекты"], ["/models", "Модели"], ["/settings", "Настройки"]] },
   ] as const;

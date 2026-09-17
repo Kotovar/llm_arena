@@ -62,8 +62,10 @@ export function benchmarkRunSummary(rows: readonly BenchmarkMetricRow[]) {
   const averageOutputTokens = mean(successfulOutputTokens);
   const averageDurationMs = mean(successfulDurations);
   for (const row of rows) outcomes[row.outcome] += 1;
+  const sum = (key: "outputTokens" | "totalDurationMs") => rows.reduce((total, row) => total + (resultMetric(row.resultJson, key) ?? 0), 0);
   return {
     solved: solved.length,
+    failed: counted.filter((row) => row.verdict.verdict === "fail").length,
     counted: counted.length,
     waiting: counted.filter((row) => row.verdict.verdict === null).length,
     solveRate: counted.length ? round((solved.length / counted.length) * 100) : null,
@@ -73,6 +75,8 @@ export function benchmarkRunSummary(rows: readonly BenchmarkMetricRow[]) {
       averageOutputTokens: averageOutputTokens === null ? null : Math.round(averageOutputTokens),
       averageDurationMs: averageDurationMs === null ? null : Math.round(averageDurationMs),
     },
+    // Цена всего прогона, включая провалы: модель, которая долго ошибается, тоже тратит время.
+    total: { outputTokens: sum("outputTokens"), durationMs: sum("totalDurationMs") },
   };
 }
 

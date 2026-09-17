@@ -25,6 +25,7 @@ import {
   selectResultVersionSchema,
   updateModelCapabilitiesSchema,
   publicFixtureManifest,
+  BENCHMARK_TAG,
 } from "@llm-arena/shared";
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
@@ -524,6 +525,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         id: taskRun.id,
         position: taskRun.position,
         name: store.getTaskRevision(taskRun.task_revision_id)?.name ?? `Задача ${taskRun.position + 1}`,
+        description: store.taskDescriptionByRevision(taskRun.task_revision_id),
         status: taskRun.status,
         outcome: taskRunOutcome(taskRun),
         verdict: taskVerdict(taskRun),
@@ -721,8 +723,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/gallery", async () => {
     const featured = new Set(store.listGalleryFeatured().map((item) => item.task_run_id));
     return store.listRuns().flatMap((run) => {
-      if (run.result_mode !== "web") return [];
+      // Прогоны бенчмарка и его промпты в галерею не идут: их условия заточены под проверку, а не под показ.
+      if (run.result_mode !== "web" || run.suite_revision_id) return [];
       return store.listTaskRuns(run.id).flatMap((taskRun) => {
+        if (store.taskTagsByRevision(taskRun.task_revision_id).includes(BENCHMARK_TAG)) return [];
         if (taskRun.status !== "completed" || taskRun.broken_at !== null || !checksPassed(taskRun.result_json)) return [];
         const selected = selectedResultVersionRecord(taskRun);
         const snapshot = parseGallerySnapshot(taskRun.snapshot_json);

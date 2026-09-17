@@ -19,6 +19,7 @@ import {
   type TaskImage,
   type TaskRevision,
   type Verdict,
+  BENCHMARK_TAG,
 } from "@llm-arena/shared";
 
 type TaskRow = {
@@ -533,6 +534,7 @@ export function createStore(filename: string) {
     if (!taskRevisionIds.length) throw new Error("Run has no prompts");
     for (const taskRevisionId of taskRevisionIds) {
       if (!getTaskRevision(taskRevisionId)) throw new Error(`Task revision ${taskRevisionId} not found`);
+      if (!suiteRevision && store.taskTagsByRevision(taskRevisionId).includes(BENCHMARK_TAG)) throw new Error("Промпт бенчмарка запускается только в составе бенчмарка");
     }
     const modelRef = model.kind === "cloud" ? input.modelRef ?? model.modelRef : model.modelRef;
     const id = randomUUID();
