@@ -143,6 +143,10 @@ export const llamaProfileSchema = z.object({
   ubatchSize: z.number().int().positive(),
   flashAttention: z.union([z.literal("auto"), z.boolean()]),
   cacheReuse: z.number().int().nonnegative(),
+  // Спекулятивное декодирование по n-граммам: черновик берётся из уже виденного текста, второй
+  // модели не нужно. Поле необязательное — профили, сохранённые до него, запускаются как раньше,
+  // иначе их прогоны стали бы быстрее задним числом и перестали сравниваться со своими же старыми.
+  specType: z.enum(["ngram-simple", "ngram-mod"]).optional(),
   fit: z.boolean().optional(),
   fitTargetMiB: z.number().int().positive().optional(),
   fitContextMin: z.number().int().min(4096).optional(),

@@ -129,6 +129,7 @@ describe("интерфейс запуска", () => {
         cacheTypeK: "q8_0",
         cacheTypeV: "q8_0",
         flashAttention: "auto",
+        specType: "ngram-simple",
         fit: true,
         fitTargetMiB: 750,
         fitContextMin: 100_000,

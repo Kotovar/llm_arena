@@ -272,6 +272,10 @@ export function defaultLocalProfile(modelId: string) {
       ubatchSize: 512,
       flashAttention: "auto" as const,
       cacheReuse: 256,
+      // Замер на Gemma 4 26B A4B и Tiel-Coder 35B A3B: +68% и +40% токенов в секунду на правке
+      // уже существующего кода, на прозе без потерь. Черновик берётся из контекста, лишней VRAM
+      // не просит.
+      specType: "ngram-simple" as const,
       fit: true,
       fitTargetMiB: 750,
       fitContextMin: 100_000,

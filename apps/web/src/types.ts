@@ -60,6 +60,7 @@ export type LlamaParameters = {
   ubatchSize: number;
   flashAttention: boolean | "auto";
   cacheReuse: number;
+  specType?: "ngram-simple" | "ngram-mod";
   fit?: boolean;
   fitTargetMiB?: number;
   fitContextMin?: number;
