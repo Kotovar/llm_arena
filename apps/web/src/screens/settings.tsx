@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Page, Panel, useData } from "../shell.js";
 import { useToast } from "../toast.js";
-import type { AppSettings, LocalModelFile, Runner } from "../types.js";
+import type { AppSettings, LocalModelFile, Model, Runner } from "../types.js";
 
 export function SettingsPage() {
   const client = useQueryClient();
@@ -12,6 +12,8 @@ export function SettingsPage() {
   const files = useData<LocalModelFile[]>("local-model-files", "/local-model-files");
   const diagnostics = useData<Record<string, string>>("diagnostics", "/diagnostics");
   const runners = useData<Runner[]>("runners", "/runners");
+  const models = useData<Model[]>("models", "/models");
+  const externalModelName = models.data?.find((model) => model.id === settings.data?.externalModelId)?.name;
   const [modelDirectory, setModelDirectory] = useState("");
   const [directoryTouched, setDirectoryTouched] = useState(false);
   useEffect(() => {
@@ -34,6 +36,6 @@ export function SettingsPage() {
       {files.error ? <p className="error">Папка недоступна: {files.error.message}</p> : null}
       {files.data ? <div className="directory-state"><strong>{files.data.length} моделей</strong><span>{files.data.filter((file) => file.connectedModelId).length} уже подключено</span></div> : null}
     </Panel>
-    <div className="two-col settings-grid"><Panel title="Система"><dl>{Object.entries(diagnostics.data ?? {}).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>{settings.data?.externalModelId ? <div className="active-export"><span className="mono">Активная модель для терминала</span><strong>{settings.data.externalProfileName} · порт {settings.data.externalPort}</strong><small>Запуск из любого терминала: <code>omp-local</code> или <code>pi-local</code></small></div> : <p className="empty">Выберите профиль модели и нажмите «Использовать в терминале».</p>}</Panel><Panel title="Способы запуска"><div className="stack">{runners.data?.map((runner) => <article className="item" key={runner.id}><div><span className="mono">{runner.kind}</span><h3>{runner.name}</h3><code>{runner.exec.join(" ")}</code></div></article>)}</div></Panel></div>
+    <div className="two-col settings-grid"><Panel title="Система"><dl>{Object.entries(diagnostics.data ?? {}).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>{settings.data?.externalModelId ? <div className="active-export"><span className="mono">Активная модель для терминала</span><strong>{[externalModelName, settings.data.externalProfileName, `порт ${settings.data.externalPort}`].filter(Boolean).join(" · ")}</strong><small>Запуск из любого терминала: <code>omp-local</code> или <code>pi-local</code></small></div> : <p className="empty">Выберите профиль модели и нажмите «Использовать в терминале».</p>}</Panel><Panel title="Способы запуска"><div className="stack">{runners.data?.map((runner) => <article className="item" key={runner.id}><div><span className="mono">{runner.kind}</span><h3>{runner.name}</h3><code>{runner.exec.join(" ")}</code></div></article>)}</div></Panel></div>
   </Page>;
 }
