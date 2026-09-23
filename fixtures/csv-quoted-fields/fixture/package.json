@@ -1,0 +1,9 @@
+{
+  "name": "contacts-import",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "import": "node src/cli.ts contacts.csv"
+  }
+}

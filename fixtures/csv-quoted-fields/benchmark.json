@@ -1,0 +1,31 @@
+{
+  "id": "csv-quoted-fields",
+  "name": "Fix CSV parsing of quoted fields",
+  "instructions": "Work in the current directory. The project runs on Node.js 24 without installing anything: TypeScript files are executed directly, so use plain type annotations only — enums, namespaces and constructor parameter properties are not supported. Do not add dependencies. Keep the signatures of parseCsv and importContacts. Run the existing checks before you finish.",
+  "reproduction": "Запустите `node src/cli.ts contacts.csv` в корне проекта. В исходном состоянии «Lee, Jordan» режется по запятой (имя `\"Lee`, email `jordan\"`), в заметке остаются двойные кавычки, телефон Omar — `\"\"`, а заметка из двух строк теряет вторую. После правки — четыре контакта с именем `Lee, Jordan`, заметкой `Met at \"DevConf\", follow up`, пустым телефоном и заметкой в две строки. Смотрите на патч: правка должна быть в src/csv.ts, а не в обходах в contacts.ts.",
+  "checks": [
+    {
+      "id": "tests",
+      "label": "Существующие тесты",
+      "command": {
+        "argv": ["node", "--test"]
+      }
+    }
+  ],
+  "hidden": [
+    {
+      "id": "quoted-fields",
+      "label": "Поля в кавычках разбираются по формату",
+      "command": {
+        "argv": ["node", "--test", "quoted-fields.test.ts"]
+      }
+    }
+  ],
+  "baseline": {
+    "tests": "pass",
+    "quoted-fields": "fail"
+  },
+  "limits": {
+    "maxDurationMs": 600000
+  }
+}
