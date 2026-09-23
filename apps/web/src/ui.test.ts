@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { batchRunSummary, toggleHarness, usableHarnesses, attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, toneClass, visionProjectorFiles } from "./ui.js";
+import { batchRunSummary, toggleHarness, usableHarnesses, attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, runnerLabel, runProfileName, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, toneClass, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -306,7 +306,7 @@ describe("подписи списка запусков", () => {
 
   it("сохраняет описание запуска при ошибке", () => {
     const failed = { runner_id: "llama-chat", result_mode: "text" as const, task_count: 2, error: "llama-server не стартовал", status: "failed" };
-    expect(runListMeta(failed, "llama.cpp Chat", "с обвязкой (OMP)")).toBe("2 промпта · llama.cpp Chat · текстовый ответ · с обвязкой (OMP)");
+    expect(runListMeta(failed, "llama.cpp Chat · без агента", "Automatic")).toBe("2 промпта · llama.cpp Chat · без агента · профиль: Automatic · текстовый ответ");
     const completed = { ...failed, error: null, status: "completed" };
     expect(runListMeta(completed, "llama.cpp Chat")).toBe("2 промпта · llama.cpp Chat · текстовый ответ");
     expect(runListMeta({ ...completed, result_mode: "web" }, undefined)).toBe("2 промпта · llama-chat · web-приложение");
@@ -315,7 +315,24 @@ describe("подписи списка запусков", () => {
   });
 
   it("различает локальный запуск с обвязкой и без неё", () => {
-    expect(runListMeta({ runner_id: "omp", result_mode: "web", task_count: 1, error: null, status: "completed" }, "OMP", "без обвязки")).toBe("1 промпт · OMP · web-приложение · без обвязки");
+    const omp = runners.find((runner) => runner.id === "omp");
+    expect(runListMeta({ runner_id: "omp", result_mode: "web", task_count: 1, error: null, status: "completed" }, runnerLabel(omp, "omp", 0))).toBe("1 промпт · OMP без расширений · web-приложение");
+  });
+
+  it("не повторяет раннер, когда обвязка и есть раннер", () => {
+    const byId = (id: string) => runners.find((runner) => runner.id === id);
+    expect(runnerLabel(byId("omp"), "omp", 1)).toBe("OMP-среда");
+    expect(runnerLabel(byId("pi-local"), "pi-local", 0)).toBe("pi-среда");
+    expect(runnerLabel(byId("llama-chat"), "llama-chat", 0)).toBe("llama.cpp Chat · без агента");
+    expect(runnerLabel(byId("claude"), "claude", 0)).toBe("Claude Code · без обвязки");
+    expect(runnerLabel(undefined, "gone", 0)).toBe("gone · без обвязки");
+  });
+
+  it("берёт профиль из снимка запуска", () => {
+    expect(runProfileName({ snapshot_json: JSON.stringify({ profile: { name: "Automatic" } }) })).toBe("Automatic");
+    expect(runProfileName({ snapshot_json: JSON.stringify({ model: { name: "cloud" } }) })).toBeUndefined();
+    expect(runProfileName({ snapshot_json: "{broken" })).toBeUndefined();
+    expect(runProfileName({ snapshot_json: null })).toBeUndefined();
   });
 
   it("показывает оценку запуска только когда она есть", () => {

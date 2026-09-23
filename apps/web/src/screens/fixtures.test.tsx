@@ -85,7 +85,6 @@ describe("исходные проекты", () => {
 
     expect(within(runnableCard).getByRole("button", { name: "Запустить оригинал" })).toBeTruthy();
     expect(within(logicCard).queryByRole("button", { name: "Запустить оригинал" })).toBeNull();
-    expect(logicCard.textContent).toContain("нет запускаемого приложения");
   });
 
   it("гасит превью оригинала по уходу со страницы", async () => {
@@ -108,7 +107,7 @@ describe("исходные проекты", () => {
     await screen.findByText("Fix stale search results");
     const card = screen.getByText("Fix stale search results").closest("section")!;
 
-    await user.click(within(card).getByRole("button", { name: "Открыть файлы" }));
+    await user.click(within(card).getByRole("button", { name: "Подробнее" }));
     await user.click(await within(card).findByRole("button", { name: "src/search.ts" }));
 
     expect(await screen.findByText(/createSearchController/u)).toBeTruthy();

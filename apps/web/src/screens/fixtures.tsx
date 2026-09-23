@@ -55,7 +55,8 @@ function FixtureFiles({ fixtureId }: { fixtureId: string }) {
   </div>;
 }
 
-function FixtureCard({ fixture }: { fixture: Fixture }) {
+/** Строка проекта: название и действия всегда на виду, подсказка ревьюеру и файлы — по «Подробнее». */
+function FixtureRow({ fixture }: { fixture: Fixture }) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [report, setReport] = useState<Verification>();
@@ -77,23 +78,24 @@ function FixtureCard({ fixture }: { fixture: Fixture }) {
     mutationFn: () => stopPreviewTarget({ fixtureId: fixture.id }),
     onSuccess: () => setPreviewUrl(undefined),
   });
-  const hidden = fixture.hidden?.length ?? 0;
-  return <Panel title={fixture.name} action={<div className="actions">
-    <button type="button" onClick={() => setOpen(!open)}>{open ? "Скрыть файлы" : "Открыть файлы"}</button>
-    {fixture.preview ? <button type="button" onClick={() => startPreview.mutate()} disabled={startPreview.isPending || Boolean(previewUrl)}>{startPreview.isPending ? "Запускаем…" : "Запустить оригинал"}</button> : null}
-    <button type="button" className="primary" onClick={() => verify.mutate()} disabled={verify.isPending}>{verify.isPending ? "Проверяем…" : "Проверить состояние"}</button>
-  </div>}>
-    <div className="stack">
-      <p><span className="mono">{fixture.id}</span>{hidden ? ` · ${hidden} скрытых проверок` : " · скрытых проверок нет"}</p>
+  return <section className="fixture-row">
+    <header>
+      <div><h3>{fixture.name}</h3><code>{fixture.id}</code></div>
+      <div className="panel-actions">
+        <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? "Свернуть" : "Подробнее"}</button>
+        {fixture.preview ? <button type="button" onClick={() => startPreview.mutate()} disabled={startPreview.isPending || Boolean(previewUrl)}>{startPreview.isPending ? "Запускаем…" : "Запустить оригинал"}</button> : null}
+        <button type="button" className="primary" onClick={() => verify.mutate()} disabled={verify.isPending}>{verify.isPending ? "Проверяем…" : "Проверить состояние"}</button>
+      </div>
+    </header>
+    {startPreview.error ? <p className="error">{startPreview.error.message}</p> : null}
+    {verify.error ? <p className="error">{verify.error.message}</p> : null}
+    {previewUrl ? <ResultPreview url={previewUrl} target={{ fixtureId: fixture.id }} onClose={() => stopPreview.mutate()} closing={stopPreview.isPending} title={`Исходное состояние: ${fixture.name}`} /> : null}
+    {report ? <VerificationReport report={report} /> : null}
+    {open ? <div className="stack">
       {fixture.reproduction ? <p className="benchmark-reproduction"><strong>Как проверить:</strong> {fixture.reproduction}</p> : null}
-      {!fixture.preview ? <small>У этого fixture нет запускаемого приложения: проблема видна по проверкам, а не в браузере.</small> : null}
-      {startPreview.error ? <p className="error">{startPreview.error.message}</p> : null}
-      {verify.error ? <p className="error">{verify.error.message}</p> : null}
-      {previewUrl ? <ResultPreview url={previewUrl} target={{ fixtureId: fixture.id }} onClose={() => stopPreview.mutate()} closing={stopPreview.isPending} title={`Исходное состояние: ${fixture.name}`} /> : null}
-      {report ? <VerificationReport report={report} /> : null}
-      {open ? <FixtureFiles fixtureId={fixture.id} /> : null}
-    </div>
-  </Panel>;
+      <FixtureFiles fixtureId={fixture.id} />
+    </div> : null}
+  </section>;
 }
 
 export function FixturesPage() {
@@ -106,6 +108,6 @@ export function FixturesPage() {
     {fixtures.isLoading ? <Skeleton rows={4} /> : null}
     {fixtures.error ? <p className="error">{fixtures.error.message}</p> : null}
     {fixtures.data?.length === 0 ? <Empty>Ни одного исходного проекта не объявлено.</Empty> : null}
-    {fixtures.data?.map((fixture) => <FixtureCard key={fixture.id} fixture={fixture} />)}
+    {fixtures.data?.length ? <div className="fixture-list">{fixtures.data.map((fixture) => <FixtureRow key={fixture.id} fixture={fixture} />)}</div> : null}
   </Page>;
 }

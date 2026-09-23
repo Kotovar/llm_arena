@@ -9,17 +9,17 @@ import { ArrowLeftIcon, ArrowRightIcon, CloseIcon, ExternalIcon } from "../icons
 import { Empty, NumberField, Page, Panel, SelectMenu, Status, useData, useHotkey } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { BatchSummary, Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
-import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, formatWatchdogDiagnostics, measurementConditions, harnessLabel, promptCountLabel, reviewMissingLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
+import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, formatWatchdogDiagnostics, measurementConditions, promptCountLabel, reviewMissingLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runnerLabel, runProfileName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
   const terminal = !runIsActive(run);
   const modelName = runModelName(run, models);
-  const runnerName = runners.find((runner) => runner.id === run.runner_id)?.name;
+  const runner = runnerLabel(runners.find((item) => item.id === run.runner_id), run.runner_id, run.use_omp_agent);
   return <div className="run-row-wrap"><Link className="run-row" to="/runs/$runId" params={{ runId: run.id }}>
     <Status value={visibleStatus} />
     {/* Прогон батча — обычный прогон с меткой, поэтому в общем списке он отличается только значком. */}
-    <span className="run-row-copy"><strong>{modelName}{run.batch_id ? <em className="batch-mark" title="Часть массового прогона">батч</em> : null}</strong><small>{runListMeta(run, runnerName, harnessLabel(runners.find((runner) => runner.id === run.runner_id)?.kind, run.use_omp_agent))}</small></span>
+    <span className="run-row-copy"><strong>{modelName}{run.batch_id ? <em className="batch-mark" title="Часть массового прогона">батч</em> : null}</strong><small>{runListMeta(run, runner, runProfileName(run))}</small></span>
     <span className={run.reviewed_count ? "run-row-score" : "run-row-score run-row-score-none"}>{runListScore(run)}</span>
     <time dateTime={run.created_at} title={new Date(run.created_at).toLocaleString("ru-RU")}>{formatRelativeTime(run.created_at)}</time>
   </Link>{onDelete && terminal ? <button className="row-delete" title="Удалить результат" aria-label={`Удалить запуск ${modelName}`} onClick={() => onDelete(run)}><CloseIcon /></button> : null}</div>;
@@ -624,7 +624,7 @@ export function RunDetail({ runId }: { runId: string }) {
     ...(run.data.repeat_count > 1 ? { repeat: run.data.repeat_count } : {}),
     ...(run.data.warmup_attempt ? { warmup: true } : {}),
   } : undefined;
-  return <div className="run-detail-page"><Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", harnessLabel(runners.data?.find((runner) => runner.id === run.data!.runner_id)?.kind, run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
+  return <div className="run-detail-page"><Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runnerLabel(runners.data?.find((runner) => runner.id === run.data!.runner_id), run.data.runner_id, run.data.use_omp_agent), total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.profile?.name ? `профиль: ${snapshot.profile.name}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName ?? followupTaskName, runningFollowup)} />
     {/* Прогон батча открывают со страницы батча — туда же и возвращаем, иначе назад пришлось бы
         идти через список одиночных запусков и переключать вкладку. */}

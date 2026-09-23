@@ -875,6 +875,13 @@ body:has(.gallery-dialog[open]) { overflow: hidden; }
 .gallery-result[data-leader="true"] { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
 .gallery-result[data-leader="true"] .gallery-score { color: var(--warn); }
 .gallery-winner-badge { position: absolute; top: 10px; left: 10px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--warn); border-radius: var(--r-sm); background: var(--surface-0); color: var(--warn); font: 600 11px/1.4 var(--font-ui); pointer-events: none; }
+.fixture-list { display: grid; gap: 12px; }
+.fixture-row { min-width: 0; display: grid; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.fixture-row > header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.fixture-row > header > div:first-child { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.fixture-row h3 { margin: 0; font: 600 15px var(--font-display); }
+.fixture-row code { color: var(--muted); font-size: 11px; }
+.fixture-row .panel-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .fixture-files { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 12px; align-items: start; }
 .fixture-files ul { display: grid; gap: 2px; max-height: 420px; margin: 0; overflow: auto; padding: 0; list-style: none; }
 .fixture-files button { width: 100%; padding: 6px 10px; border-color: transparent; background: transparent; font: 12px var(--font-mono); text-align: left; overflow-wrap: anywhere; }
