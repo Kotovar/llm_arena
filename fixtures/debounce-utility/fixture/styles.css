@@ -1,0 +1,12 @@
+:root { color-scheme: light dark; }
+body { margin: 0; padding: 32px; font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 36rem; margin: 0 auto; display: grid; gap: 12px; }
+h1 { margin: 0; font-size: 22px; }
+.hint, #summary { margin: 0; opacity: .75; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button { padding: 8px 14px; font: inherit; border: 1px solid currentColor; border-radius: 8px; background: none; color: inherit; cursor: pointer; }
+input { padding: 10px 12px; font: inherit; border: 1px solid currentColor; border-radius: 8px; }
+.verdict { margin: 0; min-height: 1.5em; font-weight: 600; }
+.verdict.ok { color: #1a8a3a; }
+.verdict.bad { color: #d33; }
+ol { margin: 0; padding-left: 24px; font-size: 14px; }

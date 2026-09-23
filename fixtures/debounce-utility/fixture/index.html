@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Debounce</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <h1>Поле поиска с debounce</h1>
+      <p class="hint">Запрос должен уходить один раз, когда набор стих на 400 мс, — с последним текстом.</p>
+      <div class="actions">
+        <button id="burst" type="button">Сценарий: быстрый набор</button>
+        <button id="cancel" type="button">Сценарий: набор и отмена</button>
+      </div>
+      <p id="verdict" class="verdict" role="status"></p>
+      <input id="query" type="search" placeholder="Или наберите сами" autocomplete="off" />
+      <p id="summary"></p>
+      <ol id="sent"></ol>
+    </main>
+    <script type="module">
+      import { mountDemo } from "./src/app.ts";
+      mountDemo(document.getElementById("app"));
+    </script>
+  </body>
+</html>

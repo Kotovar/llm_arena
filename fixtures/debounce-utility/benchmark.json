@@ -1,8 +1,8 @@
 {
   "id": "debounce-utility",
   "name": "Implement a debounce utility",
-  "instructions": "Work in the current directory. The project runs on Node.js 24 without installing anything: TypeScript files are executed directly, so use plain type annotations only — enums, namespaces and constructor parameter properties are not supported. Keep the exported signature of debounce and the Debounced type. Run the existing checks before you finish.",
-  "reproduction": "Интерфейса нет — задача про одну функцию. Смотрите на патч: правильное решение умещается в src/debounce.ts и занимает десяток строк. Лишние файлы, новые зависимости и переписанный search.ts — признак того, что модель не остановилась вовремя.",
+  "instructions": "Work in the current directory. The project runs on Node.js 24 without installing anything: TypeScript files are executed directly, so use plain type annotations only — enums, namespaces and constructor parameter properties are not supported. Keep the exported signature of debounce and the Debounced type. Do not delete server.mjs, index.html or src/app.ts — the original and the result are opened through them. Run the existing checks before you finish.",
+  "reproduction": "Откройте страницу и нажмите оба сценария. До модели быстрый набор «debounce» отправляет восемь запросов — по одному на букву, а набор с отменой — шесть. После правки должно быть ровно один запрос «debounce» через ~400 мс после последней буквы и ни одного при отмене; вердикт сценария пишется под кнопками. Правильная правка — десяток строк в src/debounce.ts: лишние файлы, зависимости и переписанный search.ts — признак того, что модель не остановилась вовремя.",
   "checks": [
     {
       "id": "tests",
@@ -34,5 +34,16 @@
   },
   "limits": {
     "maxDurationMs": 300000
+  },
+  "preview": {
+    "command": {
+      "argv": [
+        "node",
+        "--disable-warning=ExperimentalWarning",
+        "server.mjs"
+      ],
+      "timeoutMs": 120000
+    },
+    "readyPath": "/"
   }
 }
