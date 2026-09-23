@@ -146,7 +146,9 @@ function Previews({ taskRunId, fixtureId, available }: { taskRunId: string; fixt
   };
   const touched = [original.url, original.error, result.url, result.error].some(Boolean) || startOriginal.isPending || startResult.isPending;
   if (!available.result) {
-    return <p className="benchmark-note">Этот прогон сделан до того, как у задачи появилось превью, поэтому результат запустить нельзя. Чтобы оценить его глазами, запустите бенчмарк заново.</p>;
+    return <p className="benchmark-note">{available.original
+      ? "Этот прогон сделан до того, как у задачи появилось превью, поэтому результат запустить нельзя. Чтобы оценить его глазами, запустите бенчмарк заново."
+      : "У задачи нет превью: результат оценивается по проверкам и патчу."}</p>;
   }
   if (!touched) return <div><button type="button" className="primary" onClick={startAll}>{hasOriginal ? "Запустить до и после" : "Запустить превью"}</button></div>;
   return <div className={hasOriginal ? "benchmark-preview-pair" : "stack"}>

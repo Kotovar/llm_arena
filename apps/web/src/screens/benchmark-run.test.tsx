@@ -246,6 +246,15 @@ describe("прогон набора", () => {
     expect(within(card).queryByRole("button", { name: "Запустить" })).toBeNull();
   });
 
+  it("не винит старый прогон, если превью у задачи нет вовсе", async () => {
+    tasks = [{ ...waiting, preview: { original: false, result: false } }];
+    await renderInApp(<BenchmarkRunPage runId="run-1" />);
+    const card = (await screen.findByRole("heading", { name: /Гонка поиска/u })).closest("section")!;
+
+    expect(await within(card).findByText(/У задачи нет превью/u)).toBeTruthy();
+    expect(within(card).queryByText(/запустите бенчмарк заново/u)).toBeNull();
+  });
+
   it("показывает главную метрику частным, а не составным баллом", async () => {
     tasks = [
       { ...waiting, verdict: { verdict: "pass", reason: null, human: true, counted: true, comment: "" } },
