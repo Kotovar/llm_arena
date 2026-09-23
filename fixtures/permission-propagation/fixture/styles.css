@@ -1,0 +1,9 @@
+:root { color-scheme: light dark; }
+body { margin: 0; padding: 32px; font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 38rem; margin: 0 auto; display: grid; gap: 12px; }
+h1 { margin: 0; font-size: 22px; }
+label { display: grid; gap: 4px; }
+select { padding: 8px; font: inherit; }
+#summary { margin: 0; opacity: .8; font-size: 14px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; min-height: 2.5em; align-items: center; }
+button { padding: 8px 14px; font: inherit; border: 1px solid currentColor; border-radius: 8px; background: none; color: inherit; }

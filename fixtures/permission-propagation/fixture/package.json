@@ -1,0 +1,9 @@
+{
+  "name": "permissions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "start": "node server.mjs"
+  }
+}
