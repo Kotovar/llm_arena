@@ -160,7 +160,9 @@ export class BenchmarkEngine {
     this.#emit({ type: "run.status", runId: run.id, data: { status: "running" } });
     try {
       await this.#execute(run, controller.signal);
-      const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed" || taskRun.status === "agent_loop");
+      // В бенчмарке упавшая задача — её исход (проверки, сбой агента, watchdog) и авто-FAIL
+      // модели, а не сбой прогона: он дошёл до конца и должен попасть в итоги.
+      const failedTask = run.suite_revision_id ? undefined : this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed" || taskRun.status === "agent_loop");
       const status = controller.signal.aborted ? "cancelled" : failedTask ? "failed" : "completed";
       this.store.updateRunStatus(
         run.id,

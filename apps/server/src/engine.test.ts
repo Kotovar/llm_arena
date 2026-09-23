@@ -355,6 +355,37 @@ console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, o
     store.close();
   }, 120_000);
 
+  it("прогон бенчмарка с проваленной проверкой завершён, а не упал", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-suite-check-failed-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    // Агент ничего не правит: скрытая регрессия fixture остаётся красной.
+    writeFileSync(script, `let input = ""; for await (const chunk of process.stdin) input += chunk;
+console.log(JSON.stringify({ type: "thread.started", thread_id: "thread" }));
+console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "готово" } }));
+console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }));`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Гонка", kind: "coding", fixtureId: "stale-search-results", prompt: "Найди причину", tags: [] });
+    const suite = store.createSuite("Suite");
+    const revision = store.createSuiteRevision(suite.id, [{ taskRevisionId: task.currentRevision.id, fixtureId: "stale-search-results", fixtureRevision: null }]);
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ suiteRevisionId: revision.id, taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("suite-check-failed-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    expect(taskRunOutcome(taskRun)).toBe("check_failed");
+    // Проваленная проверка — исход задачи и авто-FAIL модели. Прогон при этом дошёл до конца, и
+    // «ошибка» вместо «завершён» выкидывала его из итогов бенчмарка.
+    expect(store.getRun(run.id)).toMatchObject({ status: "completed", error: null });
+    await engine.stop();
+    store.close();
+  }, 120_000);
+
   it("гасит задачу по её лимиту времени, а не по паузе без вывода", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-task-limit-"));
     directories.push(root);
