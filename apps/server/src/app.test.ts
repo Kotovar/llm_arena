@@ -466,14 +466,13 @@ describe("REST API", () => {
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = directory;
     const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/models/local.gguf", alias: "local" });
-    const parameters = { context: 32_000, nGpuLayers: "auto" as const, cacheTypeK: "q8_0" as const, cacheTypeV: "q8_0" as const, batchSize: 1024, ubatchSize: 512, flashAttention: "auto" as const, cacheReuse: 256 };
-    const profile = store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, ggufSha256: null, calibrated: false });
     const app = buildApp({ store, config });
 
     expect((await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId: model.id, profileName: "Automatic", port: 8080 } })).statusCode).toBe(200);
 
     const exports = join(directory, "exports");
-    const alias = `local-${profile.id.slice(0, 8)}`;
+    // Модель «Local»: агенту она видна под именем из «Моделей».
+    const alias = "Local";
     for (const filename of ["active-model.fish", "active-omp.fish", "omp-local.kdl", "active-pi.fish", "pi-local.kdl", join("pi-local", "models.json"), join("pi-local", "sync-context.mjs")]) {
       expect(existsSync(join(exports, filename)), filename).toBe(true);
     }
@@ -880,10 +879,12 @@ describe("REST API", () => {
     const ompPath = join(config.dataDir, "exports", "active-omp.fish");
     const layoutPath = join(config.dataDir, "exports", "omp-local.kdl");
     expect(readFileSync(launcherPath, "utf8")).toContain("'750'");
-    const externalAlias = `my-model-${profile.id.slice(0, 8)}`;
-    expect(readFileSync(launcherPath, "utf8")).toContain(`'-a' '${externalAlias}'`);
-    expect(readFileSync(ompPath, "utf8")).toContain(`'--model' 'llama.cpp/${externalAlias}'`);
+    // Имя из «Моделей» (пробел заменён), профиль — меткой, которую и ждёт панель агента.
+    const profileTag = `arena-profile-${profile.id.slice(0, 8)}`;
+    expect(readFileSync(launcherPath, "utf8")).toContain(`'-a' 'My-model' '--tags' '${profileTag}'`);
+    expect(readFileSync(ompPath, "utf8")).toContain("'--model' 'llama.cpp/My-model'");
     expect(readFileSync(layoutPath, "utf8")).toContain("http://127.0.0.1:8080/v1/models");
+    expect(readFileSync(layoutPath, "utf8")).toContain(profileTag);
     expect(existsSync(join(config.dataDir, "external-slots"))).toBe(true);
     expect(activated.json()).toMatchObject({ path: launcherPath, ompPath, layoutPath });
     expect(store.getSetting("externalModelId")).toBe(model.id);

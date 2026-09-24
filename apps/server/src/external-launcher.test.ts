@@ -36,11 +36,11 @@ describe("external local-model launcher", () => {
   });
 
   it("renders a Zellij layout that waits for the selected server and starts the agent", () => {
-    const rendered = renderAgentLayout("/arena/.data", 8181, "my-model-profile-1", { pane: "OMP", launcher: "active-omp.fish" });
+    const rendered = renderAgentLayout("/arena/.data", 8181, "arena-profile-1", { pane: "OMP", launcher: "active-omp.fish" });
 
     expect(rendered).toContain('command="/arena/.data/exports/active-model.fish"');
     expect(rendered).toContain("http://127.0.0.1:8181/v1/models");
-    expect(rendered).toContain('\\\"id\\\":\\\"my-model-profile-1\\\"');
+    expect(rendered).toContain('*\\\"arena-profile-1\\\"*');
     expect(rendered).toContain("exec '/arena/.data/exports/active-omp.fish'");
     expect(rendered).toContain('pane name="OMP"');
   });

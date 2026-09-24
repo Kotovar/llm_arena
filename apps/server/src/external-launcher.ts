@@ -27,10 +27,11 @@ export function activeExportPath(dataDir: string, filename: string): string {
  * Layout zellij на две панели: слева `llama-server`, справа обвязка, которая ждёт, пока сервер
  * отдаст нужную модель. Обвязка параметризуется — сервер и порт у omp-local и pi-local общие.
  */
-export function renderAgentLayout(dataDir: string, port: number, modelAlias: string, agent: { pane: string; launcher: string }, startupTimeoutMs = 900_000): string {
+export function renderAgentLayout(dataDir: string, port: number, profileTag: string, agent: { pane: string; launcher: string }, startupTimeoutMs = 900_000): string {
   const server = activeLauncherPath(dataDir);
   const launcher = activeExportPath(dataDir, agent.launcher);
-  const expectedModel = quoteFishArg(`*"id":${JSON.stringify(modelAlias)}*`);
+  // Ждём метку профиля (`--tags`), а не имя: имя у всех профилей модели одно.
+  const expectedModel = quoteFishArg(`*${JSON.stringify(profileTag)}*`);
   // Без предельного срока упавший сервер (занятый порт, нехватка VRAM) оставляет панель
   // в вечном ожидании модели, которой уже неоткуда взяться.
   const seconds = Math.max(1, Math.round(startupTimeoutMs / 1000));
@@ -97,9 +98,10 @@ try {
 } catch (error) {
   fail("не читается " + models + ": " + error.message);
 }
-// Профиль сменили: этот сеанс запустил бы pi с моделью, которой в конфигурации больше нет.
+// Модель сменили: этот сеанс запустил бы pi с моделью, которой в конфигурации больше нет.
+// Профили одной модели здесь не различить и не нужно: окно ниже всё равно берётся с сервера.
 if (config.providers.arena.models.some((model) => model.id !== ${JSON.stringify(modelAlias)})) {
-  fail("активирован другой профиль — запустите pi-local заново");
+  fail("активирована другая модель — запустите pi-local заново");
 }
 for (const model of config.providers.arena.models) {
   model.contextWindow = value;

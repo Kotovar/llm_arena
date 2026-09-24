@@ -5,7 +5,15 @@ import { join } from "node:path";
 import { allocatePort } from "./port.js";
 import { type OwnedProcess, ProcessSupervisor } from "./process-supervisor.js";
 
-type LocalModel = { path: string; alias: string; mmprojPath?: string | null };
+/** `tags` llama-server только показывает в `/v1/models`: метка, которая не меняет имя модели. */
+type LocalModel = { path: string; alias: string; mmprojPath?: string | null; tags?: string };
+
+/**
+ * Имя модели для терминальных агентов — то, что в разделе «Модели». omp показывает `id` из
+ * `/v1/models` как есть, поэтому это и есть алиас сервера. Запятая разделяет алиасы
+ * llama-server, пробел неудобен в `--model`.
+ */
+export const terminalModelName = (name: string) => name.trim().replace(/[\s,]+/gu, "-");
 
 export function buildLlamaServerCommand(
   executable: string,
@@ -21,6 +29,7 @@ export function buildLlamaServerCommand(
     model.path,
     "-a",
     model.alias,
+    ...(model.tags ? ["--tags", model.tags] : []),
     "--fit",
     profile.fit ? "on" : "off",
     "-ngl",

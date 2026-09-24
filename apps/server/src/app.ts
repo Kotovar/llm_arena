@@ -36,7 +36,7 @@ import { FIXTURE_PREVIEW_VERSION, fixturePreviewOwner } from "./preview.js";
 import { verifyFixture } from "./fixture-verify.js";
 import { assertWorkspaceCommit, fixtureRevision, writeResultDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
-import { buildLlamaServerCommand } from "./llama-server.js";
+import { buildLlamaServerCommand, terminalModelName } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { paramsFromPath, quantFromPath, readGgufFacts } from "./gguf.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
@@ -207,10 +207,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       .filter((item) => item.name === profileName)
       .sort((left, right) => right.revision - left.revision)[0];
     if (!profile) throw new Error("Execution profile not found");
-    const externalAlias = `${model.alias}-${profile.id.slice(0, 8)}`;
+    // Имя — как в «Моделях», а профиль едет меткой: по ней панели ждут именно свой сервер,
+    // а не оставшийся на том же порту сервер другого профиля той же модели.
+    const externalAlias = terminalModelName(model.name);
+    const profileTag = `arena-profile-${profile.id.slice(0, 8)}`;
     const argv = buildLlamaServerCommand(
       config.llamaServer.executable,
-      { path: model.path, alias: externalAlias, mmprojPath: model.mmprojPath },
+      { path: model.path, alias: externalAlias, mmprojPath: model.mmprojPath, tags: profileTag },
       profile.parameters,
       port,
       join(config.dataDir, "external-slots"),
@@ -230,7 +233,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       command: renderFishCommand(argv),
       fish: renderFishLauncher(argv),
       ompFish: renderFishLauncher([...omp.exec, "--model", `llama.cpp/${externalAlias}`]),
-      layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "OMP", launcher: "active-omp.fish" }, config.llamaServer.startupTimeoutMs),
+      layout: renderAgentLayout(config.dataDir, port, profileTag, { pane: "OMP", launcher: "active-omp.fish" }, config.llamaServer.startupTimeoutMs),
       // pi берёт модель из своего `models.json`, поэтому у него есть и второй экспортируемый файл.
       pi: pi ? {
         fish: renderPiLauncher(join(config.dataDir, "exports", "pi-local"), piArgv),
@@ -242,7 +245,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           ...(typeof profile.parameters.context === "number" ? { contextTokens: profile.parameters.context } : {}),
           ...(model.capabilities.vision && model.mmprojPath ? { vision: true } : {}),
         }), null, 2)}\n`,
-        layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "pi", launcher: "active-pi.fish" }, config.llamaServer.startupTimeoutMs),
+        layout: renderAgentLayout(config.dataDir, port, profileTag, { pane: "pi", launcher: "active-pi.fish" }, config.llamaServer.startupTimeoutMs),
       } : null,
     };
   };

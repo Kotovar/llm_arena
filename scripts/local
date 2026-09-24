@@ -65,7 +65,7 @@ if (args.includes("--self-check")) {
   process.exit(0);
 }
 
-const [{ loadConfig }, { buildLlamaServerCommand }, { buildPiModelsConfig }] = await Promise.all([
+const [{ loadConfig }, { buildLlamaServerCommand, terminalModelName }, { buildPiModelsConfig }] = await Promise.all([
   import("../apps/server/dist/config.js"),
   import("../apps/server/dist/llama-server.js"),
   import("../apps/server/dist/runners/pi-provider.js"),
@@ -105,7 +105,8 @@ const models = database
   .map((row) => ({
     id: row.id,
     name: row.name,
-    alias: row.alias,
+    // Агенту модель видна под именем из «Моделей», а не под именем файла.
+    alias: terminalModelName(row.name),
     path: row.path,
     mmprojPath: row.mmproj_path,
     vision: Boolean(JSON.parse(row.capabilities_json ?? "{}").vision),
