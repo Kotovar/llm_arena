@@ -466,6 +466,8 @@ describe("REST API", () => {
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = directory;
     const model = store.createModel({ name: "Local", kind: "local-gguf", provider: "llama.cpp", modelRef: "local", path: "/models/local.gguf", alias: "local" });
+    const parameters = { context: 32_000, nGpuLayers: "auto" as const, cacheTypeK: "q8_0" as const, cacheTypeV: "q8_0" as const, batchSize: 1024, ubatchSize: 512, flashAttention: "auto" as const, cacheReuse: 256 };
+    store.createExecutionProfile({ modelId: model.id, name: "Automatic", parameters, ggufSha256: null, calibrated: false });
     const app = buildApp({ store, config });
 
     expect((await app.inject({ method: "PUT", url: "/api/external-launcher", payload: { modelId: model.id, profileName: "Automatic", port: 8080 } })).statusCode).toBe(200);
