@@ -43,4 +43,8 @@ describe("generation error diagnostics", () => {
       message: "Запуск автоматически остановлен: watchdog обнаружил зацикливание агента.",
     });
   });
+  it("names the failed check instead of blaming generation", () => {
+    expect(describeGenerationError("Тесты ловят регрессии failed", ["Тесты ловят регрессии"])).toMatchObject({ code: "check_failed", message: "Не пройдена проверка «Тесты ловят регрессии»." });
+    expect(describeGenerationError("llama.cpp KV slot reset failed", ["Тесты ловят регрессии"])?.code).toBe("generation_failed");
+  });
 });

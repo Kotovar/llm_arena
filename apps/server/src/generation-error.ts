@@ -2,7 +2,7 @@
 export const POST_PROCESSING_PREFIX = "Result post-processing failed:";
 
 export type GenerationErrorDetails = {
-  code: "invalid_tool_call" | "runner_inactive" | "task_time_limit_exceeded" | "agent_loop" | "post_processing_failed" | "generation_failed";
+  code: "invalid_tool_call" | "runner_inactive" | "task_time_limit_exceeded" | "agent_loop" | "post_processing_failed" | "check_failed" | "generation_failed";
   message: string;
   details?: string;
   rawSize: number;
@@ -14,9 +14,19 @@ function formatDuration(ms: number): string {
   return `${ms} мс.`;
 }
 
-export function describeGenerationError(raw: string | null): GenerationErrorDetails | null {
+/** `failedChecks` — подписи упавших проверок из результата: движок пишет ошибку как «<подпись> failed». */
+export function describeGenerationError(raw: string | null, failedChecks: readonly string[] = []): GenerationErrorDetails | null {
   if (!raw) return null;
   const rawSize = Buffer.byteLength(raw, "utf8");
+  const check = failedChecks.find((label) => raw === `${label} failed`);
+  if (check) {
+    return {
+      code: "check_failed",
+      message: `Не пройдена проверка «${check}».`,
+      details: "Генерация прошла, но результат не прошёл проверку.",
+      rawSize,
+    };
+  }
   if (raw.startsWith(POST_PROCESSING_PREFIX)) {
     return {
       code: "post_processing_failed",

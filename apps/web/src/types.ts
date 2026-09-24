@@ -129,7 +129,7 @@ export type ModelOption = { id: string; name: string; efforts: string[]; default
 export type ModelCatalog = { claude: { models: ModelOption[] }; codex: { models: ModelOption[] } };
 
 export type GenerationErrorDetails = {
-  code: "invalid_tool_call" | "generation_failed" | string;
+  code: "invalid_tool_call" | "check_failed" | "generation_failed" | string;
   message: string;
   details?: string;
   rawSize: number;

@@ -183,6 +183,8 @@ server.on("error", (error) => {
 });
 server.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => server.kill(signal));
+// Упавшая после старта запись конфигов не должна оставлять модель висеть в VRAM без хозяина.
+process.on("exit", () => server.kill());
 
 /** Реальное окно контекста: профиль мог просить "auto", и тогда его знает только живой сервер. */
 async function waitForContext() {

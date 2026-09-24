@@ -292,13 +292,21 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   };
   const taskRunName = (taskRun: { snapshot_json: string; task_revision_id: string }) =>
     parseGallerySnapshot(taskRun.snapshot_json)?.task?.name || store.getTaskRevision(taskRun.task_revision_id)?.name;
-  const withPublicError = <T extends { error: string | null }>(item: T) => {
+  const failedCheckLabels = (resultJson: string | null) => {
+    try {
+      const checks = (JSON.parse(resultJson ?? "{}") as { checks?: Array<{ label: string; status: string }> }).checks ?? [];
+      return checks.filter((check) => check.status !== "pass").map((check) => check.label);
+    } catch {
+      return [];
+    }
+  };
+  const withPublicError = <T extends { error: string | null; result_json?: string | null }>(item: T) => {
     const { error, ...result } = item;
-    const errorDetails = describeGenerationError(error);
+    const errorDetails = describeGenerationError(error, failedCheckLabels(item.result_json ?? null));
     return { ...result, error: errorDetails?.message ?? null, errorDetails };
   };
-  const errorDetails = (error: string | null) => {
-    const details = describeGenerationError(error);
+  const errorDetails = (error: string | null, resultJson: string | null = null) => {
+    const details = describeGenerationError(error, failedCheckLabels(resultJson));
     if (!details || !error) throw new Error("Error details not found");
     return { ...details, raw: error };
   };
@@ -1281,7 +1289,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get<{ Params: { id: string } }>("/api/followups/:id/error-details", async (request) => {
     const followup = store.getFollowup(request.params.id);
     if (!followup) throw new Error("Additional prompt not found");
-    return errorDetails(followup.error);
+    return errorDetails(followup.error, followup.result_json);
   });
   app.post<{ Params: { id: string } }>("/api/followups/:id/cancel", async (request, reply) => {
     const followup = store.getFollowup(request.params.id);
