@@ -298,6 +298,8 @@ export const normalizedRunResultSchema = z.object({
   exitCode: z.number().int().nullable(),
   sessionId: z.string().nullable(),
   requestId: z.string().nullable(),
+  /** Модель, которой на деле ответил CLI: алиас вроде `opus` со временем указывает на новые версии. */
+  model: z.string().optional(),
   metrics: normalizedMetricsSchema,
   watchdog: watchdogDiagnosticsSchema.optional(),
 });

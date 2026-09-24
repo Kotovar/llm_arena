@@ -131,7 +131,9 @@ function parseAgentOutput(output: string, totalMs: number, startupMs: number, ki
 }
 
 export function parseClaudeOutput(output: string, totalMs: number, startupMs: number): NormalizedRunResult {
-  const result = lines(output).findLast((event) => event.type === "result");
+  const events = lines(output);
+  const result = events.findLast((event) => event.type === "result");
+  const model = events.find((event) => event.type === "system" && event.subtype === "init")?.model;
   if (!result) throw new Error("Claude output did not contain a result event");
   const usage = (result.usage ?? {}) as Json;
   const resultMetrics = metrics(totalMs, startupMs);
@@ -149,6 +151,7 @@ export function parseClaudeOutput(output: string, totalMs: number, startupMs: nu
     exitCode: result.is_error === true ? 1 : 0,
     sessionId: typeof result.session_id === "string" ? result.session_id : null,
     requestId: typeof result.request_id === "string" ? result.request_id : null,
+    ...(typeof model === "string" ? { model } : {}),
     metrics: resultMetrics,
   };
 }

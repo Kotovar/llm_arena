@@ -7,12 +7,19 @@ type ModelOption = { id: string; name: string; efforts: string[]; defaultEffort:
 const claudeEfforts = ["low", "medium", "high", "xhigh", "max"];
 
 export function loadModelCatalog(codexHome = process.env.CODEX_HOME ?? join(homedir(), ".codex")) {
-  const claude: ModelOption[] = ["haiku", "sonnet", "opus", "fable"].map((id) => ({
-    id,
-    name: id[0]!.toUpperCase() + id.slice(1),
-    efforts: claudeEfforts,
-    defaultEffort: null,
-  }));
+  // Алиас всегда берёт последнюю версию, поэтому сравнивать поколения можно только по точному id.
+  // ponytail: у Claude CLI нет локального списка моделей, как models_cache.json у Codex, — новые
+  // версии дописываются сюда руками (или вводятся вручную в поле модели).
+  const claude: ModelOption[] = [
+    ...["haiku", "sonnet", "opus", "fable"].map((id) => [id, `${id[0]!.toUpperCase()}${id.slice(1)} (последняя)`]),
+    ["claude-fable-5-1", "Fable 5.1"],
+    ["claude-fable-5", "Fable 5"],
+    ["claude-opus-5-5", "Opus 5.5"],
+    ["claude-opus-5", "Opus 5"],
+    ["claude-opus-4-8", "Opus 4.8"],
+    ["claude-sonnet-5", "Sonnet 5"],
+    ["claude-haiku-4-5-20251001", "Haiku 4.5"],
+  ].map(([id, name]) => ({ id: id!, name: name!, efforts: claudeEfforts, defaultEffort: null }));
   let codex: ModelOption[] = [];
   try {
     const parsed = JSON.parse(readFileSync(join(codexHome, "models_cache.json"), "utf8")) as { models?: unknown[] };

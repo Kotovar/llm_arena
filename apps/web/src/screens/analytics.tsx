@@ -394,6 +394,7 @@ export function AnalyticsPage() {
   const [completion, setCompletion] = useState<Completion>("any");
   // Ось «обвязка»: та же таблица, только строка на каждую пару «модель + обвязка».
   const [byHarness, setByHarness] = useState(false);
+  const [onlyRepresentative, setOnlyRepresentative] = useState(true);
   const tasks = useData<Task[]>("tasks", "/tasks");
   const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const query = sliceQuery(slice, completion);
@@ -403,6 +404,11 @@ export function AnalyticsPage() {
   const modelStats = useQuery({ queryKey: ["model-stats", statsQuery], queryFn: () => api<ModelStats[]>(`/analytics/model-stats${statsQuery}`) });
   // Результаты без отметки полноты сам фильтр и отбрасывает, поэтому считать их надо по нефильтрованному
   // срезу. При «Все результаты» это тот же ключ, и лишнего запроса не возникает.
+  // Точки графиков идут по профилям, поэтому репрезентативность берём у модели целиком в этом же срезе.
+  // Без обвязок ключ совпадает с modelStats, и лишнего запроса нет.
+  const modelLevelStats = useQuery({ queryKey: ["model-stats", query], queryFn: () => api<ModelStats[]>(`/analytics/model-stats${query}`) });
+  // Прячем только заведомо нерепрезентативные: пока статистика грузится, график не должен пустеть.
+  const thinIds = new Set((modelLevelStats.data ?? []).filter((row) => !row.representative).map((row) => row.modelId));
   const unfilteredQuery = sliceQuery(slice, "any");
   const unmarkedStats = useQuery({ queryKey: ["model-stats", unfilteredQuery], queryFn: () => api<ModelStats[]>(`/analytics/model-stats${unfilteredQuery}`) });
   const heatmapColumns = [{ label: "Вся нагрузка", query: sliceQuery({ kind: "all" }, completion) }, ...tags.map((tag) => ({ label: tag, query: sliceQuery({ kind: "tag", tag }, completion) }))];
@@ -413,8 +419,9 @@ export function AnalyticsPage() {
     })),
   });
   const inKind = (point: { modelKind: "local-gguf" | "cloud" }) => modelKind === "all" || point.modelKind === modelKind;
-  const shown = (points.data ?? []).filter(inKind);
-  const stats = (modelStats.data ?? []).filter(inKind);
+  const shown = (points.data ?? []).filter((point) => inKind(point) && (!onlyRepresentative || !thinIds.has(point.modelId)));
+  // По модели целиком и в разбивке по обвязкам: иначе модель, набравшая порог суммарно, пропадала бы из таблицы.
+  const stats = (modelStats.data ?? []).filter((row) => inKind(row) && (!onlyRepresentative || !thinIds.has(row.modelId)));
   // Старые записи без отметки полноты фильтр отсекает молча, поэтому их считаем вслух.
   const unmarked = (unmarkedStats.data ?? []).filter(inKind).reduce((sum, row) => sum + row.outcomes.completed, 0);
   const heatmapSlices = heatmapColumns.map((column, index) => ({ label: column.label, points: (sliceQueries[index]?.data ?? []).filter(inKind) }));
@@ -436,6 +443,7 @@ export function AnalyticsPage() {
         <SelectMenu label="Учитывать" value={completion} onSelect={(next) => setCompletion(next as Completion)} options={completionOptions.map(([value, label]) => ({ value, label }))} />
       </div>}>
         <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{modelKindFilters.map(([value, label]) => <button type="button" key={value} className={modelKind === value ? "active" : ""} aria-pressed={modelKind === value} onClick={() => setModelKind(value)}>{label}</button>)}</div>
+        {view === "slices" ? null : <label className="representative-toggle"><input type="checkbox" checked={onlyRepresentative} onChange={(event) => setOnlyRepresentative(event.currentTarget.checked)} />Только репрезентативные</label>}
         {view === "slices" ? <Heatmap slices={heatmapSlices} /> : <>
           {tags.length ? <>
             <div className="leaderboard-filters" role="group" aria-label="Срез нагрузки">

@@ -77,7 +77,7 @@ describe("runner output parsers", () => {
   });
 
   it("estimates Claude throughput from API duration", () => {
-    const output = JSON.stringify({
+    const output = JSON.stringify({ type: "system", subtype: "init", model: "claude-opus-5-5" }) + "\n" + JSON.stringify({
       type: "result",
       subtype: "success",
       session_id: "claude-session",
@@ -90,6 +90,7 @@ describe("runner output parsers", () => {
 
     const result = parseClaudeOutput(output, 1_300, 0);
     expect(result.sessionId).toBe("claude-session");
+    expect(result.model).toBe("claude-opus-5-5");
     expect(result.metrics.outputTokens.value).toBe(8);
     expect(result.metrics.generationTokensPerSecond).toMatchObject({ value: 8, source: "estimated" });
   });

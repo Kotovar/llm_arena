@@ -133,9 +133,18 @@ describe("сортировка и компактность", () => {
     expect(place("Локальная")).toBe("2");
   });
 
-  it("держит нерепрезентативную модель вне ранжирования, хотя её баллы выше всех", async () => {
+  it("по умолчанию прячет нерепрезентативные модели", async () => {
     await renderInApp(<LeaderboardPage />);
     await screen.findByText("Облачная");
+
+    expect(screen.queryByText("Редкая")).toBeNull();
+  });
+
+  it("держит нерепрезентативную модель вне ранжирования, хотя её баллы выше всех", async () => {
+    const user = userEvent.setup();
+    await renderInApp(<LeaderboardPage />);
+    await screen.findByText("Облачная");
+    await user.click(screen.getByRole("checkbox", { name: "Только репрезентативные" }));
 
     const rare = screen.getByText("Редкая").closest("tr")!;
     expect(rare.className).toContain("leaderboard-unranked");

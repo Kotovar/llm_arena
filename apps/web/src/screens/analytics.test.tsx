@@ -61,6 +61,11 @@ async function renderAnalytics() {
   await userEvent.setup().click(await screen.findByRole("tab", { name: "Качество и скорость" }));
 }
 
+/** В фикстуре «Медленная» нерепрезентативна, а по умолчанию такие модели скрыты. */
+async function showAll() {
+  await userEvent.setup().click(await screen.findByRole("checkbox", { name: "Только репрезентативные" }));
+}
+
 let requested: string[];
 
 beforeEach(() => {
@@ -144,6 +149,7 @@ describe("короткий список", () => {
 describe("аналитика решений", () => {
   it("рисует точки разными цветами, подписывает их и повторяет таблицей", async () => {
     await renderAnalytics();
+    await showAll();
 
     expect(await screen.findByRole("img", { name: "Качество и скорость" })).toBeTruthy();
     expect(screen.getByText("Парето: 1 связка")).toBeTruthy();
@@ -185,6 +191,7 @@ describe("аналитика решений", () => {
   it("показывает подробности точки при наведении и приглушает недоминирующие", async () => {
     const user = userEvent.setup();
     await renderAnalytics();
+    await showAll();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     // Точка вне короткого списка приглушена: щит и график должны говорить одно и то же.
@@ -211,6 +218,7 @@ describe("аналитика решений", () => {
 
   it("не рисует неизмеренное нулём, но показывает связку в таблице", async () => {
     await renderAnalytics();
+    await showAll();
     await screen.findByRole("img", { name: "Качество и скорость" });
 
     expect(document.querySelectorAll(".scatter .scatter-dot")).toHaveLength(2);
@@ -369,6 +377,8 @@ describe("сводная таблица и успешность", () => {
 
     const summary = await screen.findByRole("table");
     const names = () => within(summary).getAllByRole("rowheader").map((cell) => cell.textContent);
+    await waitFor(() => expect(names()).toHaveLength(1));
+    await showAll();
     // Нерепрезентативная модель показана, но всегда ниже — даже если по столбцу должна быть выше.
     expect(names()[0]).toContain("Локальная");
     expect(names()[1]).toContain("нерепрезентативно: 4 из 10");

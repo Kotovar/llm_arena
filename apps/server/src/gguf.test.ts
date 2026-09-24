@@ -2,7 +2,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { paramsFromPath, quantFromPath, readGgufFacts } from "./gguf.js";
+import { createRunSchema } from "@llm-arena/shared";
+import { paramsFromPath, quantFromPath, readGgufFacts, readGgufReasoningEfforts, templateReasoningEfforts } from "./gguf.js";
 
 function string(value: string): Buffer {
   const bytes = Buffer.from(value, "utf8");
@@ -40,6 +41,34 @@ function write(name: string, body: Buffer): string {
   writeFileSync(path, body);
   return path;
 }
+
+describe("уровни мышления из шаблона чата", () => {
+  it("предлагает только то, что шаблон понимает", () => {
+    // Gpt-oss: уровень, но не выключение.
+    expect(templateReasoningEfforts('{{- "Reasoning: " + reasoning_effort }}')).toEqual(["low", "medium", "high"]);
+    // Qwen-подобные: только вкл/выкл.
+    expect(templateReasoningEfforts("{%- if enable_thinking is false %}")).toEqual(["none"]);
+    expect(templateReasoningEfforts("{%- set e = reasoning_effort %}{%- if enable_thinking %}")).toEqual(["none", "low", "medium", "high"]);
+    expect(templateReasoningEfforts("{{ messages }}")).toEqual([]);
+  });
+
+  it("предлагает только уровни, которые примет API запуска", () => {
+    for (const effort of templateReasoningEfforts("{{ reasoning_effort }}{% if enable_thinking %}")) {
+      expect(createRunSchema.safeParse({ taskRevisionIds: ["00000000-0000-4000-8000-000000000001"], modelId: "00000000-0000-4000-8000-000000000002", executionProfileId: null, runnerId: "omp", resultMode: "web", reasoningEffort: effort }).success, effort).toBe(true);
+    }
+  });
+
+  it("читает шаблон после словаря токенизатора", () => {
+    const pairs = [
+      Buffer.concat([string("tokenizer.ggml.tokens"), u32(9), u32(8), u64(2), string("a"), string("bb")]),
+      Buffer.concat([string("tokenizer.chat_template"), u32(8), string("{% if enable_thinking %}")]),
+    ];
+    const body = Buffer.concat([Buffer.from("GGUF", "latin1"), u32(3), u64(0), u64(pairs.length), ...pairs]);
+
+    expect(readGgufReasoningEfforts(write("template.gguf", body))).toEqual(["none"]);
+    expect(readGgufReasoningEfforts(write("no-template.gguf", ggufHeader(8, 24)))).toEqual([]);
+  });
+});
 
 describe("readGgufFacts", () => {
   it("reads the expert and block counts past other metadata", () => {

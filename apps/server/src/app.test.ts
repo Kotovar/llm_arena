@@ -1449,7 +1449,8 @@ describe("REST API", () => {
       taskRunId: taskRun.id,
       runId: run.id,
       prompt: { id: task.currentRevision.id, name: "Landing", prompt: "Build a landing page" },
-      model: { id: model.id, name: "Gemma" },
+      // Переименование в «Моделях» доходит и до старых результатов: строка галереи — одна модель.
+      model: { id: model.id, name: "Gemma 4" },
       selectedVersion: { type: "followup", followupId: followup.id, resultSha: followupArtifacts.resultSha, status: "completed", index: 1 },
       screenshotUrl: `/api/task-runs/${taskRun.id}/preview-image?resultSha=${encodeURIComponent(followupArtifacts.resultSha)}`,
       metrics: { durationMs: 2_500, inputTokens: 25, outputTokens: 50, tokensPerSecond: 5 },

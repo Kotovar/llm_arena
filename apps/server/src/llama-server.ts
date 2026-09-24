@@ -42,7 +42,9 @@ export function buildLlamaServerCommand(
   if (profile.fit) command.push("--fit-target", String(profile.fitTargetMiB), "--fit-ctx", String(profile.fitContextMin));
   if (profile.nCpuMoe !== undefined) command.push("--n-cpu-moe", String(profile.nCpuMoe));
   if (profile.specType) command.push("--spec-type", profile.specType);
-  if (reasoningEffort) command.push("--reasoning-effort", reasoningEffort);
+  // «none» — выключенное мышление, а не уровень: шаблоны с enable_thinking понимают только его.
+  if (reasoningEffort === "none") command.push("--reasoning", "off");
+  else if (reasoningEffort) command.push("--reasoning-effort", reasoningEffort);
   if (profile.context !== "auto") command.push("-c", String(profile.context));
   command.push(
     "-ctk",

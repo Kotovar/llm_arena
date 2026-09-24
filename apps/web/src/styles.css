@@ -241,6 +241,7 @@ button:where(:has(.icon)), a:where(:has(.icon)) { display: inline-flex; align-it
 td.mono { color: #d9e1ed; font-size: 13px; }
 .leaderboard-table td, .analytics-table td, .heatmap td { font-variant-numeric: tabular-nums; }
 .leaderboard-thin { display: block; margin-top: 3px; color: var(--warn); font: 400 10px var(--font-ui); }
+.representative-toggle { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 12px; cursor: pointer; }
 .leaderboard-note { color: var(--muted); font-size: 11px; }
 .sampling-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .model-economics { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 16px; }
@@ -766,6 +767,7 @@ body:has(.gallery-dialog[open]) { overflow: hidden; }
 .gallery-run-info .gallery-metrics div { padding: 12px; background: var(--surface-2); }
 .gallery-run-info .gallery-metrics dt { font-size: 10px; }
 .gallery-run-info .gallery-metrics dd { font: 12px var(--font-mono); }
+.gallery-versions, .gallery-efforts { flex-wrap: wrap; margin: 12px 0 0; }
 .gallery-variants { padding-top: 20px; border-top: 1px solid var(--line); }
 .gallery-variants h3 { display: flex; justify-content: space-between; gap: 8px; }
 .gallery-variants h3 span { color: var(--muted); font-family: var(--font-mono); }

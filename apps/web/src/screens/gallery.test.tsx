@@ -300,7 +300,8 @@ describe("лидеры и разделение по типу моделей", ()
     const table = await screen.findByRole("table");
 
     const leaders = within(table).getAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа");
-    expect(leaders.length).toBe(1);
+    // Gemma — единственная локальная, и она лидер своей группы.
+    expect(leaders.map((star) => star.closest("tr")!.querySelector("th")!.textContent)).toEqual(["Claude", "Gemma"]);
     expect(leaders[0]!.closest("button")!.textContent).toContain("36/40");
   });
 
@@ -382,18 +383,46 @@ describe("сворачивание групп и скрытие моделей",
   });
 
   // Лидеры считаются до скрытия: иначе звёздочка переезжает на следующую модель.
-  // Третья подписочная модель обязательна: после скрытия лидера в группе должно остаться
-  // с чем сравнивать, иначе звезды нет и при пересчёте — тест не отличил бы регрессию.
+  // Третья подписочная модель обязательна: при пересчёте звезда досталась бы Codex или Mistral.
   it("не переносит звезду лидера на видимую модель после скрытия лидера", async () => {
     const user = userEvent.setup();
     gallery = [...gallery, scored("cloud-3", "Mistral", "cloud", 24)];
     await renderInApp(<GalleryPage />);
     await screen.findByRole("table");
-    expect(screen.getAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа").length).toBe(1);
+    expect(screen.getAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа").length).toBe(2);
 
     await user.click(screen.getByRole("button", { name: "Скрыть Claude" }));
 
     expect(modelNames()).toEqual(["Модель", "Codex", "Mistral", "Gemma"]);
-    expect(screen.queryAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа").length).toBe(0);
+    // Осталась только звезда локальной Gemma.
+    expect(screen.queryAllByTitle("Лучшая оценка по этому промпту среди моделей своего типа").length).toBe(1);
+  });
+});
+
+describe("поколения и уровни мышления", () => {
+  function codex(modelRef: string, reasoningEffort: string, reviewScore: number): GalleryResult {
+    return { ...result("p1", "Dungeon Crawler", []), taskRunId: `run-${modelRef}-${reasoningEffort}`, model: { id: "codex", name: "GPT", kind: "cloud", modelRef }, reasoningEffort, reviewScore, reviewPossible: 40 };
+  }
+
+  it("держит CLI одной строкой, а версии и уровни мышления показывает внутри результата", async () => {
+    const user = userEvent.setup();
+    gallery = [codex("gpt-6-luna", "low", 20), codex("gpt-6-luna", "high", 36), codex("gpt-5.6-luna", "max", 30)];
+    await renderInApp(<GalleryPage />);
+    const table = await screen.findByRole("table");
+    expect([...table.querySelectorAll("tbody th.gallery-model")].map((cell) => cell.textContent)).toEqual(["GPT"]);
+
+    await user.click(table.querySelector<HTMLButtonElement>(".gallery-result")!);
+    const tabs = screen.getByRole("tablist", { name: "Версия модели" });
+    expect(within(tabs).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["GPT-5.6 Luna", "GPT-6 Luna"]);
+    expect(within(tabs).getByRole("tab", { name: "GPT-6 Luna" }).getAttribute("aria-selected")).toBe("true");
+    const efforts = screen.getByRole("group", { name: "Уровень мышления" });
+    expect(within(efforts).getByRole("button", { name: "high" }).getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(within(efforts).getByRole("button", { name: "low" }));
+    expect(within(screen.getByRole("group", { name: "Уровень мышления" })).getByRole("button", { name: "low" }).getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(within(screen.getByRole("tablist", { name: "Версия модели" })).getByRole("tab", { name: "GPT-5.6 Luna" }));
+    // У GPT-5.6 Luna уровень один, но строка остаётся на месте: макет не прыгает между вкладками.
+    expect(within(screen.getByRole("group", { name: "Уровень мышления" })).getAllByRole("button").map((button) => button.textContent)).toEqual(["max"]);
   });
 });

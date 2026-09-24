@@ -18,6 +18,7 @@ import { readExecutableVersion, readGpuInfo, startGpuSampler, type GpuInfo } fro
 import { buildTaskPrompt } from "./task-prompt.js";
 import { POST_PROCESSING_PREFIX, describeGenerationError } from "./generation-error.js";
 import { taskImagePath } from "./task-images.js";
+import { readGgufReasoningEfforts } from "./gguf.js";
 import { AgentLoopError, createWatchdog } from "./watchdog.js";
 import { runChecks, runHiddenChecks } from "./checks.js";
 
@@ -45,13 +46,20 @@ type RunEnvironment = {
   ggufSha256: string | null;
 };
 
-function assertModelCapabilities(
-  model: { name: string; kind: "local-gguf" | "cloud"; capabilities: { toolUse: boolean; vision: boolean; reasoning: boolean }; mmprojPath: string | null },
+export function assertModelCapabilities(
+  model: { name: string; kind: "local-gguf" | "cloud"; path: string | null; capabilities: { toolUse: boolean; vision: boolean; reasoning: boolean }; mmprojPath: string | null },
   runnerKind: ArenaConfig["runners"][number]["kind"],
   reasoningEffort: string | null,
   images: readonly TaskImage[],
 ): void {
-  if (reasoningEffort !== null && !model.capabilities.reasoning) throw new Error(`${model.name} is not configured for reasoning`);
+  // У локальной модели уровни задаёт шаблон чата: неизвестный ему уровень он молча проигнорирует.
+  if (reasoningEffort !== null && model.kind === "local-gguf") {
+    const supported = model.path ? readGgufReasoningEfforts(model.path) : [];
+    // Проверяем род, а не точное слово: уточнения старых прогонов идут с их уровнем (xhigh у Tiel),
+    // и шаблон, принимающий уровни, передаст его дальше.
+    const accepted = reasoningEffort === "none" ? supported.includes("none") : supported.some((effort) => effort !== "none");
+    if (!accepted) throw new Error(`${model.name}: шаблон чата не поддерживает уровень мышления «${reasoningEffort}» (доступно: ${supported.join(", ") || "ничего"})`);
+  } else if (reasoningEffort !== null && !model.capabilities.reasoning) throw new Error(`${model.name} is not configured for reasoning`);
   if ((runnerKind === "omp" || runnerKind === "pi") && !model.capabilities.toolUse) throw new Error(`${model.name} is not configured for tool use`);
   if (!images.length) return;
   if (!model.capabilities.vision) throw new Error(`${model.name} is not configured for vision`);

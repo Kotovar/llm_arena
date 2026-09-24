@@ -5,7 +5,7 @@ import { api } from "../api.js";
 import { ArrowRightIcon, CloseIcon } from "../icons.js";
 import { Empty, Page, Panel, Skeleton, useData } from "../shell.js";
 import type { GalleryMetrics, GalleryResult, Model, ResultVersion } from "../types.js";
-import { bestFirst, completionLabels, formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, measurementConditions, modelKindLabels, modelKindOrder, plural } from "../ui.js";
+import { actualModelName, completionLabels, effortLabel, formatDuration, formatMetricValue, galleryMatrix, galleryResultTags, galleryVariants, measurementConditions, modelKindLabels, modelKindOrder, plural } from "../ui.js";
 import { ResultPreview } from "./results.js";
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
@@ -70,7 +70,9 @@ function alternativeLabel(result: GalleryResult) {
   return [tags.length ? tags.join(" · ") : versionLabel(result.selectedVersion), result.reviewScore == null ? null : `${result.reviewScore}/${result.reviewPossible ?? 40}`].filter(Boolean).join(" — ");
 }
 
-function GalleryDetail({ result, alternatives, onOpen, onClose }: { result: GalleryResult; alternatives: GalleryResult[]; onOpen: (result: GalleryResult) => void; onClose: () => void }) {
+function GalleryDetail({ result, siblings, onOpen, onClose }: { result: GalleryResult; siblings: GalleryResult[]; onOpen: (result: GalleryResult) => void; onClose: () => void }) {
+  const { versions, efforts, alternatives } = galleryVariants(siblings, result);
+  const version = actualModelName(result);
   const client = useQueryClient();
   const dialog = useRef<HTMLDialogElement>(null);
   const activePreview = useRef<PreviewState | undefined>(undefined);
@@ -104,7 +106,11 @@ function GalleryDetail({ result, alternatives, onOpen, onClose }: { result: Gall
     };
   }, []);
   return <dialog className="gallery-dialog" aria-label={`${result.prompt.name} — ${result.model.name}`} ref={dialog} onClose={onClose} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); }}>
-    <header><div><span className="mono">Результат из галереи</span><h2>{result.prompt.name}</h2><div className="gallery-dialog-meta"><span>{result.model.name}</span>{result.completion ? <span className={`completion-flag ${result.completion}`}>{completionLabels[result.completion]}</span> : null}</div></div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
+    <header><div><span className="mono">Результат из галереи</span><h2>{result.prompt.name}</h2><div className="gallery-dialog-meta"><span>{result.model.name}</span>{version ? <span>{version}</span> : null}{result.completion ? <span className={`completion-flag ${result.completion}`}>{completionLabels[result.completion]}</span> : null}</div>
+      {versions.length > 1 ? <div className="compare-tabs gallery-versions" role="tablist" aria-label="Версия модели">{versions.map((item) => <button type="button" role="tab" key={item.label} aria-selected={item.label === version} className={item.label === version ? "active" : ""} onClick={() => onOpen(item.best)}>{item.label || "Версия неизвестна"}</button>)}</div> : null}
+      {/* Строку уровней держим и при одном уровне: иначе переход между вкладками версий двигает макет. */}
+      {versions.length > 1 || efforts.length > 1 ? <div className="gallery-tags gallery-efforts" role="group" aria-label="Уровень мышления">{efforts.map((item) => <button type="button" key={item.effort ?? ""} aria-pressed={item.effort === (result.reasoningEffort ?? null)} className={item.effort === (result.reasoningEffort ?? null) ? "active" : ""} onClick={() => onOpen(item.best)}>{item.effort ? effortLabel(item.effort) : "по умолчанию"}</button>)}</div> : null}
+    </div><button type="button" className="dialog-close" aria-label="Закрыть подробности результата" onClick={() => dialog.current?.close()}><CloseIcon /></button></header>
     <div className="gallery-detail-grid">
       <section className="gallery-stage" aria-label="Просмотр результата">
         {preview ? <ResultPreview url={preview.url} target={preview} onClose={() => stop.mutate()} closing={stop.isPending} title={result.prompt.name} viewport={viewport} /> : <div className="gallery-viewer">
@@ -117,7 +123,7 @@ function GalleryDetail({ result, alternatives, onOpen, onClose }: { result: Gall
       <aside className="gallery-details" aria-label="Сведения о результате">
         <section className="gallery-review-card"><div className="gallery-review-heading"><h3>Моя оценка</h3>{result.reviewScore != null ? <strong>{result.reviewScore}<span> / {result.reviewPossible ?? 40}</span></strong> : <span className="mono">Пока нет оценки</span>}</div>{result.reviewComment ? <p className="gallery-comment"><span className="mono">Комментарий к оценке</span>{result.reviewComment}</p> : null}<Link to="/runs/$runId" params={{ runId: result.runId }}>Открыть результат<ArrowRightIcon /></Link></section>
         <section className="gallery-run-info"><h3>Параметры результата</h3><dl>{detailRows(result).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><ResultMetrics metrics={result.metrics} /></section>
-        {alternatives.length ? <section className="gallery-variants"><h3>Другие результаты модели <span>{alternatives.length}</span></h3><div className="gallery-alternatives">{alternatives.map((item) => <button type="button" key={item.taskRunId} onClick={() => onOpen(item)}><span>{alternativeLabel(item)}</span><small>{versionLabel(item.selectedVersion)}</small></button>)}</div>{result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" className="gallery-feature-action" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button>}</section> : null}
+        {siblings.length > 1 ? <section className="gallery-variants">{alternatives.length ? <><h3>Другие результаты <span>{alternatives.length}</span></h3><div className="gallery-alternatives">{alternatives.map((item) => <button type="button" key={item.taskRunId} onClick={() => onOpen(item)}><span>{alternativeLabel(item)}</span><small>{versionLabel(item.selectedVersion)}</small></button>)}</div></> : null}{result.featured ? <span className="best-flag">Главный в галерее</span> : <button type="button" className="gallery-feature-action" onClick={() => feature.mutate()} disabled={feature.isPending}>{feature.isPending ? "Сохраняем…" : "Сделать главным в галерее"}</button>}</section> : null}
         {feature.error ? <p className="error" role="alert">{feature.error.message}</p> : null}
       </aside>
     </div>
@@ -148,7 +154,7 @@ export function GalleryPage() {
   const query = search.trim().toLocaleLowerCase("ru");
   const visible = all.filter((result) =>
     (!selectedTags.length || (result.prompt.tags ?? []).some((tag) => selectedTags.includes(tag))) &&
-    (!query || `${result.prompt.name} ${result.model.name}`.toLocaleLowerCase("ru").includes(query)));
+    (!query || `${result.prompt.name} ${result.model.name} ${actualModelName(result)}`.toLocaleLowerCase("ru").includes(query)));
   const toggleTag = (tag: string) => setSelectedTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]);
   const matrix = galleryMatrix(visible);
   // Поиск модели не меняет лидера среди всех моделей её типа.
@@ -172,6 +178,6 @@ export function GalleryPage() {
       {groups.length > 1 ? <tr className="gallery-group"><th scope="rowgroup" colSpan={matrix.prompts.length + 1}><button type="button" aria-expanded={!collapsedKinds.has(group.kind)} onClick={() => setCollapsedKinds((current) => toggled(current, group.kind))}>{modelKindLabels[group.kind]}</button></th></tr> : null}
       {collapsedKinds.has(group.kind) ? null : group.rows.filter((row) => !hiddenModelIds.has(row.model.id)).map((row) => <tr key={row.model.id}><th scope="row" className="gallery-model">{row.model.name}<button type="button" className="gallery-hide" title={`Скрыть ${row.model.name}`} aria-label={`Скрыть ${row.model.name}`} onClick={() => setHiddenModelIds((current) => toggled(current, row.model.id))}><CloseIcon /></button></th>{row.cells.map((cell) => <td key={cell.prompt.id}><GalleryCell results={cell.results} leaders={leaders} onOpen={setOpened} /></td>)}</tr>)}
     </tbody>)}{hiddenRows.length ? <tfoot><tr><td className="gallery-hidden-note" colSpan={matrix.prompts.length + 1}>Скрыто: {hiddenRows.map((row) => row.model.name).join(", ")} — <button type="button" onClick={() => setHiddenModelIds(new Set())}>показать все</button></td></tr></tfoot> : null}</table></div></Panel> : null}
-    {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} alternatives={visible.filter((item) => item.model.id === opened.model.id && item.prompt.id === opened.prompt.id && item.taskRunId !== opened.taskRunId).toSorted(bestFirst)} onOpen={setOpened} onClose={() => setOpened(undefined)} /> : null}
+    {opened ? <GalleryDetail key={`${opened.taskRunId}:${opened.selectedVersion.resultSha}`} result={opened} siblings={visible.filter((item) => item.model.id === opened.model.id && item.prompt.id === opened.prompt.id)} onOpen={setOpened} onClose={() => setOpened(undefined)} /> : null}
   </Page></div>;
 }

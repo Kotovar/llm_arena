@@ -91,8 +91,10 @@ export function LeaderboardPage() {
   const pairFor = (modelId: string) => pairs.data?.find((summary) => summary.modelId === modelId);
   const [kind, setKind] = useState<ModelKindFilter>("all");
   const [headToHead, setHeadToHead] = useState(false);
+  const [onlyRepresentative, setOnlyRepresentative] = useState(true);
   // Места считаются внутри выбранной группы: локальная модель не должна выглядеть седьмой среди облачных.
-  const shown = leaderboard.data?.filter((entry) => kind === "all" || entry.modelKind === kind) ?? [];
+  const inKind = leaderboard.data?.filter((entry) => kind === "all" || entry.modelKind === kind) ?? [];
+  const shown = onlyRepresentative ? inKind.filter((entry) => entry.representative) : inKind;
   const sort = useTableSort(shown, {
     modelName: (entry) => entry.modelName,
     quant: (entry) => entry.quant,
@@ -117,13 +119,14 @@ export function LeaderboardPage() {
     .map((entry, index) => [entry.modelId, index + 1] as const));
   const ranked = sort.rows.filter((entry) => placeOf.has(entry.modelId));
   const rest = sort.rows.filter((entry) => !placeOf.has(entry.modelId));
-  const thin = shown.filter((entry) => !entry.representative).length;
+  const thin = inKind.filter((entry) => !entry.representative).length;
   return <Page title="Лидерборд моделей" eyebrow="Лидерборд" intro="Доля набранных баллов по оценённым промптам во всех запусках модели. Максимум за промпт зависит от типа задачи, поэтому счёт нормализован. Средние по критериям — из десяти.">
     {leaderboard.isPending ? <Skeleton rows={5} /> : null}
     {leaderboard.error ? <p className="error">{leaderboard.error.message}</p> : null}
     {!leaderboard.isPending && !leaderboard.error && !leaderboard.data?.length ? <Empty action={<Link to="/">Запустить проверку</Link>}>Пока нет ни одного запуска.</Empty> : null}
     {leaderboard.data?.length ? <Panel title={`Моделей: ${shown.length}`} action={thin ? <span className="leaderboard-note">{thin} {plural(thin, "модель не набрала", "модели не набрали", "моделей не набрали")} промптов до порога репрезентативности</span> : undefined}>
       <div className="leaderboard-filters" role="group" aria-label="Тип моделей">{modelKindFilters.map(([value, label]) => <button type="button" key={value} className={kind === value ? "active" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>)}</div>
+      <label className="representative-toggle"><input type="checkbox" checked={onlyRepresentative} onChange={(event) => setOnlyRepresentative(event.currentTarget.checked)} />Только репрезентативные</label>
       {shown.length ? <div className="leaderboard-scroll"><table className="leaderboard-table"><thead><tr>
         <th scope="col" title="Место по доле баллов среди репрезентативных моделей. От сортировки таблицы не зависит.">#</th>
         {sortableColumns.map(([key, label, hint]) => <th scope="col" key={key} aria-sort={sort.ariaSort(key)} title={hint}>

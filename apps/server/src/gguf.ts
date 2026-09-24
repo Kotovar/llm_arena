@@ -101,6 +101,57 @@ function readCounts(path: string): { expertCount: number; layerCount: number } {
   }
 }
 
+function readChatTemplate(path: string): string {
+  const fd = openSync(path, "r");
+  try {
+    const reader = new HeaderReader(fd);
+    if (reader.take(4).toString("latin1") !== "GGUF") throw new Error("Not a GGUF file");
+    reader.u32();
+    reader.u64();
+    const pairs = reader.u64();
+    for (let index = 0; index < pairs; index += 1) {
+      const key = reader.text();
+      const type = reader.u32();
+      if (key === "tokenizer.chat_template" && type === STRING) return reader.text();
+      reader.skipValue(type);
+    }
+    return "";
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Что шаблон чата умеет с мышлением. Уровень llama-server передаёт шаблону как `reasoning_effort`,
+ * выключение («none», как в OpenAI API) — через `enable_thinking`; шаблон, который про них не знает, молча их игнорирует,
+ * и одинаковые прогоны выглядели бы как сравнение уровней.
+ * ponytail: наличие переменной, а не разбор шаблона — даём общий для таких шаблонов набор
+ * low/medium/high; если модели понадобятся xhigh/max, надо рендерить шаблон по каждому уровню.
+ */
+export function templateReasoningEfforts(template: string): string[] {
+  return [
+    ...(template.includes("enable_thinking") ? ["none"] : []),
+    ...(template.includes("reasoning_effort") ? ["low", "medium", "high"] : []),
+  ];
+}
+
+const effortCache = new Map<string, { mtimeMs: number; efforts: string[] }>();
+
+/** Уровни мышления локальной модели. Шаблон лежит после словаря токенизатора, поэтому читается отдельно и только по запросу. */
+export function readGgufReasoningEfforts(path: string): string[] {
+  const { mtimeMs } = statSync(path);
+  const cached = effortCache.get(path);
+  if (cached?.mtimeMs === mtimeMs) return cached.efforts;
+  let efforts: string[] = [];
+  try {
+    efforts = templateReasoningEfforts(readChatTemplate(path));
+  } catch {
+    efforts = [];
+  }
+  effortCache.set(path, { mtimeMs, efforts });
+  return efforts;
+}
+
 const cache = new Map<string, GgufFacts & { mtimeMs: number }>();
 
 /** Размер файла, число экспертов (0 — dense) и число слоёв. Ошибки чтения не фатальны: считаем модель dense без известных слоёв. */

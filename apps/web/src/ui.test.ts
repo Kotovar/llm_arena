@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { batchRunSummary, toggleHarness, usableHarnesses, attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, galleryMatrix, galleryResultTags, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, runnerLabel, runProfileName, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, toneClass, visionProjectorFiles } from "./ui.js";
+import { batchRunSummary, toggleHarness, usableHarnesses, attemptSummary, betterResult, formatVram, checkStatusLabel, chooseRunner, contextFill, cloudProviderCatalogKind, defaultLocalProfile, diagnosticErrorPreview, followupCountLabel, formatRelativeTime, formatWatchdogDiagnostics, cloudModel, galleryMatrix, galleryResultTags, galleryVariants, ompUnavailableReason, promptCountLabel, resultChecks, runIsActive, runModelName, runListMeta, runListScore, runnerLabel, runProfileName, formatDuration, formatMeasuredMetric, formatMetricValue, formatReviewSummary, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, matchTaskRuns, modelOptionLabel, reasoningEffortsForModel, finishedSince, galleryCoverage, gpuLayerSplit, matchesPromptQuery, promptCoverageNote, measurementConditions, reviewPossible, reviewSaveLabel, reviewSummary, reviewTotal, runProgress, runTabTitle, shouldFollowOutput, statusLabel, taskUpdateBody, updateTaskSelection, toneClass, visionProjectorFiles } from "./ui.js";
 import type { Task, TaskRun } from "./types.js";
 
 const runners = [
@@ -152,8 +152,9 @@ describe("интерфейс запуска", () => {
   });
 
   it("предлагает уровни обдумывания только моделям с этой возможностью", () => {
-    expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: false } })).toEqual([]);
-    expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: true } })).toEqual(["low", "medium", "xhigh"]);
+    // Локальной модели уровни задаёт шаблон чата, а не галочка reasoning.
+    expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: true } })).toEqual([]);
+    expect(reasoningEffortsForModel({ kind: "local-gguf", capabilities: { toolUse: false, vision: false, reasoning: false }, reasoningEfforts: ["none", "low"] })).toEqual(["none", "low"]);
     expect(reasoningEffortsForModel({ kind: "cloud", capabilities: { toolUse: false, vision: false, reasoning: false } }, ["low", "high"])).toEqual([]);
     expect(reasoningEffortsForModel({ kind: "cloud", capabilities: { toolUse: false, vision: false, reasoning: true } }, ["low", "high"])).toEqual(["low", "high"]);
   });
@@ -515,7 +516,7 @@ describe("Gallery", () => {
     expect(matrix.rows.map((row) => row.model.kind)).toEqual(["cloud", "cloud", "cloud", "local-gguf", "local-gguf"]);
   });
 
-  it("не отмечает лидера, когда оценка в группе всего одна, и отмечает всех при ничьей", () => {
+  it("отмечает лидером единственную оценку в группе и всех при ничьей", () => {
     const result = (taskRunId: string, reviewScore: number | null) => ({
       taskRunId,
       runId: `run-${taskRunId}`,
@@ -527,7 +528,7 @@ describe("Gallery", () => {
       reviewPossible: 40,
     });
 
-    expect(galleryMatrix([result("only", 30), result("none", null)]).leaders.size).toBe(0);
+    expect([...galleryMatrix([result("only", 30), result("none", null)]).leaders]).toEqual(["only"]);
     expect([...galleryMatrix([result("tie-a", 30), result("tie-b", 30)]).leaders].toSorted()).toEqual(["tie-a", "tie-b"]);
   });
 
@@ -547,7 +548,8 @@ describe("Gallery", () => {
   });
 
   it("собирает подписи о варианте модели, мышлении и обвязке", () => {
-    expect(galleryResultTags({ model: { name: "GPT-5.6 Codex", kind: "cloud", modelRef: "gpt-5.6-spark" }, reasoningEffort: "high" })).toEqual(["gpt-5.6-spark", "мышление: high"]);
+    expect(galleryResultTags({ model: { name: "GPT", kind: "cloud", modelRef: "gpt-5.6-spark" }, reasoningEffort: "high" })).toEqual(["GPT-5.6 Spark", "мышление: high"]);
+    expect(galleryResultTags({ model: { name: "hy3", kind: "cloud", modelRef: "opencode/hy3-free" } })).toEqual(["opencode/hy3-free"]);
     expect(galleryResultTags({ model: { name: "GPT-5.6 Codex", kind: "cloud", modelRef: "GPT-5.6 Codex" } })).toEqual([]);
     // Словарь обвязок общий с заголовком строки матрицы и с /compare.
     expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "pi", useOmpAgent: false })).toEqual(["pi-среда"]);
@@ -555,6 +557,61 @@ describe("Gallery", () => {
     expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "omp", useOmpAgent: false })).toEqual(["OMP без расширений"]);
     // У старых записей флага нет: тогда OMP всегда означал полную среду.
     expect(galleryResultTags({ model: { name: "Gemma 4", kind: "local-gguf" }, runnerKind: "omp", reasoningEffort: "medium" })).toEqual(["OMP-среда", "мышление: medium"]);
+  });
+});
+
+describe("поколения подписочных моделей", () => {
+  it("называет модель по её id и отличает поколения", () => {
+    expect(cloudModel("gpt-6-luna")).toEqual({ name: "GPT-6 Luna", family: "gpt luna", version: "6" });
+    expect(cloudModel("gpt-5.6-luna")).toEqual({ name: "GPT-5.6 Luna", family: "gpt luna", version: "5.6" });
+    expect(cloudModel("gpt-5.5")?.name).toBe("GPT-5.5");
+    expect(cloudModel("claude-opus-5-5")).toEqual({ name: "Opus 5.5", family: "claude opus", version: "5.5" });
+    expect(cloudModel("claude-haiku-4-5-20251001")?.name).toBe("Haiku 4.5");
+    // Алиас версии не знает: это отдельная строка, а не «Opus 5.5».
+    expect(cloudModel("opus")).toEqual({ name: "Opus", family: "claude opus", version: "" });
+    expect(cloudModel("opencode/hy3-free")).toBeUndefined();
+  });
+
+  it("держит один CLI одной строкой, а версии и уровни мышления отдаёт вкладками внутри ячейки", () => {
+    const result = (taskRunId: string, modelRef: string, reasoningEffort: string | null, reviewScore: number) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: "p1", name: "Prompt", prompt: "Text" },
+      model: { id: "codex", name: "GPT", kind: "cloud" as const, modelRef },
+      reasoningEffort,
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+      reviewScore,
+      reviewPossible: 40,
+    });
+    const results = [result("6-low", "gpt-6-luna", "low", 20), result("sol", "gpt-6-sol", "max", 25), result("5.6", "gpt-5.6-luna", "max", 30), result("6-high", "gpt-6-luna", "high", 35), result("6-high-2", "gpt-6-luna", "high", 10)];
+
+    expect(galleryMatrix(results).rows.map((row) => row.model.name)).toEqual(["GPT"]);
+    const variants = galleryVariants(results, results[0]!);
+    expect(variants.versions.map((item) => [item.label, item.best.taskRunId])).toEqual([["GPT-5.6 Luna", "5.6"], ["GPT-6 Luna", "6-high"], ["GPT-6 Sol", "sol"]]);
+    expect(variants.efforts.map((item) => [item.effort, item.best.taskRunId])).toEqual([["low", "6-low"], ["high", "6-high"]]);
+    // Другие результаты — только той же версии и того же уровня.
+    expect(galleryVariants(results, results[3]!).alternatives.map((item) => item.taskRunId)).toEqual(["6-high-2"]);
+    expect(galleryVariants(results, results[0]!).alternatives).toEqual([]);
+  });
+
+  it("показывает уровни мышления и у локальной модели, у которой версий нет", () => {
+    const result = (taskRunId: string, reasoningEffort: string | null) => ({
+      taskRunId,
+      runId: `run-${taskRunId}`,
+      prompt: { id: "p1", name: "Prompt", prompt: "Text" },
+      model: { id: "tiel", name: "Tiel-Coder", kind: "local-gguf" as const, modelRef: "tiel" },
+      reasoningEffort,
+      selectedVersion: { type: "initial" as const, followupId: null, resultSha: "a".repeat(40), status: "completed" as const, index: 0 },
+      screenshotUrl: null,
+      reviewScore: 30,
+      reviewPossible: 40,
+    });
+    const results = [result("xhigh", "xhigh"), result("low", "low")];
+    const variants = galleryVariants(results, results[0]!);
+
+    expect(variants.versions).toHaveLength(1);
+    expect(variants.efforts.map((item) => item.effort)).toEqual(["low", "xhigh"]);
   });
 });
 

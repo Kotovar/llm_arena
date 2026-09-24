@@ -48,6 +48,8 @@ export type Model = {
   expertCount?: number;
   /** Число блоков модели из GGUF. 0 — прочитать не удалось. */
   layerCount?: number;
+  /** Уровни мышления, которые понимает шаблон чата GGUF; «none» — выключение мышления. */
+  reasoningEfforts?: string[];
 };
 
 export type LlamaParameters = {

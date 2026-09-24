@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { taskRunOutcome } from "@llm-arena/shared";
 import { loadConfig } from "./config.js";
-import { BenchmarkEngine } from "./engine.js";
+import { BenchmarkEngine, assertModelCapabilities } from "./engine.js";
 import { ProcessSupervisor } from "./process-supervisor.js";
 import { PreviewManager } from "./preview.js";
 import { createStore } from "./store.js";
@@ -967,3 +967,28 @@ if (input.includes("Follow-up request")) process.exitCode=1;`);
     store.close();
   });
 });
+
+describe("уровень мышления локальной модели", () => {
+  /** GGUF из одной пары ключ-значение: только шаблон чата. */
+  function gguf(template: string) {
+    const text = (value: string) => { const bytes = Buffer.from(value); const length = Buffer.alloc(8); length.writeBigUInt64LE(BigInt(bytes.length)); return Buffer.concat([length, bytes]); };
+    const u32 = (value: number) => { const buffer = Buffer.alloc(4); buffer.writeUInt32LE(value); return buffer; };
+    const u64 = (value: number) => { const buffer = Buffer.alloc(8); buffer.writeBigUInt64LE(BigInt(value)); return buffer; };
+    const path = join(mkdtempSync(join(tmpdir(), "llm-arena-template-")), "model.gguf");
+    writeFileSync(path, Buffer.concat([Buffer.from("GGUF", "latin1"), u32(3), u64(0), u64(1), text("tokenizer.chat_template"), u32(8), text(template)]));
+    return path;
+  }
+  const local = (path: string) => ({ name: "Local", kind: "local-gguf" as const, path, capabilities: { toolUse: true, vision: false, reasoning: false }, mmprojPath: null });
+
+  it("не даёт запустить уровень, который шаблон проигнорирует", () => {
+    const toggleOnly = local(gguf("{% if enable_thinking %}"));
+    expect(() => assertModelCapabilities(toggleOnly, "omp", "none", [])).not.toThrow();
+    expect(() => assertModelCapabilities(toggleOnly, "omp", "high", [])).toThrow(/не поддерживает уровень мышления «high»/u);
+    expect(() => assertModelCapabilities(local(gguf("{{ reasoning_effort }}")), "omp", "none", [])).toThrow(/«none»/u);
+  });
+
+  it("пропускает уровень старого прогона, если шаблон принимает уровни", () => {
+    expect(() => assertModelCapabilities(local(gguf("{{ reasoning_effort }}{% if enable_thinking %}")), "pi", "xhigh", [])).not.toThrow();
+  });
+});
+

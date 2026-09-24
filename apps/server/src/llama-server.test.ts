@@ -123,6 +123,15 @@ describe("llama-server command", () => {
     expect(command.slice(-4)).toEqual(["--host", "127.0.0.1", "--port", "43210"]);
   });
 
+  it("выключает мышление флагом --reasoning, а не несуществующим уровнем", () => {
+    const profile = { context: 8192, nGpuLayers: "all" as const, cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 1024, ubatchSize: 512, flashAttention: true, cacheReuse: 256 };
+    const off = buildLlamaServerCommand("/bin/llama-server", { path: "/models/m.gguf", alias: "m" }, profile, 1, "/tmp/slots", "none");
+
+    expect(off.slice(off.indexOf("--reasoning"), off.indexOf("--reasoning") + 2)).toEqual(["--reasoning", "off"]);
+    expect(off).not.toContain("--reasoning-effort");
+    expect(buildLlamaServerCommand("/bin/llama-server", { path: "/models/m.gguf", alias: "m" }, profile, 1, "/tmp/slots", null)).not.toContain("--reasoning");
+  });
+
   it("adds the selected projector for a local vision model", () => {
     const command = buildLlamaServerCommand(
       "/bin/llama-server",

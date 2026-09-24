@@ -38,7 +38,7 @@ import { assertWorkspaceCommit, fixtureRevision, writeResultDiff } from "./artif
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand, terminalModelName } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
-import { paramsFromPath, quantFromPath, readGgufFacts } from "./gguf.js";
+import { paramsFromPath, quantFromPath, readGgufFacts, readGgufReasoningEfforts } from "./gguf.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import { storeTaskImage, taskImagePath } from "./task-images.js";
 import type { ProcessSupervisor } from "./process-supervisor.js";
@@ -158,6 +158,16 @@ type GallerySnapshot = {
 function parseGallerySnapshot(json: string): GallerySnapshot | undefined {
   try { return JSON.parse(json) as GallerySnapshot; }
   catch { return undefined; }
+}
+
+/** Фактическая модель прогона. Старые результаты её не записывали: тогда годится то, что просили у CLI. */
+function answeredModel(resultJson: string | null) {
+  try {
+    const model = (JSON.parse(resultJson ?? "{}") as { model?: unknown }).model;
+    return typeof model === "string" ? model : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function galleryMetrics(resultJson: string | null) {
@@ -631,7 +641,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     const facts = { quant: quantFromPath(model.path), params: paramsFromPath(model.path) };
     try {
       const { sizeBytes, expertCount, layerCount } = readGgufFacts(model.path);
-      return { ...model, ...facts, sizeBytes, expertCount, layerCount };
+      return { ...model, ...facts, sizeBytes, expertCount, layerCount, reasoningEfforts: readGgufReasoningEfforts(model.path) };
     } catch {
       return { ...model, ...facts };
     }
@@ -760,9 +770,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           prompt: { id: taskRun.task_revision_id, taskId: task.taskId ?? store.getTaskRevision(taskRun.task_revision_id)?.taskId ?? null, name: task.name, description: store.taskDescriptionByRevision(taskRun.task_revision_id), prompt: task.prompt, tags: store.taskTagsByRevision(taskRun.task_revision_id) },
           model: {
             id: run.model_id,
-            name: snapshot.model?.name || model?.name || run.model_ref || run.model_id.slice(0, 8),
+            // Текущее имя из «Моделей»: переименование должно доходить и до старых результатов.
+            name: model?.name || snapshot.model?.name || run.model_ref || run.model_id.slice(0, 8),
             kind: snapshot.model?.kind ?? model?.kind,
-            modelRef: snapshot.model?.modelRef || run.model_ref || undefined,
+            modelRef: answeredModel(selected.resultJson) || snapshot.model?.modelRef || run.model_ref || undefined,
           },
           reasoningEffort: snapshot.reasoningEffort ?? null,
           profile: snapshot.profile?.name ? { name: snapshot.profile.name, context: snapshot.profile.parameters?.context ?? "auto" } : null,

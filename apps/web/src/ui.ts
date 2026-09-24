@@ -180,8 +180,8 @@ function scoreRatio(result: GalleryResult) {
 }
 
 /**
- * Лидеры считаются внутри пары «промпт × тип модели» и только когда в группе есть с чем сравнивать.
- * Общий значок на весь столбец всегда доставался бы подписочным моделям и ничего бы не сообщал.
+ * Лидеры считаются внутри пары «промпт × тип модели»: общий значок на весь столбец всегда
+ * доставался бы подписочным моделям. Единственный оценённый результат в группе — тоже лидер.
  */
 function galleryLeaders(results: GalleryResult[]) {
   const groups = new Map<string, GalleryResult[]>();
@@ -192,7 +192,6 @@ function galleryLeaders(results: GalleryResult[]) {
   }
   const leaders = new Set<string>();
   for (const group of groups.values()) {
-    if (group.length < 2) continue;
     const best = Math.max(...group.map((result) => scoreRatio(result)!));
     // При ничьей значок получают все: скрытый тай-брейк читался бы как случайный выбор.
     for (const result of group) if (scoreRatio(result) === best) leaders.add(result.taskRunId);
@@ -207,6 +206,55 @@ function galleryLeaders(results: GalleryResult[]) {
  */
 export function bestFirst(left: GalleryResult, right: GalleryResult) {
   return (scoreRatio(right) ?? -1) - (scoreRatio(left) ?? -1) || Number(Boolean(right.featured)) - Number(Boolean(left.featured));
+}
+
+const capitalized = (text: string) => text[0]!.toUpperCase() + text.slice(1);
+
+/**
+ * Подписочная модель в «Моделях» — это CLI (Codex, Claude), а конкретную модель выбирают при запуске.
+ * Разбираем её id, чтобы строка матрицы называлась моделью, а поколения одного семейства
+ * (GPT-5.6 Luna и GPT-6 Luna, Opus 5 и Opus 5.5) шли рядом. Голый алиас `opus` версии не знает.
+ */
+export function cloudModel(ref: string | undefined) {
+  const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-([a-z]+))?$/u.exec(ref ?? "");
+  if (gpt) return { name: `GPT-${gpt[1]}${gpt[2] ? ` ${capitalized(gpt[2])}` : ""}`, family: `gpt ${gpt[2] ?? ""}`, version: gpt[1]! };
+  const claude = /^(?:claude-)?(haiku|sonnet|opus|fable)(?:-(\d+)(?:-(\d{1,2}))?)?(?:-\d{8})?(?:\[1m\])?$/u.exec(ref ?? "");
+  if (!claude) return undefined;
+  const version = claude[2] ? `${claude[2]}${claude[3] ? `.${claude[3]}` : ""}` : "";
+  return { name: `${capitalized(claude[1]!)}${version ? ` ${version}` : ""}`, family: `claude ${claude[1]}`, version };
+}
+
+/** Фактическая модель прогона: у подписочного CLI она выбирается при запуске, у локальной — одна. */
+export function actualModelName(result: Pick<GalleryResult, "model">) {
+  if (modelKindOf(result.model) !== "cloud" || !result.model.modelRef) return "";
+  return cloudModel(result.model.modelRef)?.name ?? result.model.modelRef;
+}
+
+function versionOrder(left: string, right: string) {
+  const a = cloudModel(left) ?? { family: left, version: "" };
+  const b = cloudModel(right) ?? { family: right, version: "" };
+  return a.family.localeCompare(b.family) || a.version.localeCompare(b.version, undefined, { numeric: true });
+}
+
+const effortOrder = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const effortRank = (effort: string | null | undefined) => effort ? (effortOrder.indexOf(effort) + 1 || effortOrder.length + 1) : 0;
+
+/**
+ * Навигация внутри ячейки «CLI × промпт»: вкладки — версии модели (GPT-5.6 Luna, GPT-6 Luna…),
+ * чипсы — уровни мышления внутри открытой версии. Каждая ведёт на лучший результат своей группы,
+ * а остальные результаты с той же версией и уровнем остаются «другими результатами».
+ * Сравнивать разные уровни между собой нечестно, поэтому они не смешиваются.
+ */
+export function galleryVariants(siblings: GalleryResult[], current: GalleryResult) {
+  const sorted = siblings.toSorted(bestFirst);
+  const version = actualModelName(current);
+  const sameVersion = sorted.filter((result) => actualModelName(result) === version);
+  const firstBy = <K,>(items: GalleryResult[], key: (result: GalleryResult) => K) => [...new Map(items.toReversed().map((result) => [key(result), result])).entries()].map(([value, best]) => ({ value, best }));
+  return {
+    versions: firstBy(sorted, actualModelName).toSorted((left, right) => versionOrder(left.best.model.modelRef ?? "", right.best.model.modelRef ?? "")).map(({ value, best }) => ({ label: value, best })),
+    efforts: firstBy(sameVersion, (result) => result.reasoningEffort ?? null).toSorted((left, right) => effortRank(left.value) - effortRank(right.value)).map(({ value, best }) => ({ effort: value, best })),
+    alternatives: sameVersion.filter((result) => (result.reasoningEffort ?? null) === (current.reasoningEffort ?? null) && result.taskRunId !== current.taskRunId),
+  };
 }
 
 export function galleryMatrix(results: GalleryResult[]) {
@@ -250,9 +298,9 @@ export function galleryResultTags(result: {
     if (harness) tags.push(harness);
     else if (result.useOmpAgent !== undefined) tags.push(result.useOmpAgent ? "с обвязкой (OMP)" : "без обвязки");
   } else if (result.model.modelRef && result.model.modelRef !== result.model.name) {
-    tags.push(result.model.modelRef);
+    tags.push(cloudModel(result.model.modelRef)?.name ?? result.model.modelRef);
   }
-  if (result.reasoningEffort) tags.push(`мышление: ${result.reasoningEffort}`);
+  if (result.reasoningEffort) tags.push(`мышление: ${effortLabel(result.reasoningEffort)}`);
   return tags;
 }
 
@@ -296,10 +344,13 @@ export function modelOptionLabel(option: { id: string; name: string }) {
   return option.name;
 }
 
-export function reasoningEffortsForModel(model?: Pick<Model, "kind" | "capabilities">, cloudEfforts: string[] = []) {
-  if (!model?.capabilities.reasoning) return [];
-  return model.kind === "local-gguf" ? ["low", "medium", "xhigh"] : cloudEfforts;
+/** Локальной модели уровни задаёт её шаблон чата: предлагать то, что он проигнорирует, значит подписывать одинаковые прогоны разными уровнями. */
+export function reasoningEffortsForModel(model?: Pick<Model, "kind" | "capabilities" | "reasoningEfforts">, cloudEfforts: string[] = []) {
+  if (model?.kind === "local-gguf") return model.reasoningEfforts ?? [];
+  return model?.capabilities.reasoning ? cloudEfforts : [];
 }
+
+export const effortLabel = (effort: string) => effort === "none" ? "без мышления" : effort;
 
 export function visionProjectorFiles<T extends { filename: string }>(files: T[]) {
   return files.filter((file) => file.filename.toLowerCase().includes("mmproj"));
