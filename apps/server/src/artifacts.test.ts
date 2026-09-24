@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, s
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertWorkspaceCommit, finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace, writeResultDiff } from "./artifacts.js";
+import { assertWorkspaceCommit, finalizeWorkspace, fixtureRevision, materializeWorkspaceVersion, prepareWorkspace, writeResultDiff } from "./artifacts.js";
 import { DIFF_LIMITS } from "./diff-limits.js";
 
 const directories: string[] = [];
@@ -12,6 +12,22 @@ afterEach(() => {
 });
 
 describe("coding artifacts", () => {
+  it("changes the fixture revision when hidden validation or its commands change", () => {
+    const root = mkdtempSync(join(tmpdir(), "arena-revision-"));
+    directories.push(root);
+    mkdirSync(join(root, "fixture"));
+    mkdirSync(join(root, "validation"));
+    writeFileSync(join(root, "fixture", "index.js"), "export const x = 1;\n");
+    writeFileSync(join(root, "validation", "hidden.test.js"), "// v1\n");
+    const fixture = { source: join(root, "fixture"), hiddenSource: join(root, "validation"), hidden: [{ id: "h", argv: ["node", "--test"] }] };
+    const initial = fixtureRevision(fixture);
+    expect(fixtureRevision(fixture)).toBe(initial);
+    writeFileSync(join(root, "validation", "hidden.test.js"), "// v2\n");
+    const stricter = fixtureRevision(fixture);
+    expect(stricter).not.toBe(initial);
+    expect(fixtureRevision({ ...fixture, hidden: [{ id: "h", argv: ["node", "--test", "--x"] }] })).not.toBe(stricter);
+  });
+
   it("identifies a fixture by its content, not by when it was copied", () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-fixture-revision-"));
     directories.push(root);

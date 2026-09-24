@@ -417,7 +417,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
         fixtureId: fixture?.id ?? null,
         // ponytail: хеш считается копированием fixture. Потолок — набор из десятков задач;
         // тогда кэшировать по каталогу, а не пересчитывать на каждый снимок и каждый просмотр.
-        fixtureRevision: fixture ? fixtureRevision(fixture.source) : null,
+        fixtureRevision: fixture ? fixtureRevision(fixture) : null,
       };
     });
   };
@@ -434,7 +434,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     if (!item.fixtureId) return [];
     const fixture = config.fixtures.find((candidate) => candidate.id === item.fixtureId);
     if (!fixture) return at("fixture-missing");
-    return fixtureRevision(fixture.source) === item.fixtureRevision ? [] : at("fixture");
+    return fixtureRevision(fixture) === item.fixtureRevision ? [] : at("fixture");
   });
   const benchmarkModel = (run: { model_id: string; model_ref: string | null }) => ({
     id: run.model_id,

@@ -79,7 +79,8 @@ export async function waitReady(url: string, process: OwnedProcess, timeoutMs = 
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     const status = await Promise.race([
-      fetch(url).then((response) => (response.ok ? "ready" : "loading")).catch(() => "loading"),
+      // Принятое соединение без ответа не должно пережить дедлайн.
+      fetch(url, { signal: AbortSignal.timeout(Math.max(1, Math.min(5_000, deadline - performance.now()))) }).then((response) => (response.ok ? "ready" : "loading")).catch(() => "loading"),
       process.completed.then(() => "exited"),
     ]);
     if (status === "ready") return;

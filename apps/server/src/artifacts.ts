@@ -2,6 +2,7 @@ import { closeSync, cpSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { resultShaSchema } from "@llm-arena/shared";
 import { DIFF_LIMITS, formatBytes } from "./diff-limits.js";
 
@@ -118,17 +119,28 @@ export function prepareWorkspace(fixtureSource: string, artifactRoot: string): P
   return { artifactRoot, workspace, gitDir, baselineSha, baselineTree };
 }
 
-/**
- * Ревизия fixture без запуска: тот же путь, что и у рабочего каталога прогона, поэтому
- * хеш, посчитанный при сборке набора задач, гарантированно совпадёт с прогонным.
- */
-export function fixtureRevision(source: string): string {
+/** Дерево каталога тем же путём, что и у рабочего каталога прогона. */
+function treeOf(source: string): string {
   const root = mkdtempSync(join(tmpdir(), "arena-fixture-revision-"));
   try {
     return prepareWorkspace(source, root).baselineTree;
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+type RevisionedFixture = { source: string; hiddenSource?: string; checks?: unknown; hidden?: unknown; baseline?: unknown; limits?: unknown };
+
+/**
+ * Ревизия fixture — всё, от чего зависит вердикт: исходное состояние, скрытые проверки и их
+ * команды, baseline и лимиты. Ужесточили скрытый тест — это уже другая ревизия, иначе
+ * сравнение прогонов по «одной» ревизии молча сравнивало бы разные условия.
+ * `baselineTree` передаёт прогон, у которого workspace уже собран.
+ */
+export function fixtureRevision(fixture: RevisionedFixture, baselineTree = treeOf(fixture.source)): string {
+  const { checks, hidden, baseline, limits } = fixture;
+  const validation = fixture.hiddenSource ? treeOf(fixture.hiddenSource) : null;
+  return createHash("sha256").update(JSON.stringify({ baselineTree, validation, checks, hidden, baseline, limits })).digest("hex");
 }
 
 /**

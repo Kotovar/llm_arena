@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { publicFixtureManifest, type LlamaProfile, type PublicFixtureManifest, type StopReason, type TaskImage, type WatchdogDiagnostics } from "@llm-arena/shared";
-import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace, type WorkspaceArtifacts } from "./artifacts.js";
+import { finalizeWorkspace, fixtureRevision, materializeWorkspaceVersion, prepareWorkspace, type WorkspaceArtifacts } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { loadOwnerId, recoverOwnedProcesses } from "./lifecycle.js";
 import { LlamaCppServerManager } from "./llama-server.js";
@@ -314,7 +314,10 @@ export class BenchmarkEngine {
         if (effectiveTask.kind === "coding" && !fixture) throw new Error(`Fixture ${effectiveTask.fixtureId} not found`);
         const source = fixture?.source ?? this.#emptyFixture();
         const prepared = prepareWorkspace(source, artifactRoot);
-        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture: fixture && publicFixtureManifest(fixture), ...(fixture ? { fixtureRevision: prepared.baselineTree } : {}), model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
+        const revision = fixture ? { fixtureRevision: fixtureRevision(fixture, prepared.baselineTree) } : {};
+        // Пути на диске в снимке не нужны: по ним снимок перестаёт переноситься между машинами.
+        const { source: _source, hiddenSource: _hiddenSource, ...manifest } = fixture ?? {};
+        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture: fixture && publicFixtureManifest(manifest), ...revision, model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
         this.store.startTaskRun(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: "running", position, name: task.name } });
         const stdoutPath = join(artifactRoot, "stdout.log");
@@ -427,6 +430,8 @@ export class BenchmarkEngine {
               }),
             ]
             : [];
+          // Прерванные на середине проверки — это не «все прошли»: исход решает обработчик прерывания.
+          taskSignal.throwIfAborted();
           const failedCheck = checks.find((check) => check.status !== "pass");
           const agentStatus = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
           // Сбой служебного шага после агента — не сбой агента, поэтому он отделён и подписан отдельно.
@@ -435,7 +440,7 @@ export class BenchmarkEngine {
           const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, taskSignal);
           // Ревизия fixture едет рядом с результатом: по одному файлу на диске видно, на каком
           // исходном состоянии он получен, без обращения к базе.
-          const saved = { ...result, artifacts: finalized.artifacts, checks, previewImage: Boolean(previewImage), ...(fixture ? { fixtureRevision: prepared.baselineTree } : {}) };
+          const saved = { ...result, artifacts: finalized.artifacts, checks, previewImage: Boolean(previewImage), ...revision };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
           const failure = finalized.error ?? (agentStatus === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
           this.store.saveTaskRunResult(taskRun.id, saved, status, failure);
@@ -545,6 +550,7 @@ export class BenchmarkEngine {
       });
       if (backend?.contextTokens) result.metrics.contextWindowTokens = { value: backend.contextTokens, unit: "tokens", source: "llama.cpp" };
       const checks = snapshot.fixture ? await this.#runChecks(snapshot.fixture, workspace, followup.artifact_path, signal) : [];
+      signal.throwIfAborted();
       const failedCheck = checks.find((check) => check.status !== "pass");
       const agentStatus = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
       const finalized = agentStatus === "completed"
