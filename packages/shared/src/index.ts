@@ -1,7 +1,12 @@
 import { z } from "zod";
-export { DEFAULT_LLAMA_TEMPERATURE } from "./constants.js";
+// Схемы вердикта собираются здесь, поэтому их мало реэкспортировать — нужны и в этом модуле.
+import { failureReasonSchema, verdictSchema } from "./outcome.js";
+export { BENCHMARK_TAG, DEFAULT_LLAMA_TEMPERATURE } from "./constants.js";
 export {
   classifyTaskRun,
+  failureReasonLabels,
+  failureReasonSchema,
+  humanFailureReasons,
   isCounted,
   isModelFailure,
   isSuccess,
@@ -11,10 +16,16 @@ export {
   REPRESENTATIVE_MIN,
   REPRESENTATIVE_SHARE,
   representativeThreshold,
+  resolveVerdict,
   stopReasonSchema,
+  taskRunOutcome,
+  verdictSchema,
+  type FailureReason,
   type OutcomeInput,
   type StopReason,
   type TaskOutcome,
+  type TaskVerdict,
+  type Verdict,
 } from "./outcome.js";
 
 export const taskKindSchema = z.enum(["prompt", "coding"]);
@@ -57,7 +68,6 @@ export const taskRevisionSchema = createTaskSchema.and(
     taskId: z.string().uuid(),
     revision: z.number().int().positive(),
     contentHash: z.string().length(64),
-    fixtureHash: z.string().length(64).nullable(),
     createdAt: z.string().datetime(),
   }),
 );
@@ -133,6 +143,10 @@ export const llamaProfileSchema = z.object({
   ubatchSize: z.number().int().positive(),
   flashAttention: z.union([z.literal("auto"), z.boolean()]),
   cacheReuse: z.number().int().nonnegative(),
+  // Спекулятивное декодирование по n-граммам: черновик берётся из уже виденного текста, второй
+  // модели не нужно. Поле необязательное — профили, сохранённые до него, запускаются как раньше,
+  // иначе их прогоны стали бы быстрее задним числом и перестали сравниваться со своими же старыми.
+  specType: z.enum(["ngram-simple", "ngram-mod"]).optional(),
   fit: z.boolean().optional(),
   fitTargetMiB: z.number().int().positive().optional(),
   fitContextMin: z.number().int().min(4096).optional(),
@@ -170,7 +184,24 @@ export const createExecutionProfileSchema = z.object({
   calibrated: z.boolean().default(false),
 });
 
-export const createRunSchema = z.object({
+/**
+ * Один элемент состава набора: ревизия задачи и содержимое её fixture на момент снимка.
+ * Хеш fixture нужен, чтобы правку исходного проекта было видно до многочасового прогона,
+ * а не после: сам прогон пишет фактическую ревизию отдельно.
+ */
+export const suiteItemSchema = z.object({
+  taskRevisionId: z.string().uuid(),
+  fixtureId: z.string().trim().min(1).nullable(),
+  fixtureRevision: z.string().regex(/^[0-9a-f]{40,64}$/iu).nullable(),
+}).strict();
+
+export const createSuiteSchema = z.object({ name: z.string().trim().min(1).max(160) }).strict();
+export const renameSuiteSchema = createSuiteSchema;
+export const createSuiteRevisionSchema = z.object({
+  taskIds: z.array(z.string().uuid()).min(1).refine((ids) => new Set(ids).size === ids.length, "Prompts must be unique"),
+}).strict();
+
+const runBaseSchema = z.object({
   taskRevisionIds: z.array(z.string().uuid()).min(1).refine((ids) => new Set(ids).size === ids.length, "Prompts must be unique"),
   modelId: z.string().uuid(),
   executionProfileId: z.string().uuid().nullable(),
@@ -185,23 +216,39 @@ export const createRunSchema = z.object({
 });
 
 /**
+ * Прогон задаётся либо списком промптов, либо ревизией набора — но не обоими сразу: состав
+ * прогона по набору принадлежит ревизии, и присланный рядом список её бы молча переопределил.
+ */
+export const createRunSchema = runBaseSchema.extend({
+  taskRevisionIds: z.array(z.string().uuid()).refine((ids) => new Set(ids).size === ids.length, "Prompts must be unique").default([]),
+  suiteRevisionId: z.string().uuid().nullable().default(null),
+}).superRefine((value, context) => {
+  if (!value.suiteRevisionId && !value.taskRevisionIds.length) {
+    context.addIssue({ code: "custom", message: "Run needs prompts or a suite revision" });
+  }
+  if (value.suiteRevisionId && value.taskRevisionIds.length) {
+    context.addIssue({ code: "custom", message: "A suite run takes its prompts from the suite revision" });
+  }
+});
+
+/**
  * Батч — те же прогоны, только с общей меткой: по одному `benchmark_run` на модель.
  * Собственной записи в базе у батча нет, поэтому и своих параметров тут нет —
  * только то, что нужно разложить в обычные прогоны.
  */
 export const createBatchSchema = z.object({
-  taskRevisionIds: createRunSchema.shape.taskRevisionIds,
+  taskRevisionIds: runBaseSchema.shape.taskRevisionIds,
   models: z.array(z.object({
     modelId: z.string().uuid(),
     executionProfileId: z.string().uuid().nullable().default(null),
     runnerId: z.string().trim().min(1),
     useOmpAgent: z.boolean().default(false),
     modelRef: z.string().trim().min(1).optional(),
-    reasoningEffort: createRunSchema.shape.reasoningEffort,
+    reasoningEffort: runBaseSchema.shape.reasoningEffort,
   })).min(1),
   resultMode: z.enum(["text", "web"]),
-  repeatCount: createRunSchema.shape.repeatCount,
-  warmupAttempt: createRunSchema.shape.warmupAttempt,
+  repeatCount: runBaseSchema.shape.repeatCount,
+  warmupAttempt: runBaseSchema.shape.warmupAttempt,
 });
 
 const measuredSources = z.enum([
@@ -269,10 +316,28 @@ export const reviewSchema = z.object({
   completion: z.enum(["full", "partial"]),
 });
 
+/**
+ * Ручной вердикт. Причина обязательна у провала и бессмысленна у успеха; система хранит только
+ * ручные причины — технические она выводит из исхода сама.
+ */
+export const saveVerdictSchema = z.object({
+  verdict: verdictSchema,
+  reason: failureReasonSchema.nullable().default(null),
+  comment: z.string().trim().max(10_000).default(""),
+}).strict().superRefine((value, context) => {
+  if (value.verdict === "fail" && !value.reason) context.addIssue({ code: "custom", message: "Провал требует причины" });
+});
+
 export const commandSpecSchema = z.object({
   argv: z.array(z.string()).min(1),
   cwd: z.string().optional(),
   timeoutMs: z.number().int().positive().optional(),
+});
+
+export const fixtureCheckSchema = z.object({
+  id: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  command: commandSpecSchema,
 });
 
 export const fixtureManifestSchema = z.object({
@@ -280,23 +345,57 @@ export const fixtureManifestSchema = z.object({
   name: z.string().trim().min(1),
   source: z.string().trim().min(1),
   instructions: z.string().trim().min(1).optional(),
+  /** Короткий сценарий, по которому человек видит разницу между исходным состоянием и результатом. */
+  reproduction: z.string().trim().min(1).optional(),
   install: commandSpecSchema.optional(),
-  checks: z
-    .array(
-      z.object({
-        id: z.string().trim().min(1),
-        label: z.string().trim().min(1),
-        command: commandSpecSchema,
-      }),
-    )
-    .default([]),
+  /** Проверки внутри workspace: модель их видит и может запускать сама. */
+  checks: z.array(fixtureCheckSchema).default([]),
+  /**
+   * Проверки бенчмарка. Живут вне workspace и модели не видны, иначе решение пишется прямо
+   * под ассерты. Гоняются по копии результата, поэтому в diff их файлы не попадают.
+   */
+  hidden: z.array(fixtureCheckSchema).default([]),
+  /**
+   * Состояние, в котором обязан находиться исходный fixture: `id` проверки → ожидаемый исход.
+   * Универсального правила «исходный fixture обязан падать» нет — у правки бага здесь
+   * `fail`, у рефакторинга всё `pass`. Проверяется отдельной командой, не на прогоне.
+   */
+  baseline: z.record(z.string(), z.enum(["pass", "fail"])).default({}),
+  /** Лимит времени на задачу; без него действует только watchdog и пауза без вывода. */
+  limits: z.object({ maxDurationMs: z.number().int().positive() }).optional(),
   preview: z
     .object({
       command: commandSpecSchema,
       readyPath: z.string().default("/"),
     })
     .optional(),
+}).superRefine((manifest, context) => {
+  // Совпавшие id развели бы результаты проверок по одному ключу, а опечатка в baseline
+  // молча означала бы «состояние не проверяем». Оба случая ловятся при загрузке конфигурации,
+  // а не когда прогон уже дошёл до валидации.
+  const ids = [...manifest.checks, ...manifest.hidden].map((check) => check.id);
+  const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
+  if (duplicate) context.addIssue({ code: "custom", message: `Duplicate check id "${duplicate}"` });
+  for (const id of Object.keys(manifest.baseline)) {
+    if (!ids.includes(id)) context.addIssue({ code: "custom", message: `Baseline names unknown check "${id}"` });
+  }
+  // Скрытая проверка без объявленного baseline бессмысленна: именно ради неё и заводится
+  // исходное состояние, и без сверки fixture можно выпустить с уже исправленным багом.
+  for (const check of manifest.hidden) {
+    if (!(check.id in manifest.baseline)) {
+      context.addIssue({ code: "custom", message: `Hidden check "${check.id}" has no declared baseline state` });
+    }
+  }
 });
+
+/**
+ * Манифест без скрытых проверок: наружу уходит только он. Скрытые проверки и ожидаемый
+ * baseline — это ответы к заданию, а у агента в workspace есть и shell, и localhost.
+ */
+export function publicFixtureManifest<T extends { hidden?: unknown; baseline?: unknown }>(manifest: T): Omit<T, "hidden" | "baseline"> {
+  const { hidden: _hidden, baseline: _baseline, ...rest } = manifest;
+  return rest;
+}
 
 export const runnerDefinitionSchema = z.object({
   id: z.string().trim().min(1),
@@ -318,13 +417,19 @@ export type CreateExecutionProfile = z.infer<typeof createExecutionProfileSchema
 export type ModelEconomics = z.infer<typeof modelEconomicsSchema>;
 export type LlamaProfile = z.infer<typeof llamaProfileSchema>;
 export type CreateRun = z.input<typeof createRunSchema>;
+export type SuiteItem = z.infer<typeof suiteItemSchema>;
+export type CreateSuite = z.infer<typeof createSuiteSchema>;
+export type CreateSuiteRevision = z.infer<typeof createSuiteRevisionSchema>;
 export type CreateBatch = z.infer<typeof createBatchSchema>;
 export type RunStatus = z.infer<typeof runStatusSchema>;
 export type RunnerKind = z.infer<typeof runnerKindSchema>;
 export type RunnerDefinition = z.infer<typeof runnerDefinitionSchema>;
 export type FixtureManifest = z.infer<typeof fixtureManifestSchema>;
+export type PublicFixtureManifest = ReturnType<typeof publicFixtureManifest<FixtureManifest>>;
+export type FixtureCheck = z.infer<typeof fixtureCheckSchema>;
 export type NormalizedRunResult = z.infer<typeof normalizedRunResultSchema>;
 export type WatchdogDiagnostics = z.infer<typeof watchdogDiagnosticsSchema>;
 export type Review = z.infer<typeof reviewSchema>;
+export type SaveVerdict = z.infer<typeof saveVerdictSchema>;
 export type SelectResultVersion = z.infer<typeof selectResultVersionSchema>;
 export type PreviewResultVersion = z.infer<typeof previewResultVersionSchema>;

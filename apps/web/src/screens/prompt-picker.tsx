@@ -8,12 +8,14 @@ import { galleryCoverage, matchesPromptQuery, promptCoverageNote, updateTaskSele
  * Выбор промптов: один и тот же блок нужен и одиночному запуску, и массовому.
  * Покрытие показывается только там, где модель одна, — в батче их несколько.
  */
-export function PromptPicker({ tasks, selectedIds, setSelectedIds, coverage, modelId = "" }: {
+export function PromptPicker({ tasks, selectedIds, setSelectedIds, coverage, modelId = "", legend = "Какие промпты запустить" }: {
   tasks: Task[] | undefined;
   selectedIds: string[] | null;
   setSelectedIds: Dispatch<SetStateAction<string[] | null>>;
   coverage?: ReturnType<typeof galleryCoverage>;
   modelId?: string;
+  /** Тот же выбор собирает и запуск, и состав набора задач — подпись у них разная. */
+  legend?: string;
 }) {
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState("");
@@ -26,7 +28,7 @@ export function PromptPicker({ tasks, selectedIds, setSelectedIds, coverage, mod
   const visibleTasks = (tasks ?? []).filter((task) => matchesPromptQuery(task, query) && (!tag || task.tags.includes(tag)));
   const tags = [...new Set((tasks ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   return <fieldset className="prompt-picker">
-    <legend><strong>Какие промпты запустить</strong><small>{selectedCount} из {tasks?.length ?? 0}</small></legend>
+    <legend><strong>{legend}</strong><small>{selectedCount} из {tasks?.length ?? 0}</small></legend>
     <div className="picker-actions"><input ref={search} type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск" title="/" aria-label="Поиск промптов" /><button type="button" onClick={() => setSelectedIds(visibleTasks.map((task) => task.currentRevision.id))}>{tag || query ? "Выбрать показанные" : "Выбрать все"}</button><button type="button" onClick={() => setSelectedIds([])}>Снять все</button><Link to="/tasks">Добавить промпт</Link></div>
     {tags.length ? <div className="prompt-tags" role="group" aria-label="Теги промптов"><button type="button" className={tag ? "" : "active"} aria-pressed={!tag} onClick={() => setTag("")}>Все</button>{tags.map((item) => <button type="button" key={item} className={tag === item ? "active" : ""} aria-pressed={tag === item} onClick={() => setTag(tag === item ? "" : item)}>{item}</button>)}</div> : null}
     <div className="prompt-options">{visibleTasks.map((task) => <label key={task.id} className={selected.has(task.currentRevision.id) ? "selected" : ""}><input type="checkbox" checked={selected.has(task.currentRevision.id)} onChange={(event) => { const checked = event.currentTarget.checked; setSelectedIds((current) => updateTaskSelection(current, task.currentRevision.id, checked)); }} /><span><strong>{task.currentRevision.name}</strong><small title={task.description || task.currentRevision.prompt}>{task.description || task.currentRevision.prompt}</small>{task.tags.length ? <span className="prompt-tag-list">{task.tags.map((item) => <em key={item}>{item}</em>)}</span> : null}</span>{(() => { const note = coverage && promptCoverageNote(coverage, task, modelId); return note ? <em className={`prompt-covered ${note.state}`}>{note.text}</em> : null; })()}</label>)}</div>

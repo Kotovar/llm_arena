@@ -4,11 +4,24 @@ import { useCallback, useEffect, useRef, useState, type ComponentProps, type Rea
 import { api } from "./api.js";
 import { ChevronDownIcon, ChevronUpIcon } from "./icons.js";
 import { useToast } from "./toast.js";
-import type { GpuInfo, Model, Run } from "./types.js";
+import { BENCHMARK_TAG } from "@llm-arena/shared";
+import type { GpuInfo, Model, Run, Task } from "./types.js";
 import { finishedSince, runIsActive, runModelName, statusLabel } from "./ui.js";
 
 export function useData<T>(key: string, path = key) {
   return useQuery({ queryKey: [key], queryFn: () => api<T>(path) });
+}
+
+/**
+ * Промпты бенчмарка и обычные живут в одном списке, но друг другу не подаются: у первых условия
+ * заточены под проверку набора. Кэш общий — фильтр только на выходе.
+ */
+export function usePrompts(scope: "ordinary" | "benchmark") {
+  return useQuery({
+    queryKey: ["tasks"],
+    queryFn: () => api<Task[]>("/tasks"),
+    select: (tasks) => tasks.filter((task) => task.tags.includes(BENCHMARK_TAG) === (scope === "benchmark")),
+  });
 }
 
 export function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
@@ -226,9 +239,9 @@ function ActivityCard() {
 
 export function Shell() {
   const groups = [
-    { label: "Запуск", links: [["/", "Новый запуск"], ["/batch", "Массовый запуск"]] },
+    { label: "Запуск", links: [["/", "Новый запуск"], ["/batch", "Массовый запуск"], ["/benchmark", "Бенчмарк"]] },
     { label: "Анализ", links: [["/runs", "Результаты"], ["/leaderboard", "Лидерборд"], ["/compare", "Сравнение"], ["/analytics", "Аналитика"], ["/gallery", "Галерея"]] },
-    { label: "Подготовка", links: [["/tasks", "Промпты"], ["/models", "Модели"], ["/settings", "Настройки"]] },
+    { label: "Подготовка", links: [["/tasks", "Промпты"], ["/fixtures", "Исходные проекты"], ["/models", "Модели"], ["/settings", "Настройки"]] },
   ] as const;
   return <div className="shell"><aside className="sidebar"><div className="brand"><span className="brand-mark">A/B</span><div><strong>LLM Arena</strong><small>сравнение моделей</small></div></div><nav aria-label="Навигация LLM Arena">{groups.map((group) => <div className="nav-group" key={group.label}><span className="nav-group-label">{group.label}</span>{group.links.map(([to, label]) => <Link key={to} to={to} activeOptions={{ exact: to === "/" }}>{label}</Link>)}</div>)}</nav><ActivityCard /><HostCard /></aside><main className="content"><Outlet /></main></div>;
 }

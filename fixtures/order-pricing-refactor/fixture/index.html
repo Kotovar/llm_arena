@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Расчёт заказа</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <h1>Расчёт стоимости заказа</h1>
+      <p class="hint">Рефакторинг не должен менять ни одного числа. Сравните до и после: отпечаток поведения по 2 000 сгенерированным заказам и таблица показательных заказов должны совпасть полностью.</p>
+      <p class="fingerprint">Отпечаток поведения: <code id="fingerprint">считаем…</code></p>
+      <div class="scroll"><table>
+        <thead><tr><th>Заказ</th><th>Сумма</th><th>Скидка</th><th>Промокод</th><th>Доставка</th><th>Сборы</th><th>Итого</th><th>Чек</th></tr></thead>
+        <tbody id="samples"></tbody>
+      </table></div>
+    </main>
+    <script type="module">
+      import { mountDemo } from "./src/app.ts";
+      mountDemo(document.getElementById("app"));
+    </script>
+  </body>
+</html>

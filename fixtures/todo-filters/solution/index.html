@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Задачи</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <h1>Задачи</h1>
+      <form id="new"><input name="title" placeholder="Что нужно сделать?" autocomplete="off" /><button>Добавить</button></form>
+      <nav aria-label="Фильтр">
+        <button type="button" data-filter="all">Все</button>
+        <button type="button" data-filter="active">Активные</button>
+        <button type="button" data-filter="completed">Выполненные</button>
+      </nav>
+      <ul id="list"></ul>
+      <p id="footer"></p>
+    </main>
+    <script type="module">
+      import { mountTodos } from "./src/app.js";
+      mountTodos(document.getElementById("app"), [
+        { id: 1, title: "Купить молоко", done: true },
+        { id: 2, title: "Позвонить врачу", done: false },
+        { id: 3, title: "Починить велосипед", done: false },
+        { id: 4, title: "Оплатить интернет", done: true },
+        { id: 5, title: "Прочитать главу", done: false },
+      ]);
+    </script>
+  </body>
+</html>

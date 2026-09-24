@@ -44,6 +44,14 @@ function ModelCapabilitiesForm({ model, files, pending, save }: { model: Model; 
   </form>;
 }
 
+// ngram-simple быстрее ngram-mod на обеих замеренных моделях; «выключено» оставлено для
+// прогонов, которые должны сравниваться по времени со старыми, сделанными без спекуляции.
+const SPEC_TYPE_OPTIONS = [
+  { value: "off", label: "Выключено" },
+  { value: "ngram-simple", label: "ngram-simple" },
+  { value: "ngram-mod", label: "ngram-mod" },
+];
+
 function NewProfileForm({ modelId, source, layerCount, pending, create }: { modelId: string; source: Profile; layerCount: number | undefined; pending: boolean; create: (input: { modelId: string; name: string; parameters: LlamaParameters }) => Promise<Profile> }) {
   const [open, setOpen] = useState(false);
   const [gpuLayers, setGpuLayers] = useState(String(source.parameters.nGpuLayers));
@@ -66,6 +74,7 @@ function NewProfileForm({ modelId, source, layerCount, pending, create }: { mode
       ubatchSize: Number(data.get("ubatchSize")),
       flashAttention: String(data.get("flashAttention")) === "auto" ? "auto" : String(data.get("flashAttention")) === "on",
       cacheReuse: Number(data.get("cacheReuse")),
+      ...(String(data.get("specType") ?? "off") === "off" ? {} : { specType: String(data.get("specType")) as NonNullable<LlamaParameters["specType"]> }),
       fit: data.get("fit") === "on",
       ...(data.get("fit") === "on" ? { fitTargetMiB: Number(data.get("fitTargetMiB")), fitContextMin: Number(data.get("fitContextMin")) } : {}),
       temperature: Number(data.get("temperature")),
@@ -82,6 +91,7 @@ function NewProfileForm({ modelId, source, layerCount, pending, create }: { mode
     <label>Micro-batch<NumberField name="ubatchSize" min="1" defaultValue={source.parameters.ubatchSize} required /></label>
     <label>Flash Attention<SelectMenu label="Flash Attention" name="flashAttention" defaultValue={source.parameters.flashAttention === "auto" ? "auto" : source.parameters.flashAttention ? "on" : "off"} options={[{ value: "auto", label: "Автоматически" }, { value: "on", label: "Включить" }, { value: "off", label: "Выключить" }]} /></label>
     <label>Переиспользование KV<NumberField name="cacheReuse" min="0" defaultValue={source.parameters.cacheReuse} required /></label>
+    <label>Спекулятивное декодирование<SelectMenu label="Спекулятивное декодирование" name="specType" defaultValue={source.parameters.specType ?? "off"} options={SPEC_TYPE_OPTIONS} /></label>
     <label>Эксперты на CPU<NumberField name="nCpuMoe" min="0" defaultValue={source.parameters.nCpuMoe ?? ""} placeholder="не переносить" /></label>
     <label><input name="fit" type="checkbox" defaultChecked={source.parameters.fit} />Автоподбор загрузки</label>
     <label>Резерв VRAM, MiB<NumberField name="fitTargetMiB" min="1" defaultValue={source.parameters.fitTargetMiB ?? 750} required /></label>
@@ -206,6 +216,7 @@ export function ModelsPage() {
       ubatchSize: Number(data.get("ubatchSize")),
       flashAttention: flash === "auto" ? "auto" : flash === "on",
       cacheReuse: Number(data.get("cacheReuse")),
+      ...(String(data.get("specType") ?? "off") === "off" ? {} : { specType: String(data.get("specType")) as NonNullable<LlamaParameters["specType"]> }),
       fit: false,
     };
     // Сэмплинг — свойство профиля независимо от того, автоматический он или ручной.
@@ -279,6 +290,7 @@ export function ModelsPage() {
             <label>Batch<NumberField name="batchSize" min="1" defaultValue="1024" required /><small>Логический размер порции промпта, кратный micro-batch. На память влияет слабо, на скорость чтения — заметно.</small></label>
             <label>Flash Attention<SelectMenu label="Flash Attention" name="flashAttention" defaultValue="auto" options={[{ value: "auto", label: "Автоматически" }, { value: "on", label: "Включить" }, { value: "off", label: "Выключить" }]} /><small>Экономный алгоритм внимания: быстрее и меньше памяти на длинном контексте. «Автоматически» — решает llama.cpp по вашей видеокарте.</small></label>
             <label>Переиспользование KV, токенов<NumberField name="cacheReuse" min="0" defaultValue="256" required /><small>Сколько токенов из прошлого запроса брать из кеша вместо повторного расчёта. Ускоряет уточнения, <code>0</code> — считать каждый раз заново.</small></label>
+            <label>Спекулятивное декодирование<SelectMenu label="Спекулятивное декодирование" name="specType" defaultValue="ngram-simple" options={SPEC_TYPE_OPTIONS} /><small>Модель угадывает продолжение по уже виденному тексту и проверяет его одним проходом. На правке существующего кода даёт до полутора-двух раз больше токенов в секунду, на новом тексте не мешает. Лишней VRAM не просит: вторая модель не нужна.</small></label>
             <label>Экспертные слои на CPU<NumberField name="nCpuMoe" min="0" placeholder="не переносить" /><small>Только для MoE-моделей. Переносит часть экспертов в оперативную память: освобождает VRAM ценой скорости. Пусто — всё на видеокарте.</small></label>
           </div></details> : null}
           <button className="primary span-2" disabled={createLocal.isPending || !filename || (localCapabilities.vision && !localMmprojFilename)}>{createLocal.isPending ? "Подключаем…" : "Подключить модель"}</button>
@@ -308,7 +320,7 @@ export function ModelsPage() {
           {createProfile.error ? <p className="error">{createProfile.error.message}</p> : null}
           {modelProfiles.map((profile) => { const report = hardware[profile.id]; const isActive = settings.data?.externalModelId === model.id && settings.data.externalProfileName === profile.name; return <section className="profile-card" key={profile.id}>
             <div className="profile-heading"><div><strong>{profile.name}</strong><span>версия {profile.revision}{profile.calibrated ? " · проверена" : ""}</span></div>{isActive ? <span className="status status-completed">Для терминала</span> : null}</div>
-            <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div><div><dt>Температура</dt><dd>{profile.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE}</dd></div><div><dt>Seed</dt><dd>{profile.parameters.seed ?? "случайный"}</dd></div></dl>
+            <dl className="profile-summary"><div><dt>Контекст</dt><dd>{String(profile.parameters.context)}</dd></div><div><dt>GPU-слои</dt><dd>{String(profile.parameters.nGpuLayers)}</dd></div><div><dt>KV cache</dt><dd>{profile.parameters.cacheTypeK} / {profile.parameters.cacheTypeV}</dd></div><div><dt>Batch</dt><dd>{profile.parameters.batchSize} / {profile.parameters.ubatchSize}</dd></div><div><dt>Спекуляция</dt><dd>{profile.parameters.specType ?? "выключена"}</dd></div><div><dt>Fit</dt><dd>{profile.parameters.fit ? `${profile.parameters.fitTargetMiB} MiB · min ${profile.parameters.fitContextMin}` : "выключен"}</dd></div><div><dt>Температура</dt><dd>{profile.parameters.temperature ?? DEFAULT_LLAMA_TEMPERATURE}</dd></div><div><dt>Seed</dt><dd>{profile.parameters.seed ?? "случайный"}</dd></div></dl>
             {report ? <div className="gpu-report"><strong>{report.gpu.name}</strong><span>VRAM: {report.gpu.usedMiB} MiB занято · {report.gpu.freeMiB} MiB свободно из {report.gpu.totalMiB} MiB</span></div> : null}
             {calibrate.error && calibrate.variables === profile.id ? <p className="error">{calibrate.error.message}</p> : null}
             {activate.error && activate.variables?.modelId === model.id && activate.variables.profileName === profile.name ? <p className="error">{activate.error.message}</p> : null}

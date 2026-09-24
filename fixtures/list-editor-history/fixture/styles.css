@@ -1,0 +1,12 @@
+:root { color-scheme: light dark; }
+body { margin: 0; padding: 32px; font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 34rem; margin: 0 auto; display: grid; gap: 12px; }
+h1 { margin: 0; font-size: 22px; }
+.hint { margin: 0; opacity: .7; }
+.note { margin: 0; font-size: 14px; opacity: .8; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+button { padding: 6px 10px; font: inherit; border: 1px solid currentColor; border-radius: 8px; background: transparent; }
+ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid currentColor; border-radius: 8px; }
+li span { flex: 1; }
+li button { font-size: 12px; }

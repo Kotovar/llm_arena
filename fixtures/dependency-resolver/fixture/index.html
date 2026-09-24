@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Порядок выполнения задач</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Порядок выполнения задач</h1>
+      <p class="hint">Каждый пример прогоняется через <code>resolveOrder</code>. Верный результат — все задачи ровно по разу и каждая после своих зависимостей, а у сломанного графа — понятная ошибка.</p>
+      <div id="cases" class="cases"></div>
+    </main>
+    <script type="module">
+      import { mountCases } from "./src/app.ts";
+      mountCases(document.getElementById("cases"));
+    </script>
+  </body>
+</html>

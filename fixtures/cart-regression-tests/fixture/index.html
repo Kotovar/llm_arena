@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Тесты корзины</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Тесты корзины</h1>
+      <p class="hint">Отчёт о тестах проекта: тесты запускаются заново при открытии страницы. Правила, которые тесты должны защищать:</p>
+      <ul class="rules">
+        <li>количество товара не меньше 1 и не больше 10;</li>
+        <li>удаление последней единицы убирает позицию;</li>
+        <li>скидка акции — только на товары акции;</li>
+        <li>итог не становится отрицательным;</li>
+        <li>операции с одним товаром не меняют другие.</li>
+      </ul>
+      <p id="summary" role="status">Запускаем тесты…</p>
+      <div id="report"></div>
+    </main>
+    <script type="module" src="report.js"></script>
+  </body>
+</html>

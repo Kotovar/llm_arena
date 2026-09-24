@@ -1,16 +1,86 @@
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { assertWorkspaceCommit, finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace, writeResultDiff } from "./artifacts.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { assertWorkspaceCommit, finalizeWorkspace, fixtureRevision, materializeWorkspaceVersion, prepareWorkspace, writeResultDiff } from "./artifacts.js";
 import { DIFF_LIMITS } from "./diff-limits.js";
 
 const directories: string[] = [];
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 describe("coding artifacts", () => {
+  it("changes the fixture revision when hidden validation or its commands change", () => {
+    const root = mkdtempSync(join(tmpdir(), "arena-revision-"));
+    directories.push(root);
+    mkdirSync(join(root, "fixture"));
+    mkdirSync(join(root, "validation"));
+    writeFileSync(join(root, "fixture", "index.js"), "export const x = 1;\n");
+    writeFileSync(join(root, "validation", "hidden.test.js"), "// v1\n");
+    const fixture = { source: join(root, "fixture"), hiddenSource: join(root, "validation"), hidden: [{ id: "h", argv: ["node", "--test"] }] };
+    const initial = fixtureRevision(fixture);
+    expect(fixtureRevision(fixture)).toBe(initial);
+    writeFileSync(join(root, "validation", "hidden.test.js"), "// v2\n");
+    const stricter = fixtureRevision(fixture);
+    expect(stricter).not.toBe(initial);
+    expect(fixtureRevision({ ...fixture, hidden: [{ id: "h", argv: ["node", "--test", "--x"] }] })).not.toBe(stricter);
+  });
+
+  it("identifies a fixture by its content, not by when it was copied", () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-fixture-revision-"));
+    directories.push(root);
+    const fixture = join(root, "fixture");
+    mkdirSync(fixture);
+    writeFileSync(join(fixture, "index.js"), "export const answer = 1;\n");
+
+    const first = prepareWorkspace(fixture, join(root, "first"));
+    const second = prepareWorkspace(fixture, join(root, "second"));
+    writeFileSync(join(fixture, "index.js"), "export const answer = 2;\n");
+    const edited = prepareWorkspace(fixture, join(root, "edited"));
+
+    // Два прогона одного и того же fixture обязаны сойтись по ревизии, иначе сравнивать их нечем.
+    expect(second.baselineTree).toBe(first.baselineTree);
+    expect(edited.baselineTree).not.toBe(first.baselineTree);
+    // Здесь же видно, почему взято дерево, а не коммит: коммит совпадает у двух копий только
+    // пока обе попали в одну секунду, а через секунду тот же fixture получил бы другой sha.
+    expect(first.baselineSha).not.toBe(first.baselineTree);
+  });
+
+  it("keeps the operator's own git settings out of the fixture revision", () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-fixture-revision-ambient-"));
+    directories.push(root);
+    const fixture = join(root, "fixture");
+    mkdirSync(fixture);
+    // Файл под глобальным ignore и файл с CRLF: без изоляции первый выпадает из baseline,
+    // а второму autocrlf переписывает переводы строк — в обоих случаях ревизия врёт.
+    writeFileSync(join(fixture, "notes.local.json"), "{}\n");
+    writeFileSync(join(fixture, "index.js"), "const a = 1;\r\nconst b = 2;\r\n");
+    const clean = prepareWorkspace(fixture, join(root, "clean"));
+
+    const settings = join(root, "operator-config");
+    mkdirSync(join(settings, "git"), { recursive: true });
+    writeFileSync(join(settings, "git", "ignore"), "*.local.json\n");
+    writeFileSync(join(settings, "git", "config"), "[core]\n\tautocrlf = true\n");
+    vi.stubEnv("XDG_CONFIG_HOME", settings);
+
+    expect(prepareWorkspace(fixture, join(root, "polluted")).baselineTree).toBe(clean.baselineTree);
+  });
+
+  it("notices a file added to a fixture", () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-fixture-revision-added-"));
+    directories.push(root);
+    const fixture = join(root, "fixture");
+    mkdirSync(fixture);
+    writeFileSync(join(fixture, "index.js"), "export const answer = 1;\n");
+    const before = prepareWorkspace(fixture, join(root, "before"));
+
+    writeFileSync(join(fixture, "extra.js"), "export const extra = true;\n");
+
+    expect(prepareWorkspace(fixture, join(root, "after")).baselineTree).not.toBe(before.baselineTree);
+  });
+
   it("keeps a baseline and includes edited and new files in the result diff", () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-artifacts-"));
     directories.push(root);

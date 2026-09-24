@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Пользователи</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <h1>Пользователи</h1>
+      <p class="hint">Всего в API 23 пользователя по 5 на странице. Третья страница с первой попытки отвечает ошибкой.</p>
+      <ol id="users"></ol>
+      <p id="status" role="status"></p>
+      <div class="actions">
+        <button id="more" type="button" hidden>Показать ещё</button>
+        <button id="retry" type="button" hidden>Повторить</button>
+      </div>
+    </main>
+    <script type="module">
+      import { mountUsers } from "./src/app.js";
+      mountUsers(document.getElementById("app"));
+    </script>
+  </body>
+</html>

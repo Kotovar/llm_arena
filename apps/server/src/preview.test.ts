@@ -148,7 +148,7 @@ describe("preview command", () => {
 
       // Живая вкладка продлевает только свой preview: брошенный соседний должен истечь по аренде.
       await vi.advanceTimersByTimeAsync(PreviewManager.leaseMs - 1_000);
-      preview.heartbeat(results[1]!);
+      preview.heartbeat({ ownerId: results[1]!.taskRunId, versionId: results[1]!.resultSha });
       await vi.advanceTimersByTimeAsync(2_000);
 
       expect(processes[0]!.stop).toHaveBeenCalledOnce();

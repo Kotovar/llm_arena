@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Импорт контактов из CSV</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <h1>Импорт контактов из CSV</h1>
+      <p class="hint">Ожидается: пять записей по четыре поля (заголовок и четыре контакта), имя «Lee, Jordan» целиком, заметка <code>Met at "DevConf", follow up</code>, пустой телефон у Omar и его заметка в две строки. Записи с неверным числом полей подсвечены.</p>
+      <label for="csv">CSV — можно править</label>
+      <textarea id="csv" rows="7" spellcheck="false"></textarea>
+      <h2>Что вернул parseCsv</h2>
+      <div class="scroll"><table><tbody id="rows"></tbody></table></div>
+      <h2>Импортированные контакты</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Имя</th><th>Email</th><th>Телефон</th><th>Заметка</th></tr></thead>
+        <tbody id="contacts"></tbody>
+      </table></div>
+    </main>
+    <script type="module">
+      import { mountDemo } from "./src/app.ts";
+      mountDemo(document.getElementById("app"));
+    </script>
+  </body>
+</html>

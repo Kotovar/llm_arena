@@ -1,0 +1,17 @@
+:root { color-scheme: light dark; }
+body { margin: 0; padding: 32px; font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 52rem; margin: 0 auto; display: grid; gap: 16px; }
+h1 { margin: 0; font-size: 22px; }
+.hint { margin: 0; opacity: .75; }
+.cases { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 12px; }
+.case { display: grid; align-content: start; gap: 8px; padding: 12px 14px; border: 2px solid; border-radius: 10px; }
+.case.ok { border-color: #2e9b6a; }
+.case.bad { border-color: #d0463f; }
+.case h2 { margin: 0; font-size: 16px; }
+.case p { margin: 0; font-size: 14px; }
+.verdict { font-weight: 600; }
+.ok .verdict { color: #2e9b6a; }
+.bad .verdict { color: #d0463f; }
+code, ol { font: 13px/1.5 ui-monospace, monospace; }
+ol { margin: 0; padding-left: 22px; }
+.input { opacity: .7; }

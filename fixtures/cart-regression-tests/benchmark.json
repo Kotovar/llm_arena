@@ -1,0 +1,48 @@
+{
+  "id": "cart-regression-tests",
+  "name": "Add regression tests for cart rules",
+  "instructions": "Work in the current directory. The project runs on Node.js 24 without installing anything: TypeScript files are executed directly, so use plain type annotations only — enums, namespaces and constructor parameter properties are not supported. Tests use the built-in node:test runner and are discovered by `node --test`. Do not delete server.mjs, index.html or report.js — the original and the result are opened through them. Run the existing checks before you finish.",
+  "reproduction": "Запустите до и после: страница показывает отчёт о тестах проекта по файлам и группам. До модели — три базовых теста; после — набор модели, и по названиям видно, какие правила он покрывает. Скрытая проверка подставляет вместо src/ исходный код корзины и девять мутантов — копий с одной регрессией каждая; тесты модели должны пройти на исходнике и упасть на каждом мутанте. Вывод скрытой проверки арена не хранит, поэтому какие мутанты пропущены, на экране не видно — сверьте названия тестов с правилами на странице превью. Кроме счёта смотрите на сами тесты: проверяют ли они поведение, а не внутренности, и нет ли почти одинаковых дублей.",
+  "checks": [
+    {
+      "id": "tests",
+      "label": "Существующие тесты",
+      "command": {
+        "argv": [
+          "node",
+          "--test"
+        ]
+      }
+    }
+  ],
+  "hidden": [
+    {
+      "id": "mutants",
+      "label": "Тесты ловят регрессии",
+      "command": {
+        "argv": [
+          "node",
+          "mutation-check.mjs"
+        ],
+        "timeoutMs": 300000
+      }
+    }
+  ],
+  "baseline": {
+    "tests": "pass",
+    "mutants": "fail"
+  },
+  "limits": {
+    "maxDurationMs": 600000
+  },
+  "preview": {
+    "command": {
+      "argv": [
+        "node",
+        "server.mjs"
+      ],
+      "timeoutMs": 120000
+    },
+    "readyPath": "/"
+  }
+}

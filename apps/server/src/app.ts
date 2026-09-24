@@ -12,24 +12,36 @@ import {
   createRunSchema,
   modelEconomicsSchema,
   createTaskSchema,
+  resolveVerdict,
   reviewSchema,
+  saveVerdictSchema,
+  taskRunOutcome,
   retryTaskRunSchema,
+  createSuiteSchema,
+  createSuiteRevisionSchema,
+  renameSuiteSchema,
+  type SuiteItem,
   modelDirectorySchema,
   selectResultVersionSchema,
   updateModelCapabilitiesSchema,
+  publicFixtureManifest,
+  BENCHMARK_TAG,
 } from "@llm-arena/shared";
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
 import type { ArenaConfig } from "./config.js";
 import { activeExportPath, renderAgentLayout, renderFishCommand, renderFishLauncher, renderPiContextSync, renderPiLauncher, stopAgentLocalSession, writeActiveLauncher, writeExportFile } from "./external-launcher.js";
 import { describeGenerationError } from "./generation-error.js";
-import { assertWorkspaceCommit, writeResultDiff } from "./artifacts.js";
+import { FIXTURE_PREVIEW_VERSION, fixturePreviewOwner } from "./preview.js";
+import { verifyFixture } from "./fixture-verify.js";
+import { assertWorkspaceCommit, fixtureRevision, writeResultDiff } from "./artifacts.js";
 import { openInZed } from "./ide.js";
 import { buildLlamaServerCommand } from "./llama-server.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { paramsFromPath, quantFromPath, readGgufFacts } from "./gguf.js";
 import { listLocalModelFiles, modelAlias, resolveLocalModelFile } from "./local-models.js";
 import { storeTaskImage, taskImagePath } from "./task-images.js";
+import type { ProcessSupervisor } from "./process-supervisor.js";
 import type { ArenaStore } from "./store.js";
 import { resolveCompletedResultVersion, selectedResultVersion, selectedResultVersionRecord } from "./result-versions.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
@@ -42,6 +54,7 @@ import { type SliceQuery, tagSliceSchema } from "./routes/slice.js";
 import { parseOmpOutput } from "./runners/parsers.js";
 import { readGpuInfo } from "./system-metrics.js";
 import { loadOwnerId, stopOwnedLlamaServers } from "./lifecycle.js";
+import { benchmarkRunSummary } from "./metrics.js";
 
 type EngineLike = {
   wake(): void;
@@ -54,9 +67,10 @@ type EngineLike = {
 
 type PreviewLike = {
   start(taskRunId: string, resultSha: string): Promise<unknown>;
+  startFixture?(fixtureId: string): Promise<unknown>;
   stop(): Promise<void>;
-  stopIf?(taskRunId: string, resultSha: string): Promise<void>;
-  heartbeat(target?: { taskRunId: string; resultSha: string }): void;
+  stopIf?(ownerId: string, versionId: string): Promise<void>;
+  heartbeat(target?: { ownerId: string; versionId: string }): void;
   removeTaskRunPreviews?(taskRunIds: string[]): Promise<void>;
 };
 
@@ -69,7 +83,16 @@ function parse<T>(schema: ZodType<T>, value: unknown): T {
 
 const modelTestSchema = z.object({ runnerId: z.string().trim().min(1) }).strict();
 const followupSchema = z.object({ prompt: z.string().trim().min(1).max(100_000) }).strict();
-const previewStopSchema = z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict();
+const previewStopSchema = z.union([
+  z.object({ taskRunId: z.string().uuid(), resultSha: resultShaSchema }).strict(),
+  z.object({ fixtureId: z.string().trim().min(1) }).strict(),
+]);
+/** Адрес превью внутри менеджера: снаружи он называется промптом с версией или просто fixture. */
+function previewOwner(target: z.infer<typeof previewStopSchema>) {
+  return "fixtureId" in target
+    ? { ownerId: fixturePreviewOwner(target.fixtureId), versionId: FIXTURE_PREVIEW_VERSION }
+    : { ownerId: target.taskRunId, versionId: target.resultSha };
+}
 const galleryFeaturedSchema = z.object({ taskRunId: z.string().uuid() }).strict();
 const completionSchema = z.object({ completion: z.enum(["full", "partial", "broken"]).nullable() }).strict();
 const updateModelEconomicsSchema = z.object({ economics: modelEconomicsSchema.nullable() }).strict();
@@ -97,6 +120,16 @@ const externalLauncherActivationSchema = z.object({
   profileName: z.string().trim().min(1),
   port: z.number().int().min(1).max(65535).default(8080),
 }).strict();
+
+/** Проверки из сохранённого результата; у старых записей их может не быть вовсе. */
+function resultChecks(resultJson: string | null): Array<{ id: string; label: string; status: string; hidden: boolean }> {
+  try {
+    const checks = (JSON.parse(resultJson ?? "{}") as { checks?: unknown }).checks;
+    return Array.isArray(checks) ? checks as Array<{ id: string; label: string; status: string; hidden: boolean }> : [];
+  } catch {
+    return [];
+  }
+}
 
 function filesUnder(root: string, directory = root): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -152,8 +185,8 @@ function checksPassed(resultJson: string | null) {
   }
 }
 
-export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike; openWorkspace?: (workspace: string) => Promise<void> }) {
-  const { store, config, engine, preview, openWorkspace = openInZed } = options;
+export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engine?: EngineLike; preview?: PreviewLike; supervisor?: ProcessSupervisor; openWorkspace?: (workspace: string) => Promise<void> }) {
+  const { store, config, engine, preview, supervisor, openWorkspace = openInZed } = options;
   const app = Fastify({ logger: false, bodyLimit: 28 * 1024 * 1024 });
   const effectiveModelDirectory = () => store.getSetting("modelDirectory") ?? config.modelDirectory;
   const parseTask = (body: unknown) => {
@@ -197,7 +230,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       command: renderFishCommand(argv),
       fish: renderFishLauncher(argv),
       ompFish: renderFishLauncher([...omp.exec, "--model", `llama.cpp/${externalAlias}`]),
-      layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "OMP", launcher: "active-omp.fish" }),
+      layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "OMP", launcher: "active-omp.fish" }, config.llamaServer.startupTimeoutMs),
       // pi берёт модель из своего `models.json`, поэтому у него есть и второй экспортируемый файл.
       pi: pi ? {
         fish: renderPiLauncher(join(config.dataDir, "exports", "pi-local"), piArgv),
@@ -209,7 +242,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
           ...(typeof profile.parameters.context === "number" ? { contextTokens: profile.parameters.context } : {}),
           ...(model.capabilities.vision && model.mmprojPath ? { vision: true } : {}),
         }), null, 2)}\n`,
-        layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "pi", launcher: "active-pi.fish" }),
+        layout: renderAgentLayout(config.dataDir, port, externalAlias, { pane: "pi", launcher: "active-pi.fish" }, config.llamaServer.startupTimeoutMs),
       } : null,
     };
   };
@@ -290,7 +323,41 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
 
   app.get("/api/health", async () => ({ status: "ok" }));
   app.get("/api/runners", async () => config.runners.map(({ env: _env, ...runner }) => runner));
-  app.get("/api/fixtures", async () => config.fixtures.map(({ source: _source, ...fixture }) => fixture));
+  app.get("/api/fixtures", async () => config.fixtures.map(({ source: _source, hiddenSource: _hiddenSource, ...fixture }) => publicFixtureManifest(fixture)));
+  /**
+   * Исходный проект задачи целиком: человек должен увидеть проблему до модели. Отдаём только
+   * то, что модель и так получит, — каталог `validation/` лежит снаружи и сюда не попадает.
+   */
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>("/api/fixtures/:id/files", async (request, reply) => {
+    const fixture = config.fixtures.find((item) => item.id === request.params.id);
+    if (!fixture) return reply.code(404).send({ message: "Fixture not found" });
+    if (!request.query.path) return filesUnder(fixture.source);
+    const path = contained(fixture.source, request.query.path);
+    if (!statSync(path).isFile()) throw new Error("Fixture path is not a file");
+    reply.type("text/plain");
+    return createReadStream(path);
+  });
+  app.post<{ Params: { id: string } }>("/api/fixtures/:id/preview", async (request, reply) => {
+    const fixture = config.fixtures.find((item) => item.id === request.params.id);
+    if (!fixture) return reply.code(404).send({ message: "Fixture not found" });
+    if (!preview?.startFixture) throw new Error("Preview manager is unavailable");
+    return preview.startFixture(fixture.id);
+  });
+  app.post<{ Params: { id: string } }>("/api/fixtures/:id/verify", async (request, reply) => {
+    const fixture = config.fixtures.find((item) => item.id === request.params.id);
+    if (!fixture) return reply.code(404).send({ message: "Fixture not found" });
+    if (!supervisor) throw new Error("Fixture verification is unavailable");
+    const verification = await verifyFixture({
+      fixture,
+      supervisor,
+      dataDir: config.dataDir,
+      defaultTimeoutMs: config.defaults.checkTimeoutMs,
+      signal: AbortSignal.timeout(config.defaults.checkTimeoutMs * 4),
+    });
+    // Рабочий каталог — путь на диске оператора, наружу он не нужен.
+    const { workspace: _workspace, ...result } = verification;
+    return result;
+  });
   app.get("/api/diagnostics", async () => ({
     node: process.version,
     platform: process.platform,
@@ -333,6 +400,170 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     return reply.code(201).send({ model, profile });
   });
 
+  /**
+   * Состав набора на сейчас: ревизии задач и содержимое их fixture. Считается по факту, а не
+   * берётся из прошлой ревизии, — иначе снимок повторил бы устаревшие данные.
+   */
+  const currentSuiteItems = (taskIds: readonly string[]) => {
+    const tasks = new Map(store.listTasks().map((task) => [task.id, task]));
+    return taskIds.map((taskId) => {
+      const task = tasks.get(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      const revision = task.currentRevision;
+      const fixture = revision.kind === "coding" ? config.fixtures.find((item) => item.id === revision.fixtureId) : undefined;
+      if (revision.kind === "coding" && !fixture) throw new Error(`Fixture ${revision.fixtureId} not found`);
+      return {
+        taskRevisionId: revision.id,
+        fixtureId: fixture?.id ?? null,
+        // ponytail: хеш считается копированием fixture. Потолок — набор из десятков задач;
+        // тогда кэшировать по каталогу, а не пересчитывать на каждый снимок и каждый просмотр.
+        fixtureRevision: fixture ? fixtureRevision(fixture) : null,
+      };
+    });
+  };
+
+  /** Что разъехалось между снимком и текущим состоянием: править набор или нет — решает человек. */
+  type Drift = { taskRevisionId: string; reason: "prompt" | "prompt-archived" | "prompt-missing" | "fixture" | "fixture-missing" };
+  const suiteRevisionDrift = (items: readonly SuiteItem[]): Drift[] => items.flatMap((item): Drift[] => {
+    const at = (reason: Drift["reason"]): Drift[] => [{ taskRevisionId: item.taskRevisionId, reason }];
+    const task = store.taskStateByRevision(item.taskRevisionId);
+    // Причины разные: архивную задачу вернут в работу, а изменённый промпт уже не тот.
+    if (!task) return at("prompt-missing");
+    if (task.archivedAt) return at("prompt-archived");
+    if (!task.isCurrent) return at("prompt");
+    if (!item.fixtureId) return [];
+    const fixture = config.fixtures.find((candidate) => candidate.id === item.fixtureId);
+    if (!fixture) return at("fixture-missing");
+    return fixtureRevision(fixture) === item.fixtureRevision ? [] : at("fixture");
+  });
+  const benchmarkModel = (run: { model_id: string; model_ref: string | null }) => ({
+    id: run.model_id,
+    name: store.getModel(run.model_id)?.name ?? run.model_ref ?? run.model_id.slice(0, 8),
+  });
+  const benchmarkEnvironment = (run: { runner_id: string; use_omp_agent: number }) => {
+    const runner = config.runners.find((item) => item.id === run.runner_id);
+    return { runnerId: run.runner_id, runnerName: runner?.name ?? run.runner_id, useOmpAgent: Boolean(run.use_omp_agent) };
+  };
+  const benchmarkSummaryFor = (runId: string) => benchmarkRunSummary(store.listTaskRuns(runId).map((taskRun) => ({
+    outcome: taskRunOutcome(taskRun), verdict: taskVerdict(taskRun), resultJson: taskRun.result_json,
+  })));
+
+  app.get("/api/suites", async () => store.listSuites());
+  app.post("/api/suites", async (request, reply) => reply.code(201).send(store.createSuite(parse(createSuiteSchema, request.body).name)));
+  app.patch<{ Params: { id: string } }>("/api/suites/:id", async (request) => store.renameSuite(request.params.id, parse(renameSuiteSchema, request.body).name));
+  app.delete<{ Params: { id: string } }>("/api/suites/:id", async (request, reply) => {
+    store.archiveSuite(request.params.id);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string } }>("/api/suites/:id/revisions", async (request, reply) => {
+    const { taskIds } = parse(createSuiteRevisionSchema, request.body);
+    return reply.code(201).send(store.createSuiteRevision(request.params.id, currentSuiteItems(taskIds)));
+  });
+  app.get<{ Params: { id: string } }>("/api/suites/:id/revisions", async (request) => store.listSuiteRevisions(request.params.id));
+  app.get<{ Querystring: { suiteRevisionId?: string; modelId?: string; status?: string } }>("/api/benchmark/runs", async (request) => {
+    const { suiteRevisionId, modelId, status } = request.query;
+    return store.listRuns().filter((run) => run.suite_revision_id)
+      .filter((run) => !suiteRevisionId || run.suite_revision_id === suiteRevisionId)
+      .filter((run) => !modelId || run.model_id === modelId)
+      .filter((run) => !status || run.status === status)
+      .map((run) => {
+        const revision = store.getSuiteRevision(run.suite_revision_id!);
+        const suite = revision ? store.getSuite(revision.suiteId) : undefined;
+        return {
+          id: run.id,
+          status: run.status,
+          createdAt: run.created_at,
+          suite: revision ? { revisionId: revision.id, name: suite?.name ?? "Набор", revision: revision.revision, contentHash: revision.contentHash } : null,
+          model: benchmarkModel(run),
+          environment: benchmarkEnvironment(run),
+          summary: benchmarkSummaryFor(run.id),
+        };
+      });
+  });
+  app.get<{ Querystring: { runIds?: string } }>("/api/benchmark/compare", async (request) => {
+    const runIds = (request.query.runIds ?? "").split(",").filter(Boolean);
+    if (runIds.length < 2 || runIds.length > 8 || new Set(runIds).size !== runIds.length) throw new Error("Choose from two to eight distinct benchmark runs");
+    const runs = runIds.map((id) => store.getRun(id));
+    if (runs.some((run) => !run || !run.suite_revision_id)) throw new Error("Every run must belong to a suite revision");
+    const suiteRevisionId = runs[0]!.suite_revision_id!;
+    if (runs.some((run) => run!.suite_revision_id !== suiteRevisionId)) throw new Error("Benchmark comparison requires one suite revision");
+    const revision = store.getSuiteRevision(suiteRevisionId);
+    if (!revision) throw new Error("Suite revision not found");
+    const environments = new Set(runs.map((run) => `${run!.runner_id}:${run!.use_omp_agent}`));
+    return {
+      suite: { revisionId: revision.id, name: store.getSuite(revision.suiteId)?.name ?? "Набор", revision: revision.revision, contentHash: revision.contentHash },
+      environmentWarning: environments.size > 1,
+      // Строки таблицы — из плана ревизии: у прерванного прогона выполненных задач меньше.
+      tasks: revision.items.map((item, position) => ({ position, name: store.getTaskRevision(item.taskRevisionId)?.name ?? `Задача ${position + 1}` })),
+      runs: runs.map((run) => ({
+        id: run!.id,
+        status: run!.status,
+        createdAt: run!.created_at,
+        model: benchmarkModel(run!),
+        environment: benchmarkEnvironment(run!),
+        summary: benchmarkSummaryFor(run!.id),
+        tasks: store.listTaskRuns(run!.id).map((taskRun) => ({
+          position: taskRun.position,
+          name: store.getTaskRevision(taskRun.task_revision_id)?.name ?? `Задача ${taskRun.position + 1}`,
+          status: taskRun.status,
+          outcome: taskRunOutcome(taskRun),
+          verdict: taskVerdict(taskRun),
+        })),
+      })),
+    };
+  });
+  app.get<{ Params: { id: string } }>("/api/benchmark/runs/:id", async (request, reply) => {
+    const run = store.getRun(request.params.id);
+    if (!run) return reply.code(404).send({ message: "Run not found" });
+    if (!run.suite_revision_id) return reply.code(400).send({ message: "Этот прогон не относится к набору задач" });
+    const revision = store.getSuiteRevision(run.suite_revision_id);
+    const planned = store.listRunTasks(run.id);
+    const summaryRows = store.listTaskRuns(run.id).map((taskRun) => {
+      const snapshot = JSON.parse(taskRun.snapshot_json) as { fixture?: { id?: string; preview?: unknown } };
+      const fixture = config.fixtures.find((item) => item.id === snapshot.fixture?.id);
+      return {
+        id: taskRun.id,
+        position: taskRun.position,
+        name: store.getTaskRevision(taskRun.task_revision_id)?.name ?? `Задача ${taskRun.position + 1}`,
+        description: store.taskDescriptionByRevision(taskRun.task_revision_id),
+        status: taskRun.status,
+        outcome: taskRunOutcome(taskRun),
+        verdict: taskVerdict(taskRun),
+        /**
+         * Состояние проверок до модели. Без него «проверка прошла» ничего не говорит: важно, что
+         * до модели она падала. Отдаётся только здесь, на экране завершённого прогона: в списке
+         * fixture и в снимке промпта этого нет, чтобы не подсказывать модели, что именно ломать.
+         */
+        baseline: fixture?.baseline ?? {},
+        /**
+         * Можно ли вообще запустить «до» и «после». Оригинал берётся из текущего манифеста,
+         * результат — из снимка промпта: у прогона, сделанного до появления команды запуска,
+         * её там нет, и предлагать кнопку бессмысленно.
+         */
+        preview: { original: Boolean(fixture?.preview), result: Boolean(snapshot.fixture?.preview) },
+        startedAt: taskRun.started_at,
+        finishedAt: taskRun.finished_at,
+        resultJson: taskRun.result_json,
+      };
+    });
+    const summary = benchmarkRunSummary(summaryRows.map((task) => ({ outcome: task.outcome, verdict: task.verdict, resultJson: task.resultJson })));
+    const tasks = summaryRows.map(({ resultJson: _, ...task }) => task);
+    return {
+      run: withPublicError(run),
+      suite: revision ? { revisionId: revision.id, revision: revision.revision, contentHash: revision.contentHash } : null,
+      // Запланировано против выполненного: прерванный прогон не должен выглядеть завершённым.
+      plannedCount: planned.length,
+      summary,
+      tasks,
+    };
+  });
+  app.get<{ Params: { id: string } }>("/api/suite-revisions/:id", async (request, reply) => {
+    const revision = store.getSuiteRevision(request.params.id);
+    if (!revision) return reply.code(404).send({ message: "Suite revision not found" });
+    const prompts = revision.items.map((item) => ({ ...item, name: store.getTaskRevision(item.taskRevisionId)?.name ?? null }));
+    // Прогоны по одной ревизии набора сравнимы между собой; по разным — нет, и это видно здесь.
+    return { ...revision, prompts, drift: suiteRevisionDrift(revision.items), runs: store.listSuiteRevisionRuns(revision.id).map(withPublicError) };
+  });
   app.get("/api/tasks", async () => store.listTasks());
   app.post("/api/task-images", async (request, reply) => reply.code(201).send(storeTaskImage(config.dataDir, parse(taskImageUploadSchema, request.body))));
   app.post("/api/tasks", async (request, reply) => reply.code(201).send(store.createTask(parseTask(request.body))));
@@ -492,8 +723,10 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.get("/api/gallery", async () => {
     const featured = new Set(store.listGalleryFeatured().map((item) => item.task_run_id));
     return store.listRuns().flatMap((run) => {
-      if (run.result_mode !== "web") return [];
+      // Прогоны бенчмарка и его промпты в галерею не идут: их условия заточены под проверку, а не под показ.
+      if (run.result_mode !== "web" || run.suite_revision_id) return [];
       return store.listTaskRuns(run.id).flatMap((taskRun) => {
+        if (store.taskTagsByRevision(taskRun.task_revision_id).includes(BENCHMARK_TAG)) return [];
         if (taskRun.status !== "completed" || taskRun.broken_at !== null || !checksPassed(taskRun.result_json)) return [];
         const selected = selectedResultVersionRecord(taskRun);
         const snapshot = parseGallerySnapshot(taskRun.snapshot_json);
@@ -728,6 +961,9 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       if (!run) throw new Error("Run not found");
       if (run.status === "pending" || run.status === "running") throw new Error("Active run must be cancelled before restart");
       if (hasActiveFollowup(run.id)) throw new Error("Active additional prompt must be cancelled before restart");
+      // Одна задача бенчмарка — одна попытка. Иначе неудачу можно переснять, и solve rate
+      // перестанет что-либо означать. Исследовать задачу можно обычным прогоном вне набора.
+      if (run.suite_revision_id) throw new Error("Задача набора выполняется один раз, а вердикт ставится на странице бенчмарка. Недоступно: перезапуск.");
       return taskRun;
     };
     const taskRun = assertRestartable();
@@ -761,6 +997,24 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       writeResultDiff(join(run.artifact_path, "control", "baseline.git"), version.baselineSha, version.resultSha, path);
     }
     return createReadStream(path);
+  });
+  /**
+   * Вывод одной проверки fixture. Нужен, чтобы судить по факту: «существующие тесты упали» без
+   * текста падения ничего не говорит. У скрытой проверки вывода нет — он содержит её ассерты,
+   * и вместе с копией результата он удаляется. Для вердикта это и не нужно: упавшая скрытая
+   * проверка уже даёт автоматический провал, а решать человеку приходится обратный случай.
+   */
+  app.get<{ Params: { id: string }; Querystring: { checkId?: string } }>("/api/task-runs/:id/check-log", async (request, reply) => {
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) return reply.code(404).send({ message: "Task run not found" });
+    const checkId = request.query.checkId;
+    const checks = resultChecks(taskRun.result_json);
+    const check = checks.find((item) => item.id === checkId);
+    if (!check) return reply.code(404).send({ message: "Проверка не найдена" });
+    reply.type("text/plain");
+    if (check.hidden) return "Вывод скрытой проверки не сохраняется: он содержит её ассерты.";
+    const path = join(taskRun.artifact_path, "checks", `${check.id}.log`);
+    return existsSync(path) ? createReadStream(path) : "Файл вывода не сохранился.";
   });
   app.get<{ Params: { id: string }; Querystring: { stream?: "stdout" | "stderr" | "display" } }>("/api/task-runs/:id/logs", async (request, reply) => {
     const run = store.getTaskRun(request.params.id);
@@ -930,16 +1184,57 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
     });
   });
   // Оценка и отметка полноты сохраняются одним запросом: результат без отметки не считается оценённым.
+  /**
+   * Итоговый вердикт задачи: ручной, если он есть, иначе выведенный из исхода. Технические
+   * провалы человека не ждут, а успешно завершённая задача ждёт: пройденные проверки сами по
+   * себе PASS не означают — модель могла обойти задачу.
+   */
+  /**
+   * Задача набора живёт по своим правилам: одна попытка и один бинарный вердикт. Оценка из
+   * обычного экрана результата меняла бы исход задним числом — и solve rate на экране бенчмарка
+   * расходился бы с тем, что считает остальная система.
+   */
+  const assertNotBenchmark = (taskRunId: string, what: string) => {
+    const taskRun = store.getTaskRun(taskRunId);
+    if (!taskRun) throw new Error("Task run not found");
+    if (store.getRun(taskRun.benchmark_run_id)?.suite_revision_id) {
+      throw new Error(`Задача набора выполняется один раз, а вердикт ставится на странице бенчмарка. Недоступно: ${what}.`);
+    }
+    return taskRun;
+  };
+  const taskVerdict = (taskRun: NonNullable<ReturnType<ArenaStore["getTaskRun"]>>) => {
+    const human = store.getVerdict(taskRun.id);
+    return {
+      ...resolveVerdict(taskRunOutcome(taskRun), human ? { verdict: human.verdict, reason: human.reason } : undefined),
+      comment: human?.comment ?? "",
+    };
+  };
+  app.get<{ Params: { id: string } }>("/api/task-runs/:id/verdict", async (request, reply) => {
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) return reply.code(404).send({ message: "Task run not found" });
+    return taskVerdict(taskRun);
+  });
+  app.put<{ Params: { id: string } }>("/api/task-runs/:id/verdict", async (request, reply) => {
+    const taskRun = store.getTaskRun(request.params.id);
+    if (!taskRun) return reply.code(404).send({ message: "Task run not found" });
+    if (taskRun.status === "pending" || taskRun.status === "running") throw new Error("Незавершённую задачу оценивать нечем");
+    const input = parse(saveVerdictSchema, request.body);
+    store.saveVerdict(taskRun.id, input);
+    return taskVerdict(store.getTaskRun(taskRun.id)!);
+  });
+  app.delete<{ Params: { id: string } }>("/api/task-runs/:id/verdict", async (request, reply) => {
+    store.clearVerdict(request.params.id);
+    return reply.code(204).send();
+  });
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/review", async (request) => {
     const review = parse(reviewSchema, request.body);
-    if (!store.getTaskRun(request.params.id)) throw new Error("Task run not found");
+    assertNotBenchmark(request.params.id, "оценка по критериям");
     return store.saveReviewWithCompletion(request.params.id, review);
   });
   // Отметка о выполнении промпта: полностью, частично или «не работает» (последняя убирает результат из галереи и сводок).
   app.put<{ Params: { id: string } }>("/api/task-runs/:id/completion", async (request) => {
     const { completion } = parse(completionSchema, request.body);
-    const taskRun = store.getTaskRun(request.params.id);
-    if (!taskRun) throw new Error("Task run not found");
+    const taskRun = assertNotBenchmark(request.params.id, "отметка о выполнении");
     // Сменить чип на «выполнено» можно только у оценённого результата: иначе это обход обязательной оценки.
     if ((completion === "full" || completion === "partial") && !taskRun.review) throw new Error("Rate the result before marking it complete");
     return withSelectedVersion(store.setTaskRunCompletion(taskRun.id, completion)!);
@@ -969,6 +1264,8 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   app.post<{ Params: { id: string } }>("/api/task-runs/:id/followups", async (request, reply) => {
     const { prompt } = parse(followupSchema, request.body);
+    // Иначе уточнение даёт модели вторую попытку, и запрет перезапуска ничего не стоит.
+    assertNotBenchmark(request.params.id, "уточнение");
     const followup = store.createFollowup(request.params.id, prompt);
     engine?.wake();
     return reply.code(202).send(followup);
@@ -1005,12 +1302,13 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   });
   app.post<{ Body: unknown }>("/api/preview/heartbeat", async (request) => {
     const target = request.body === undefined ? undefined : parse(previewStopSchema, request.body);
-    preview?.heartbeat(target);
+    preview?.heartbeat(target && previewOwner(target));
     return { status: "ok" };
   });
   app.delete<{ Body: unknown }>("/api/preview", async (request, reply) => {
     const target = request.body === undefined ? undefined : parse(previewStopSchema, request.body);
-    if (target && preview?.stopIf) await preview.stopIf(target.taskRunId, target.resultSha);
+    const owner = target && previewOwner(target);
+    if (owner && preview?.stopIf) await preview.stopIf(owner.ownerId, owner.versionId);
     else await preview?.stop();
     return reply.code(204).send();
   });

@@ -9,17 +9,17 @@ import { ArrowLeftIcon, ArrowRightIcon, CloseIcon, ExternalIcon } from "../icons
 import { Empty, NumberField, Page, Panel, SelectMenu, Status, useData, useHotkey } from "../shell.js";
 import { useToast } from "../toast.js";
 import type { BatchSummary, Fixture, Followup, GenerationErrorDetails, Model, ResultVersion, Run, RunEnvironment, Runner, Task, TaskRun } from "../types.js";
-import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, formatWatchdogDiagnostics, measurementConditions, harnessLabel, promptCountLabel, reviewMissingLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
+import { attemptSummary, checkStatusLabel, completionChoices, completionLabels, contextFill, diagnosticErrorPreview, formatDuration, formatMeasuredMetric, formatRelativeTime, formatReviewSummary, formatWatchdogDiagnostics, measurementConditions, promptCountLabel, reviewMissingLabel, reviewPossible, reviewSaveLabel, resultChecks, reviewSummary, reviewTotal, runIsActive, runListMeta, runListScore, runModelName, runnerLabel, runProfileName, runProgress, runTabTitle, shouldFollowOutput, statusLabel } from "../ui.js";
 
 function RunRow({ run, models, runners, onDelete }: { run: Run; models: Model[]; runners: Runner[]; onDelete?: (run: Run) => void }) {
   const visibleStatus = run.activityStatus ?? run.status;
   const terminal = !runIsActive(run);
   const modelName = runModelName(run, models);
-  const runnerName = runners.find((runner) => runner.id === run.runner_id)?.name;
+  const runner = runnerLabel(runners.find((item) => item.id === run.runner_id), run.runner_id, run.use_omp_agent);
   return <div className="run-row-wrap"><Link className="run-row" to="/runs/$runId" params={{ runId: run.id }}>
     <Status value={visibleStatus} />
     {/* Прогон батча — обычный прогон с меткой, поэтому в общем списке он отличается только значком. */}
-    <span className="run-row-copy"><strong>{modelName}{run.batch_id ? <em className="batch-mark" title="Часть массового прогона">батч</em> : null}</strong><small>{runListMeta(run, runnerName, harnessLabel(runners.find((runner) => runner.id === run.runner_id)?.kind, run.use_omp_agent))}</small></span>
+    <span className="run-row-copy"><strong>{modelName}{run.batch_id ? <em className="batch-mark" title="Часть массового прогона">батч</em> : null}</strong><small>{runListMeta(run, runner, runProfileName(run))}</small></span>
     <span className={run.reviewed_count ? "run-row-score" : "run-row-score run-row-score-none"}>{runListScore(run)}</span>
     <time dateTime={run.created_at} title={new Date(run.created_at).toLocaleString("ru-RU")}>{formatRelativeTime(run.created_at)}</time>
   </Link>{onDelete && terminal ? <button className="row-delete" title="Удалить результат" aria-label={`Удалить запуск ${modelName}`} onClick={() => onDelete(run)}><CloseIcon /></button> : null}</div>;
@@ -194,16 +194,24 @@ function MetricStrip({ result, conditions }: { result: Record<string, unknown> |
   return <div className="metric-strip"><div><span>Время</span><strong>{metric(result, "totalDurationMs")}</strong></div><div title="Новые входные токены во всех обращениях агента к модели, отдельно взятые из кеша и отдельно цена обвязки — вход первого обращения, то есть системный промпт и схемы инструментов"><span>Вход</span><strong>{metric(result, "inputTokens")}</strong><small>из кеша {metric(result, "cachedInputTokens")}</small><small>обвязка {metric(result, "harnessPromptTokens")}</small></div><div><span>Выход</span><strong>{metric(result, "outputTokens")}</strong></div><div><span>Обращения</span><strong>{metric(result, "modelRequests")}</strong></div><div title="Сколько токенов держал контекст в последнем обращении к модели"><span>Контекст в финале</span><strong>{!fill ? "N/A" : fill.percent === null ? fill.label : `${fill.percent}%`}</strong>{fill?.percent === null || !fill ? null : <small>{fill.label}</small>}</div><div><span>Скорость генерации</span><strong>{metric(result, "generationTokensPerSecond")}</strong>{conditions ? <small>{conditions}</small> : null}</div></div>;
 }
 
+/** Адрес preview: результат промпта с версией или исходное состояние fixture. */
+export type PreviewTarget = { taskRunId: string; resultSha: string } | { fixtureId: string };
+
+/** Сервер принимает адрес строго, поэтому лишние поля вроде url в тело не попадают. */
+function previewBody(target: PreviewTarget) {
+  return "fixtureId" in target
+    ? { fixtureId: target.fixtureId }
+    : { taskRunId: target.taskRunId, resultSha: target.resultSha };
+}
+
 /** Продлеваем аренду только своих preview: чужие не должны жить за счёт нашей вкладки. */
-export function usePreviewHeartbeat(targets: Array<{ taskRunId: string; resultSha: string }>) {
-  const key = targets.map((target) => `${target.taskRunId}:${target.resultSha}`).join(",");
+export function usePreviewHeartbeat(targets: readonly PreviewTarget[]) {
+  const key = JSON.stringify(targets.map(previewBody));
   useEffect(() => {
-    if (!key) return;
+    const bodies = JSON.parse(key) as unknown[];
+    if (!bodies.length) return;
     const heartbeat = window.setInterval(() => {
-      for (const target of key.split(",")) {
-        const [taskRunId, resultSha] = target.split(":") as [string, string];
-        void api("/preview/heartbeat", { method: "POST", body: JSON.stringify({ taskRunId, resultSha }) });
-      }
+      for (const body of bodies) void api("/preview/heartbeat", { method: "POST", body: JSON.stringify(body) });
     }, 15_000);
     return () => window.clearInterval(heartbeat);
   }, [key]);
@@ -212,13 +220,13 @@ export function usePreviewHeartbeat(targets: Array<{ taskRunId: string; resultSh
 // Preview-сервер один на всё приложение (см. PreviewManager.leaseMs) — если оставить страницу,
 // пока preview активен, он проработает ещё до 2 минут без пользы. Останавливаем адресно при уходе.
 /** Останавливаем ровно свой preview: пустой DELETE погасил бы и соседний, запущенный рядом. */
-export function stopPreviewTarget(preview: { taskRunId: string; resultSha: string } | undefined) {
+export function stopPreviewTarget(preview: PreviewTarget | undefined) {
   return preview
-    ? api("/preview", { method: "DELETE", body: JSON.stringify({ taskRunId: preview.taskRunId, resultSha: preview.resultSha }) })
+    ? api("/preview", { method: "DELETE", body: JSON.stringify(previewBody(preview)) })
     : Promise.resolve();
 }
 
-export function useStopPreviewOnUnmount(preview: PreviewState | undefined) {
+export function useStopPreviewOnUnmount(preview: PreviewTarget | undefined) {
   const ref = useRef(preview);
   useEffect(() => { ref.current = preview; }, [preview]);
   useEffect(() => () => {
@@ -249,7 +257,7 @@ function LogDialog({ path, onClose }: { path: string; onClose: () => void }) {
   </dialog>;
 }
 
-export function ResultPreview({ url, target, onClose, closing, title = "Готовое web-приложение", viewport }: { url: string; target: { taskRunId: string; resultSha: string }; onClose: () => void; closing?: boolean; title?: string; viewport?: { width: number; height: number } }) {
+export function ResultPreview({ url, target, onClose, closing, title = "Готовое web-приложение", viewport }: { url: string; target: PreviewTarget; onClose: () => void; closing?: boolean; title?: string; viewport?: { width: number; height: number } }) {
   usePreviewHeartbeat([target]);
   const frame = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
@@ -334,7 +342,7 @@ function FollowupResult({ followup, cancelPending, onCancel }: { followup: Follo
 
 type PreviewState = { taskRunId: string; resultSha: string; url: string };
 
-export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, onDeleted, deletable }: { taskRun: TaskRun; runId: string; preview: PreviewState | undefined; onPreview: (preview: PreviewState | undefined) => void; onDeleted?: () => void; deletable?: boolean }) {
+export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, onDeleted, deletable, benchmark }: { taskRun: TaskRun; runId: string; preview: PreviewState | undefined; onPreview: (preview: PreviewState | undefined) => void; onDeleted?: () => void; deletable?: boolean; /** Задача набора: оценка и уточнения у неё свои, на странице бенчмарка. */ benchmark?: boolean }) {
   const client = useQueryClient();
   const snapshot = JSON.parse(taskRun.snapshot_json) as { task: Task["currentRevision"]; fixture?: Fixture; model?: { kind?: string }; resultMode?: "text" | "web"; profile?: { name: string; parameters: { context: number | "auto"; temperature?: number } } };
   const versions = resultVersions(taskRun);
@@ -476,8 +484,9 @@ export function TaskResult({ taskRun, runId, preview: activePreview, onPreview, 
     {logsOpen ? <LogDialog key={logsPath} path={logsPath} onClose={() => setLogsOpen(false)} /> : null}
     {zed.error ? <div className="ide-error"><p className="error">{zed.error.message}</p>{zedErrorWorkspace ? <><code>{zedErrorWorkspace}</code><button onClick={() => void copyWorkspacePath(zedErrorWorkspace)}>Скопировать путь</button></> : null}</div> : null}
     {artifact !== undefined ? <>{diffSummary(result) ? <DiffNote summary={diffSummary(result)!} /> : null}<pre className="artifact">{artifact || "Нет данных"}</pre></> : null}
-    {taskRun.status === "completed" ? <details className="followups"><summary><strong>Уточнения ({followups.length})</strong>{hasActiveFollowup ? <span className="chip">Выполняется</span> : null}</summary><div className="followups-content">{followups.length ? <div className="followup-list">{followups.map((item) => <FollowupResult key={item.id} followup={item} cancelPending={cancelFollowup.isPending} onCancel={() => cancelFollowup.mutate(item.id)} />)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" title="Ctrl+Enter" disabled={hasActiveFollowup || addFollowup.isPending}>{hasActiveFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></div></details> : null}
-    {taskRun.status === "completed" || taskRun.review ? <form className="review" onSubmit={rate}><div className="review-heading"><span className="mono">Моя оценка</span><output>{draftTotal}<span>/{draftPossible}</span></output></div>{markCompletion.error ? <span className="error review-message">{markCompletion.error.message}</span> : null}{taskRun.broken_at ? <p className="broken-note">Результат помечен как нерабочий: он не попадёт в галерею, а в лидерборде и аналитике считается неудачей модели. Оценку можно оставить для памяти — в долю баллов она не пойдёт.</p> : null}{criteria.map(([key, label]) => <fieldset className="score-control" key={key} disabled={isBroken}><legend>{label}{key === "uiQuality" ? <button type="button" className={draft[key] === 0 ? "not-applied on" : "not-applied"} aria-pressed={draft[key] === 0} title="Визуал к этому результату не применяется" onClick={() => updateScore(key, draft[key] === 0 ? null : 0)}>не применяется</button> : null}<output>{draft[key] === null ? "—" : draft[key] === 0 ? "н/п" : `${draft[key]}/10`}</output></legend><div className="score-scale" onMouseLeave={() => setHoveredScore(null)}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <label key={value} title={`${value} из 10`} onMouseEnter={() => setHoveredScore({ key, value })} onMouseDown={() => updateScore(key, value)}><input type="radio" name={`${taskRun.id}-${key}`} value={value} checked={draft[key] === value} onChange={() => updateScore(key, value)} /><span aria-hidden="true" style={{ "--step": value } as CSSProperties} className={value <= (hoveredScore?.key === key ? hoveredScore.value : draft[key] ?? 0) ? `score-cell ${hoveredScore?.key === key ? "hovered" : "on"}` : "score-cell"}>{value}</span><span className="visually-hidden">{label}: {value} из 10</span></label>)}</div></fieldset>)}<label className="comment">Комментарий<textarea rows={2} value={draft.comment} title="Ctrl+Enter — сохранить оценку" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} onChange={(event) => { const comment = event.currentTarget.value; setDraft((current) => ({ ...current, comment })); setSaved(false); review.reset(); }} /></label><div className="review-actions"><div className="completion-choice" role="group" aria-label="Выполнение промпта">{completionChoices.map(([value, label]) => <button key={value} type="button" className={completion === value ? `completion-toggle ${value} on` : "completion-toggle"} aria-pressed={completion === value} disabled={markCompletion.isPending} title={value === "broken" ? "Формально завершён, но по факту не работает: результат исчезнет из галереи, а в лидерборде и аналитике будет считаться неудачей" : `Промпт выполнен ${label.toLowerCase()}`} onClick={() => chooseCompletion(value)}>{label}</button>)}</div>{missingReview ? <span className="review-missing">{reviewMissingLabel(missingScores, completion === null)}</span> : null}<button className={saved ? "saved" : ""} disabled={review.isPending || markCompletion.isPending || missingReview}>{isBroken ? "Сохранить как нерабочий" : reviewSaveLabel(review.isPending, saved)}</button></div>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form> : null}
+    {benchmark ? <p className="diff-note">Это задача бенчмарка: она выполняется один раз, а вердикт ставится <strong>на странице бенчмарка</strong>. Оценка по критериям и уточнения здесь недоступны — они изменили бы результат бенчмарка.</p> : null}
+    {!benchmark && taskRun.status === "completed" ? <details className="followups"><summary><strong>Уточнения ({followups.length})</strong>{hasActiveFollowup ? <span className="chip">Выполняется</span> : null}</summary><div className="followups-content">{followups.length ? <div className="followup-list">{followups.map((item) => <FollowupResult key={item.id} followup={item} cancelPending={cancelFollowup.isPending} onCancel={() => cancelFollowup.mutate(item.id)} />)}</div> : null}<form className="followup-form" onSubmit={sendFollowup}><label>Что нужно уточнить или исправить<textarea name="prompt" rows={3} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={snapshot.task.kind === "coding" ? "Например: исправь мобильную версию и проверь кнопки" : "Например: дополни ответ конкретным примером"} required /></label><button className="primary" title="Ctrl+Enter" disabled={hasActiveFollowup || addFollowup.isPending}>{hasActiveFollowup ? "Уточнение выполняется" : addFollowup.isPending ? "Добавляем…" : "Отправить уточнение"}</button>{addFollowup.error ? <span className="error">{addFollowup.error.message}</span> : null}</form></div></details> : null}
+    {!benchmark && (taskRun.status === "completed" || taskRun.review) ? <form className="review" onSubmit={rate}><div className="review-heading"><span className="mono">Моя оценка</span><output>{draftTotal}<span>/{draftPossible}</span></output></div>{markCompletion.error ? <span className="error review-message">{markCompletion.error.message}</span> : null}{taskRun.broken_at ? <p className="broken-note">Результат помечен как нерабочий: он не попадёт в галерею, а в лидерборде и аналитике считается неудачей модели. Оценку можно оставить для памяти — в долю баллов она не пойдёт.</p> : null}{criteria.map(([key, label]) => <fieldset className="score-control" key={key} disabled={isBroken}><legend>{label}{key === "uiQuality" ? <button type="button" className={draft[key] === 0 ? "not-applied on" : "not-applied"} aria-pressed={draft[key] === 0} title="Визуал к этому результату не применяется" onClick={() => updateScore(key, draft[key] === 0 ? null : 0)}>не применяется</button> : null}<output>{draft[key] === null ? "—" : draft[key] === 0 ? "н/п" : `${draft[key]}/10`}</output></legend><div className="score-scale" onMouseLeave={() => setHoveredScore(null)}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <label key={value} title={`${value} из 10`} onMouseEnter={() => setHoveredScore({ key, value })} onMouseDown={() => updateScore(key, value)}><input type="radio" name={`${taskRun.id}-${key}`} value={value} checked={draft[key] === value} onChange={() => updateScore(key, value)} /><span aria-hidden="true" style={{ "--step": value } as CSSProperties} className={value <= (hoveredScore?.key === key ? hoveredScore.value : draft[key] ?? 0) ? `score-cell ${hoveredScore?.key === key ? "hovered" : "on"}` : "score-cell"}>{value}</span><span className="visually-hidden">{label}: {value} из 10</span></label>)}</div></fieldset>)}<label className="comment">Комментарий<textarea rows={2} value={draft.comment} title="Ctrl+Enter — сохранить оценку" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} onChange={(event) => { const comment = event.currentTarget.value; setDraft((current) => ({ ...current, comment })); setSaved(false); review.reset(); }} /></label><div className="review-actions"><div className="completion-choice" role="group" aria-label="Выполнение промпта">{completionChoices.map(([value, label]) => <button key={value} type="button" className={completion === value ? `completion-toggle ${value} on` : "completion-toggle"} aria-pressed={completion === value} disabled={markCompletion.isPending} title={value === "broken" ? "Формально завершён, но по факту не работает: результат исчезнет из галереи, а в лидерборде и аналитике будет считаться неудачей" : `Промпт выполнен ${label.toLowerCase()}`} onClick={() => chooseCompletion(value)}>{label}</button>)}</div>{missingReview ? <span className="review-missing">{reviewMissingLabel(missingScores, completion === null)}</span> : null}<button className={saved ? "saved" : ""} disabled={review.isPending || markCompletion.isPending || missingReview}>{isBroken ? "Сохранить как нерабочий" : reviewSaveLabel(review.isPending, saved)}</button></div>{review.error ? <span className="error review-message">{review.error.message}</span> : null}</form> : null}
   </article>;
 }
 
@@ -615,7 +624,7 @@ export function RunDetail({ runId }: { runId: string }) {
     ...(run.data.repeat_count > 1 ? { repeat: run.data.repeat_count } : {}),
     ...(run.data.warmup_attempt ? { warmup: true } : {}),
   } : undefined;
-  return <div className="run-detail-page"><Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runners.data?.find((runner) => runner.id === run.data!.runner_id)?.name ?? run.data.runner_id, total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", harnessLabel(runners.data?.find((runner) => runner.id === run.data!.runner_id)?.kind, run.data.use_omp_agent), snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
+  return <div className="run-detail-page"><Page title={snapshot?.model?.name ?? `Запуск ${runId.slice(0, 8)}`} eyebrow={isActive ? "Идёт выполнение" : "Результат запуска"} intro={[runnerLabel(runners.data?.find((runner) => runner.id === run.data!.runner_id), run.data.runner_id, run.data.use_omp_agent), total ? promptCountLabel(total) : undefined, run.data.result_mode === "web" ? "web-приложение" : "текстовый ответ", snapshot?.model?.modelRef ? `модель: ${snapshot.model.modelRef}` : undefined, snapshot?.profile?.name ? `профиль: ${snapshot.profile.name}` : undefined, snapshot?.reasoningEffort ? `мышление: ${snapshot.reasoningEffort}` : undefined].filter(Boolean).join(" · ")}>
     <TabTitle text={runTabTitle(isActive, progress.current, total, activeTaskName ?? followupTaskName, runningFollowup)} />
     {/* Прогон батча открывают со страницы батча — туда же и возвращаем, иначе назад пришлось бы
         идти через список одиночных запусков и переключать вкладку. */}
@@ -627,7 +636,7 @@ export function RunDetail({ runId }: { runId: string }) {
     {run.data.error && !run.data.taskRuns?.length ? <GenerationError error={run.data.error} errorDetails={run.data.errorDetails} endpoint={`/runs/${runId}/error-details`} /> : null}
     <Panel title={isActive ? "Ход выполнения" : "Результаты"} action={<div className="panel-actions"><span className="run-score">{formatReviewSummary(scores)}</span><Status value={activityStatus} />{!isActive && remaining > 0 ? <button className="primary" disabled={resume.isPending} onClick={() => resume.mutate()}>{resume.isPending ? "Запускаем…" : `К следующему (осталось ${remaining})`}</button> : null}{!isActive && repeatSearch ? <Link to="/" search={repeatSearch} title="Те же промпты, модель и параметры">Повторить запуск</Link> : null}{!isActive ? <Link to="/compare" search={{ left: runId }}>Сравнить с другим запуском</Link> : null}{!isActive ? <button className="danger" onClick={() => confirm({ title: "Удалить результат?", body: "Запуск и все его файлы будут удалены без возможности вернуть.", action: "Удалить", onConfirm: () => remove.mutate() })} disabled={remove.isPending}>{remove.isPending ? "Удаляем…" : "Удалить результат"}</button> : null}</div>}>{items.length ? <div className="run-split"><PromptRail items={items} activeId={activeId!} reviewed={scores.reviewed} onSelect={selectTaskRun} onNextUnrated={nextUnrated ? () => selectTaskRun(nextUnrated.taskRun.id) : undefined} />
       <div className="run-pane">
-        {activeTaskRun ? <TaskResult key={activeTaskRun.id} taskRun={activeTaskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} onDeleted={() => selectTaskRun(undefined)} deletable={items.length > 1} /> : null}
+        {activeTaskRun ? <TaskResult key={activeTaskRun.id} taskRun={activeTaskRun} runId={runId} preview={preview} onPreview={(next) => setPreview(next)} onDeleted={() => selectTaskRun(undefined)} deletable={items.length > 1} benchmark={Boolean(run.data?.suite_revision_id)} /> : null}
       </div></div> : null}{isActive && !items.length ? <Empty>Готовим рабочее окружение и запускаем модель…</Empty> : null}{remove.error ? <p className="error">{remove.error.message}</p> : null}{resume.error ? <p className="error">{resume.error.message}</p> : null}</Panel>{confirmView}
   </Page></div>;
 }

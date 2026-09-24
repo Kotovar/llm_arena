@@ -1,0 +1,49 @@
+{
+  "id": "order-pricing-refactor",
+  "name": "Refactor order pricing without changing behavior",
+  "instructions": "Work in the current directory. The project runs on Node.js 24 without installing anything: TypeScript files are executed directly, so use plain type annotations only — enums, namespaces and constructor parameter properties are not supported. Keep src/index.ts and src/calculateOrderTotal.ts as the module entry points. Do not delete server.mjs, index.html or src/app.ts — the original and the result are opened through them. Run the existing checks before you finish.",
+  "reproduction": "Проверки проходят и до, и после модели — поведение сверяется с замороженной копией исходника на 20 000 заказов. Запустите до и после: «отпечаток поведения» (хеш результатов по 2 000 сгенерированным заказам) и таблица показательных заказов должны совпасть символ в символ. Судить нужно патч: стал ли calculateOrderTotal заметно понятнее, не превратился ли он в россыпь классов и фабрик, не тронуты ли тесты, типы и receipt.ts.",
+  "checks": [
+    {
+      "id": "tests",
+      "label": "Существующие тесты",
+      "command": {
+        "argv": [
+          "node",
+          "--test"
+        ]
+      }
+    }
+  ],
+  "hidden": [
+    {
+      "id": "behavior",
+      "label": "Поведение совпадает с исходным",
+      "command": {
+        "argv": [
+          "node",
+          "--test",
+          "pricing-behavior.test.ts"
+        ]
+      }
+    }
+  ],
+  "baseline": {
+    "tests": "pass",
+    "behavior": "pass"
+  },
+  "limits": {
+    "maxDurationMs": 600000
+  },
+  "preview": {
+    "command": {
+      "argv": [
+        "node",
+        "--disable-warning=ExperimentalWarning",
+        "server.mjs"
+      ],
+      "timeoutMs": 120000
+    },
+    "readyPath": "/"
+  }
+}

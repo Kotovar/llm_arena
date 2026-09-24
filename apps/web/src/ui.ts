@@ -272,6 +272,10 @@ export function defaultLocalProfile(modelId: string) {
       ubatchSize: 512,
       flashAttention: "auto" as const,
       cacheReuse: 256,
+      // Замер на Gemma 4 26B A4B и Tiel-Coder 35B A3B: +68% и +40% токенов в секунду на правке
+      // уже существующего кода, на прозе без потерь. Черновик берётся из контекста, лишней VRAM
+      // не просит.
+      specType: "ngram-simple" as const,
       fit: true,
       fitTargetMiB: 750,
       fitContextMin: 100_000,
@@ -645,14 +649,34 @@ export function harnessLabel(runnerKind: string | undefined, useOmpAgent: number
   return sharedHarnessLabel(runnerKind, useOmpAgent === 1);
 }
 
-export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string; activityStatus?: string; activeTaskName?: string | null }, runnerName?: string, ompMode?: string) {
+/**
+ * Раннер вместе с обвязкой. У OMP и pi обвязка и есть раннер: «OMP · OMP-среда» повторяло одно
+ * и то же, поэтому у них остаётся только подпись обвязки.
+ */
+export function runnerLabel(runner: { name: string; kind: string } | undefined, runnerId: string, useOmpAgent: number) {
+  const harness = harnessLabel(runner?.kind, useOmpAgent);
+  if (runner?.kind === "omp" || runner?.kind === "pi") return harness;
+  return `${runner?.name ?? runnerId} · ${harness}`;
+}
+
+/** Профиль запуска из снимка: у облачных моделей его нет. */
+export function runProfileName(run: { snapshot_json: string | null }): string | undefined {
+  try {
+    const name = (run.snapshot_json ? JSON.parse(run.snapshot_json) as { profile?: { name?: unknown } } : undefined)?.profile?.name;
+    return typeof name === "string" && name ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function runListMeta(run: { runner_id: string; result_mode: "text" | "web"; task_count?: number; error: string | null; status: string; activityStatus?: string; activeTaskName?: string | null }, runner?: string, profileName?: string) {
   return [
     // В списке видно только «Выполняется» — без имени промпта непонятно, над чем агент сейчас работает.
     run.activeTaskName ? `${run.activityStatus === "running-followup" ? "уточняем" : "промпт"}: ${run.activeTaskName}` : undefined,
     run.task_count ? promptCountLabel(run.task_count) : undefined,
-    runnerName ?? run.runner_id,
+    runner ?? run.runner_id,
+    profileName ? `профиль: ${profileName}` : undefined,
     run.result_mode === "web" ? "web-приложение" : "текстовый ответ",
-    ompMode,
   ].filter(Boolean).join(" · ");
 }
 
@@ -684,6 +708,7 @@ export const outcomeLabels: Record<TaskOutcome, string> = {
   error: "Ошибка",
   post_processing: "Ошибка обработки результата",
   watchdog: "Зациклился",
+  timeout: "Не уложился в лимит",
   broken: "Не работает",
   aborted_auto: "Остановлен автоматически",
   aborted_user: "Остановлен вручную",

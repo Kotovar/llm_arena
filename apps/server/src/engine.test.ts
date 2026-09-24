@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { taskRunOutcome } from "@llm-arena/shared";
 import { loadConfig } from "./config.js";
 import { BenchmarkEngine } from "./engine.js";
 import { ProcessSupervisor } from "./process-supervisor.js";
@@ -319,6 +320,99 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:1,output_t
     store.close();
   });
 
+  it("даёт задаче её собственный исходный проект, а не пустой каталог", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-own-fixture-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    // Агент только рапортует: важно, что он получил, а не что сделал.
+    writeFileSync(script, `import { readdirSync } from "node:fs";
+let input = ""; for await (const chunk of process.stdin) input += chunk;
+console.log(JSON.stringify({ type: "thread.started", thread_id: "thread" }));
+console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: readdirSync(".").toSorted().join(",") } }));
+console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }));`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Гонка", kind: "coding", fixtureId: "stale-search-results", prompt: "Найди причину", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    // Режим «text» раньше превращал любую задачу в промпт без проекта: модель получала пустой
+    // каталог и уходила искать проект по файловой системе — вместе со скрытыми проверками.
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("own-fixture-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    const saved = JSON.parse(taskRun.result_json!) as { finalAnswer: string; checks: Array<{ id: string; status: string; hidden: boolean }>; fixtureRevision?: string };
+    expect(saved.finalAnswer).toContain("package.json");
+    expect(saved.finalAnswer).toContain("src");
+    // Проверки fixture отработали, включая скрытую: без исходного проекта их просто не было бы.
+    expect(saved.checks.map((check) => [check.id, check.hidden])).toEqual([["tests", false], ["regression", true]]);
+    expect(saved.fixtureRevision).toMatch(/^[0-9a-f]{40,64}$/u);
+    expect(JSON.parse(taskRun.snapshot_json).fixture.id).toBe("stale-search-results");
+    await engine.stop();
+    store.close();
+  }, 120_000);
+
+  it("прогон бенчмарка с проваленной проверкой завершён, а не упал", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-suite-check-failed-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    // Агент ничего не правит: скрытая регрессия fixture остаётся красной.
+    writeFileSync(script, `let input = ""; for await (const chunk of process.stdin) input += chunk;
+console.log(JSON.stringify({ type: "thread.started", thread_id: "thread" }));
+console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "готово" } }));
+console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }));`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Гонка", kind: "coding", fixtureId: "stale-search-results", prompt: "Найди причину", tags: [] });
+    const suite = store.createSuite("Suite");
+    const revision = store.createSuiteRevision(suite.id, [{ taskRevisionId: task.currentRevision.id, fixtureId: "stale-search-results", fixtureRevision: null }]);
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ suiteRevisionId: revision.id, taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "text" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("suite-check-failed-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    expect(taskRunOutcome(taskRun)).toBe("check_failed");
+    // Проваленная проверка — исход задачи и авто-FAIL модели. Прогон при этом дошёл до конца, и
+    // «ошибка» вместо «завершён» выкидывала его из итогов бенчмарка.
+    expect(store.getRun(run.id)).toMatchObject({ status: "completed", error: null });
+    await engine.stop();
+    store.close();
+  }, 120_000);
+
+  it("гасит задачу по её лимиту времени, а не по паузе без вывода", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llm-arena-task-limit-"));
+    directories.push(root);
+    const script = join(root, "fake-codex.mjs");
+    // Агент бодро пишет в stdout: под taskTimeoutMs он не попадает никогда.
+    writeFileSync(script, `setInterval(() => process.stdout.write("работаю\\n"), 50);`);
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = join(root, ".data");
+    config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    config.fixtures = config.fixtures.map((fixture) => fixture.id === "web-app" ? { ...fixture, limits: { maxDurationMs: 700 } } : fixture);
+    const store = createStore(join(root, "arena.sqlite"));
+    const task = store.createTask({ name: "Долгая", kind: "prompt", prompt: "Сделай", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
+    const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "fake", resultMode: "web" });
+    const engine = new BenchmarkEngine(store, config, new ProcessSupervisor("task-limit-test", 100));
+
+    await engine.processNext();
+
+    const taskRun = store.listTaskRuns(run.id)[0]!;
+    expect(taskRun).toMatchObject({ status: "cancelled", stop_reason: "timeout" });
+    // Исход отличается от ручной остановки: модель не уложилась, и это её неудача.
+    expect(taskRunOutcome(taskRun)).toBe("timeout");
+    expect(readFileSync(join(taskRun.artifact_path, "display.log"), "utf8")).toContain("исчерпан лимит");
+    await engine.stop();
+    store.close();
+  }, 60_000);
+
   it("creates real web files from a coding prompt and serves the saved result", async () => {
     const root = mkdtempSync(join(tmpdir(), "llm-arena-web-engine-"));
     directories.push(root);
@@ -335,6 +429,23 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     const config = loadConfig("../../arena.config.yaml");
     config.dataDir = join(root, ".data");
     config.runners = [{ id: "fake", name: "Fake Codex", kind: "codex", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] }];
+    // Скрытая проверка живёт вне fixture и гоняется по копии результата: в снимке промпта и в
+    // самом рабочем каталоге её быть не должно, иначе модель прочитает ассерты.
+    const validation = join(root, "validation");
+    mkdirSync(validation, { recursive: true });
+    writeFileSync(join(validation, "order.test.js"), `import { ok } from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+test("проверка видит результат модели", () => ok(readFileSync("index.html", "utf8").includes("Готовое")));
+`);
+    config.fixtures = config.fixtures.map((fixture) => fixture.id === "web-app"
+      ? {
+        ...fixture,
+        hiddenSource: validation,
+        hidden: [{ id: "regression", label: "Regression", command: { argv: [process.execPath, "--test", "order.test.js"] } }],
+        baseline: { regression: "pass" as const },
+      }
+      : fixture);
     const store = createStore(join(root, "arena.sqlite"));
     const task = store.createTask({ name: "Web app", kind: "prompt", prompt: "Сделай тетрис", tags: [] });
     const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "test-model" });
@@ -347,6 +458,18 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:4,output_t
     expect(taskRun.status).toBe("completed");
     expect(store.getTaskRevision(task.currentRevision.id)?.kind).toBe("prompt");
     expect(JSON.parse(taskRun.snapshot_json).task).toMatchObject({ kind: "coding", fixtureId: "web-app" });
+    expect(JSON.parse(taskRun.snapshot_json).fixture).not.toHaveProperty("hidden");
+    expect(taskRun.snapshot_json).not.toContain("order.test.js");
+    // Скрытая проверка отработала по результату модели, но её файла в рабочем каталоге нет.
+    const saved = JSON.parse(taskRun.result_json!) as { checks: Array<{ id: string; status: string; hidden: boolean }> };
+    expect(saved.checks.find((check) => check.id === "regression")).toMatchObject({ status: "pass", hidden: true });
+    expect(existsSync(join(taskRun.artifact_path, "workspace", "order.test.js"))).toBe(false);
+    expect(existsSync(join(taskRun.artifact_path, "hidden"))).toBe(false);
+    expect(readFileSync(join(taskRun.artifact_path, "diff.patch"), "utf8")).not.toContain("order.test.js");
+    // Ревизия fixture: без неё по результату не понять, на каком исходном состоянии он получен.
+    const fixtureRevision = JSON.parse(taskRun.snapshot_json).fixtureRevision as string;
+    expect(fixtureRevision).toMatch(/^[0-9a-f]{40,64}$/u);
+    expect(JSON.parse(readFileSync(join(taskRun.artifact_path, "result.json"), "utf8")).fixtureRevision).toBe(fixtureRevision);
     expect(readFileSync(join(taskRun.artifact_path, "workspace", "index.html"), "utf8")).toBe("<h1>Готовое приложение</h1>");
     expect(JSON.parse(taskRun.result_json!).finalAnswer).toContain("Create real files");
     // Снимок делается настоящим браузером, поэтому проверяем его только там, где браузер есть.

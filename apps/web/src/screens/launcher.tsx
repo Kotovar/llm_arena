@@ -3,14 +3,14 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { ArrowRightIcon } from "../icons.js";
-import { Page, Panel, SelectMenu, Status, useData, useHotkey, requestNotifications } from "../shell.js";
+import { Page, Panel, SelectMenu, Status, useData, usePrompts, useHotkey, requestNotifications } from "../shell.js";
 import type { BatchCreated, GalleryResult, Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
 import { chooseRunner, cloudProviderCatalogKind, galleryCoverage, type Harness, harnessLabel, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, plural, promptCountLabel, reasoningEffortsForModel, usableHarnesses } from "../ui.js";
 import { HarnessPicker } from "./harness-picker.js";
 import { PromptPicker } from "./prompt-picker.js";
 
 export function Launcher() {
-  const tasks = useData<Task[]>("tasks", "/tasks");
+  const tasks = usePrompts("ordinary");
   const models = useData<Model[]>("models", "/models");
   const profiles = useData<Profile[]>("profiles", "/profiles");
   const runners = useData<Runner[]>("runners", "/runners");

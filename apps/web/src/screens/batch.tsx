@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { api } from "../api.js";
 import { ArrowLeftIcon, ArrowRightIcon } from "../icons.js";
-import { Page, Panel, Status, useData, requestNotifications } from "../shell.js";
+import { Page, Panel, Status, useData, usePrompts, requestNotifications } from "../shell.js";
 import type { TaskOutcome } from "@llm-arena/shared";
 import type { BatchCreated, BatchProgress, Model, Profile, Runner, Task } from "../types.js";
 import { batchRunSummary, chooseRunner, type Harness, harnessAxisLabel, latestProfiles, outcomeLabels, plural, usableHarnesses } from "../ui.js";
@@ -79,7 +79,7 @@ function BatchProgressView({ batchId }: { batchId: string }) {
 
 export function BatchPage() {
   const { id } = useSearch({ from: "/batch" });
-  const tasks = useData<Task[]>("tasks", "/tasks");
+  const tasks = usePrompts("ordinary");
   const models = useData<Model[]>("models", "/models");
   const profiles = useData<Profile[]>("profiles", "/profiles");
   const runners = useData<Runner[]>("runners", "/runners");

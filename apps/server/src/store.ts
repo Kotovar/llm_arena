@@ -13,9 +13,13 @@ import {
   modelEconomicsSchema,
   type Review,
   type RunStatus,
+  type FailureReason,
   type StopReason,
+  type SuiteItem,
   type TaskImage,
   type TaskRevision,
+  type Verdict,
+  BENCHMARK_TAG,
 } from "@llm-arena/shared";
 
 type TaskRow = {
@@ -41,7 +45,6 @@ type TaskRevisionRow = {
   tags_json: string;
   images_json: string;
   content_hash: string;
-  fixture_hash: string | null;
   created_at: string;
 };
 
@@ -56,6 +59,8 @@ type RunRow = {
   use_omp_agent: number;
   /** Почему прогон остановлен; заполняется только при status = 'cancelled'. */
   stop_reason: StopReason | null;
+  /** Ревизия набора задач, по которой идёт прогон; null у обычного запуска из лаунчера. */
+  suite_revision_id: string | null;
   /** Общая метка массового запуска; null у одиночных прогонов. */
   batch_id: string | null;
   batch_position: number | null;
@@ -183,6 +188,31 @@ type PairReviewRow = {
   updated_at: string;
 };
 
+type SuiteRow = {
+  id: string;
+  name: string;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type SuiteRevisionRow = {
+  id: string;
+  suite_id: string;
+  revision: number;
+  items_json: string;
+  content_hash: string;
+  created_at: string;
+};
+
+type VerdictRow = {
+  task_run_id: string;
+  verdict: Verdict;
+  reason: FailureReason | null;
+  comment: string;
+  updated_at: string;
+};
+
 type TaskAttemptRow = {
   id: string;
   task_run_id: string;
@@ -299,7 +329,7 @@ function migrate(sqlite: DatabaseSync): void {
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, current_revision_id TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS task_revisions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL, prompt TEXT NOT NULL, fixture_id TEXT, tags_json TEXT NOT NULL, images_json TEXT NOT NULL DEFAULT '[]', content_hash TEXT NOT NULL, fixture_hash TEXT, created_at TEXT NOT NULL, UNIQUE(task_id, revision));
+    CREATE TABLE IF NOT EXISTS task_revisions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL, prompt TEXT NOT NULL, fixture_id TEXT, tags_json TEXT NOT NULL, images_json TEXT NOT NULL DEFAULT '[]', content_hash TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(task_id, revision));
     CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, position INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL, model_ref TEXT NOT NULL, path TEXT, alias TEXT, capabilities_json TEXT NOT NULL DEFAULT '{"toolUse":false,"vision":false,"reasoning":false}', mmproj_path TEXT, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS execution_profiles (id TEXT PRIMARY KEY, model_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, parameters_json TEXT NOT NULL, gguf_sha256 TEXT, calibrated INTEGER NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS run_tasks (run_id TEXT NOT NULL, task_revision_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(run_id, position));
@@ -312,6 +342,9 @@ function migrate(sqlite: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS pair_reviews (id TEXT PRIMARY KEY, first_task_run_id TEXT NOT NULL, second_task_run_id TEXT NOT NULL, winner_task_run_id TEXT, comment TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL, UNIQUE(first_task_run_id, second_task_run_id));
     CREATE TABLE IF NOT EXISTS gallery_featured (task_revision_id TEXT NOT NULL, model_id TEXT NOT NULL, task_run_id TEXT NOT NULL UNIQUE, updated_at TEXT NOT NULL, PRIMARY KEY(task_revision_id, model_id));
     CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS suites (id TEXT PRIMARY KEY, name TEXT NOT NULL, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS suite_revisions (id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, revision INTEGER NOT NULL, items_json TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(suite_id, revision));
+    CREATE TABLE IF NOT EXISTS task_verdicts (task_run_id TEXT PRIMARY KEY, verdict TEXT NOT NULL, reason TEXT, comment TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
   `);
   // Описание — заметка «для себя», в модель не уходит и не должно замораживаться в версии промпта:
   // иначе у старых прогонов его не видно. Поэтому оно живёт на задаче, а старые значения переносим.
@@ -361,6 +394,9 @@ function migrate(sqlite: DatabaseSync): void {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN batch_position INTEGER");
   }
   sqlite.exec("CREATE INDEX IF NOT EXISTS idx_runs_batch ON benchmark_runs(batch_id)");
+  if (!runColumns.some((column) => column.name === "suite_revision_id")) {
+    sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN suite_revision_id TEXT");
+  }
   if (!runColumns.some((column) => column.name === "use_omp_agent")) {
     sqlite.exec("ALTER TABLE benchmark_runs ADD COLUMN use_omp_agent INTEGER NOT NULL DEFAULT 0");
     sqlite.exec("UPDATE benchmark_runs SET use_omp_agent = CASE WHEN result_mode = 'text' THEN 1 ELSE 0 END");
@@ -410,6 +446,11 @@ function migrate(sqlite: DatabaseSync): void {
     sqlite.exec("ALTER TABLE task_runs ADD COLUMN stop_reason TEXT");
   }
   const taskRevisionColumns = sqlite.prepare("PRAGMA table_info(task_revisions)").all() as Array<{ name: string }>;
+  // Колонка так и осталась пустой: ревизия задачи неизменяема, а fixture правят и после неё,
+  // поэтому записанный туда хеш устаревал бы молча. Содержимое fixture фиксирует ревизия набора.
+  if (taskRevisionColumns.some((column) => column.name === "fixture_hash")) {
+    sqlite.exec("ALTER TABLE task_revisions DROP COLUMN fixture_hash");
+  }
   if (!taskRevisionColumns.some((column) => column.name === "images_json")) {
     sqlite.exec("ALTER TABLE task_revisions ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'");
   }
@@ -449,7 +490,6 @@ function mapTaskRevision(row: TaskRevisionRow): TaskRevision {
     tags: JSON.parse(row.tags_json) as string[],
     images: JSON.parse(row.images_json) as TaskImage[],
     contentHash: row.content_hash,
-    fixtureHash: row.fixture_hash,
     createdAt: row.created_at,
   };
   return row.kind === "coding"
@@ -486,17 +526,76 @@ export function createStore(filename: string) {
   function insertRun(input: CreateRun, batch?: { id: string; position: number }): RunRow {
     const model = store.getModel(input.modelId);
     if (!model) throw new Error("Model not found");
-    for (const taskRevisionId of input.taskRevisionIds) {
+    // Прогон по набору не перечисляет промпты сам: их состав и порядок задаёт ревизия набора,
+    // иначе два «одинаковых» прогона разъехались бы по составу и сравнивать их было бы нечем.
+    const suiteRevision = input.suiteRevisionId ? getSuiteRevision(input.suiteRevisionId) : undefined;
+    if (input.suiteRevisionId && !suiteRevision) throw new Error("Suite revision not found");
+    const taskRevisionIds = suiteRevision ? suiteRevision.items.map((item) => item.taskRevisionId) : input.taskRevisionIds ?? [];
+    if (!taskRevisionIds.length) throw new Error("Run has no prompts");
+    for (const taskRevisionId of taskRevisionIds) {
       if (!getTaskRevision(taskRevisionId)) throw new Error(`Task revision ${taskRevisionId} not found`);
+      if (!suiteRevision && store.taskTagsByRevision(taskRevisionId).includes(BENCHMARK_TAG)) throw new Error("Промпт бенчмарка запускается только в составе бенчмарка");
     }
     const modelRef = model.kind === "cloud" ? input.modelRef ?? model.modelRef : model.modelRef;
     const id = randomUUID();
     sqlite
-      .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, repeat_count, warmup_attempt, batch_id, batch_position, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
-      .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, input.repeatCount ?? 1, input.warmupAttempt ? 1 : 0, batch?.id ?? null, batch?.position ?? null, now());
+      .prepare("INSERT INTO benchmark_runs (id, model_id, execution_profile_id, runner_id, result_mode, use_omp_agent, model_ref, reasoning_effort, repeat_count, warmup_attempt, suite_revision_id, batch_id, batch_position, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+      .run(id, input.modelId, input.executionProfileId, input.runnerId, input.resultMode, input.useOmpAgent ? 1 : 0, modelRef, input.reasoningEffort ?? null, input.repeatCount ?? 1, input.warmupAttempt ? 1 : 0, input.suiteRevisionId ?? null, batch?.id ?? null, batch?.position ?? null, now());
     const insertTask = sqlite.prepare("INSERT INTO run_tasks (run_id, task_revision_id, position) VALUES (?, ?, ?)");
-    input.taskRevisionIds.forEach((taskRevisionId, position) => insertTask.run(id, taskRevisionId, position));
+    taskRevisionIds.forEach((taskRevisionId, position) => insertTask.run(id, taskRevisionId, position));
     return one<RunRow>("SELECT * FROM benchmark_runs WHERE id = ?", id)!;
+  }
+
+  function materializeSuite(row: SuiteRow) {
+    return {
+      id: row.id,
+      name: row.name,
+      archivedAt: row.archived_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      latestRevision: latestSuiteRevision(row.id),
+    };
+  }
+
+  function getSuite(id: string) {
+    const row = one<SuiteRow>("SELECT * FROM suites WHERE id = ?", id);
+    return row ? materializeSuite(row) : undefined;
+  }
+
+  function mapSuiteRevision(row: SuiteRevisionRow) {
+    return {
+      id: row.id,
+      suiteId: row.suite_id,
+      revision: row.revision,
+      items: JSON.parse(row.items_json) as SuiteItem[],
+      contentHash: row.content_hash,
+      createdAt: row.created_at,
+    };
+  }
+
+  function getSuiteRevision(id: string) {
+    const row = one<SuiteRevisionRow>("SELECT * FROM suite_revisions WHERE id = ?", id);
+    return row ? mapSuiteRevision(row) : undefined;
+  }
+
+  function latestSuiteRevision(suiteId: string) {
+    const row = one<SuiteRevisionRow>("SELECT * FROM suite_revisions WHERE suite_id = ? ORDER BY revision DESC LIMIT 1", suiteId);
+    return row ? mapSuiteRevision(row) : undefined;
+  }
+
+  function mapVerdict(row: VerdictRow) {
+    return {
+      taskRunId: row.task_run_id,
+      verdict: row.verdict,
+      reason: row.reason,
+      comment: row.comment,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  function getVerdict(taskRunId: string) {
+    const row = one<VerdictRow>("SELECT * FROM task_verdicts WHERE task_run_id = ?", taskRunId);
+    return row ? mapVerdict(row) : undefined;
   }
 
   function getTaskRevision(id: string): TaskRevision | undefined {
@@ -532,7 +631,7 @@ export function createStore(filename: string) {
     const images = input.images ?? [];
 
     sqlite
-      .prepare("INSERT INTO task_revisions (id, task_id, revision, name, description, kind, prompt, fixture_id, tags_json, images_json, content_hash, fixture_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .prepare("INSERT INTO task_revisions (id, task_id, revision, name, description, kind, prompt, fixture_id, tags_json, images_json, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(
         id,
         taskId,
@@ -545,7 +644,6 @@ export function createStore(filename: string) {
         JSON.stringify(tags),
         JSON.stringify(images),
         revisionContentHash(input),
-        null,
         createdAt,
       );
     sqlite.prepare("UPDATE tasks SET current_revision_id = ?, updated_at = ? WHERE id = ?").run(id, createdAt, taskId);
@@ -564,6 +662,7 @@ export function createStore(filename: string) {
     sqlite.prepare("DELETE FROM gallery_featured WHERE task_run_id = ?").run(taskRunId);
     sqlite.prepare("DELETE FROM task_run_followups WHERE task_run_id = ?").run(taskRunId);
     sqlite.prepare("DELETE FROM reviews WHERE task_run_id = ?").run(taskRunId);
+    sqlite.prepare("DELETE FROM task_verdicts WHERE task_run_id = ?").run(taskRunId);
     sqlite.prepare("DELETE FROM check_runs WHERE task_run_id = ?").run(taskRunId);
   }
 
@@ -645,6 +744,19 @@ export function createStore(filename: string) {
     },
     listTasks() {
       return all<TaskRow>("SELECT * FROM tasks WHERE archived_at IS NULL ORDER BY created_at").map((row) => materializeTask(row.id)!);
+    },
+    /**
+     * Состояние задачи по закреплённой в наборе ревизии: архивную задачу listTasks() не
+     * показывает, и без этого она выглядела бы правкой промпта, которой не было.
+     */
+    taskStateByRevision(taskRevisionId: string) {
+      const row = one<{ task_id: string; archived_at: string | null; is_current: number }>(
+        `SELECT tasks.id AS task_id, tasks.archived_at AS archived_at, (tasks.current_revision_id = task_revisions.id) AS is_current
+         FROM task_revisions JOIN tasks ON tasks.id = task_revisions.task_id
+         WHERE task_revisions.id = ?`,
+        taskRevisionId,
+      );
+      return row ? { taskId: row.task_id, archivedAt: row.archived_at, isCurrent: row.is_current === 1 } : undefined;
     },
     archiveTask(id: string) {
       const timestamp = now();
@@ -812,6 +924,53 @@ export function createStore(filename: string) {
       if (activeRun) throw new Error("Stop the runs using this profile first");
       sqlite.prepare("DELETE FROM execution_profiles WHERE model_id = ? AND name = ?").run(profile.modelId, profile.name);
       return profile;
+    },
+    createSuite(name: string) {
+      const id = randomUUID();
+      const createdAt = now();
+      sqlite.prepare("INSERT INTO suites (id, name, archived_at, created_at, updated_at) VALUES (?, ?, NULL, ?, ?)").run(id, name, createdAt, createdAt);
+      return { id, name, archivedAt: null, createdAt, updatedAt: createdAt, latestRevision: undefined };
+    },
+    renameSuite(id: string, name: string) {
+      sqlite.prepare("UPDATE suites SET name = ?, updated_at = ? WHERE id = ?").run(name, now(), id);
+      return getSuite(id);
+    },
+    archiveSuite(id: string) {
+      sqlite.prepare("UPDATE suites SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL").run(now(), now(), id);
+    },
+    getSuite,
+    listSuites() {
+      return all<SuiteRow>("SELECT * FROM suites WHERE archived_at IS NULL ORDER BY created_at").map((row) => materializeSuite(row));
+    },
+    /**
+     * Новая ревизия набора — снимок состава: ревизии задач и содержимое их fixture на этот
+     * момент. Одинаковый снимок второй раз не заводим: иначе у «той же» ревизии появился бы
+     * второй идентификатор и прогоны по ней перестали бы считаться сравнимыми.
+     */
+    createSuiteRevision(suiteId: string, items: readonly SuiteItem[]) {
+      return transaction(() => {
+        if (!getSuite(suiteId)) throw new Error("Suite not found");
+        if (!items.length) throw new Error("Suite revision has no prompts");
+        for (const item of items) {
+          if (!getTaskRevision(item.taskRevisionId)) throw new Error(`Task revision ${item.taskRevisionId} not found`);
+        }
+        const contentHash = hash(items);
+        const previous = latestSuiteRevision(suiteId);
+        if (previous?.contentHash === contentHash) return previous;
+        const id = randomUUID();
+        sqlite.prepare("INSERT INTO suite_revisions (id, suite_id, revision, items_json, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+          .run(id, suiteId, (previous?.revision ?? 0) + 1, JSON.stringify(items), contentHash, now());
+        sqlite.prepare("UPDATE suites SET updated_at = ? WHERE id = ?").run(now(), suiteId);
+        return getSuiteRevision(id)!;
+      });
+    },
+    getSuiteRevision,
+    listSuiteRevisions(suiteId: string) {
+      return all<SuiteRevisionRow>("SELECT * FROM suite_revisions WHERE suite_id = ? ORDER BY revision DESC", suiteId).map(mapSuiteRevision);
+    },
+    /** Прогоны по конкретной ревизии набора: именно они и сравнимы между собой. */
+    listSuiteRevisionRuns(suiteRevisionId: string) {
+      return all<RunRow>("SELECT * FROM benchmark_runs WHERE suite_revision_id = ? ORDER BY sequence DESC", suiteRevisionId);
     },
     createRun(input: CreateRun) {
       return transaction(() => insertRun(input));
@@ -1108,6 +1267,28 @@ export function createStore(filename: string) {
         this.setTaskRunCompletion(taskRunId, review.completion);
         return this.saveReview(taskRunId, review);
       });
+    },
+    /**
+     * Ручной вердикт бенчмарка. Автоматические провалы тут не хранятся: их выводит
+     * resolveVerdict() из исхода, иначе поздняя отметка «не работает» разошлась бы с записью.
+     */
+    saveVerdict(taskRunId: string, input: { verdict: Verdict; reason: FailureReason | null; comment: string }) {
+      const updatedAt = now();
+      sqlite.prepare(`
+        INSERT INTO task_verdicts (task_run_id, verdict, reason, comment, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(task_run_id) DO UPDATE SET verdict = excluded.verdict, reason = excluded.reason, comment = excluded.comment, updated_at = excluded.updated_at
+      `).run(taskRunId, input.verdict, input.verdict === "fail" ? input.reason : null, input.comment, updatedAt);
+      return getVerdict(taskRunId)!;
+    },
+    clearVerdict(taskRunId: string) {
+      sqlite.prepare("DELETE FROM task_verdicts WHERE task_run_id = ?").run(taskRunId);
+    },
+    getVerdict,
+    listVerdicts(benchmarkRunId: string) {
+      return all<VerdictRow>(
+        "SELECT task_verdicts.* FROM task_verdicts JOIN task_runs ON task_runs.id = task_verdicts.task_run_id WHERE task_runs.benchmark_run_id = ?",
+        benchmarkRunId,
+      ).map(mapVerdict);
     },
     saveReview(taskRunId: string, review: Omit<Review, "completion">) {
       sqlite

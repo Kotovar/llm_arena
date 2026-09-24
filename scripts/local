@@ -1,0 +1,249 @@
+#!/usr/bin/env node
+// Поднимает llama-server по модели и профилю из базы Arena — без интерфейса и без запущенной арены.
+// Профили (температура, --spec-type, кэш, контекст) — те же, что в UI: база открывается только на
+// чтение, поэтому миграции и запись остаются за самой ареной, а прогон здесь ничего ей не портит.
+// Агентов скрипт не запускает: он готовит их конфигурацию и печатает команды подключения.
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(fileURLToPath(import.meta.url), "../..");
+
+/** Совпадение по подстроке: набирать полное имя модели или профиля руками незачем. */
+export const matches = (value, query) => value.toLowerCase().includes(query.trim().toLowerCase());
+
+/**
+ * Единственное совпадение или внятный отказ. Точное совпадение бьёт подстрочные: у модели
+ * «Gemma-4-12B» и «Gemma-4-12B-QAT» иначе не было бы способа выбрать первую.
+ */
+export function pickOne(items, query, label, name = (item) => item.name) {
+  const found = items.filter((item) => matches(name(item), query));
+  const exact = found.filter((item) => name(item).toLowerCase() === query.trim().toLowerCase());
+  const candidates = exact.length ? exact : found;
+  if (candidates.length === 1) return candidates[0];
+  if (!candidates.length) throw new Error(`Нет совпадений: ${label} "${query}". Запустите scripts/local без аргументов, чтобы увидеть список.`);
+  throw new Error(`Несколько совпадений: ${label} "${query}" — ${candidates.map(name).join(", ")}`);
+}
+
+/** У профиля копятся ревизии; работает всегда последняя, как и в арене. */
+export function latestProfiles(rows) {
+  const byName = new Map();
+  for (const row of rows) {
+    const previous = byName.get(row.name);
+    if (!previous || previous.revision < row.revision) byName.set(row.name, row);
+  }
+  return [...byName.values()];
+}
+
+function selfCheck() {
+  const assert = (condition, message) => { if (!condition) throw new Error(`self-check: ${message}`); };
+  const models = [{ name: "Gemma-4-12B" }, { name: "Gemma-4-12B-QAT" }, { name: "Qwen3.8-27B" }];
+  assert(pickOne(models, "qwen", "Модель").name === "Qwen3.8-27B", "подстрока должна выбирать единственное совпадение");
+  assert(pickOne(models, "Gemma-4-12B", "Модель").name === "Gemma-4-12B", "точное имя бьёт более длинное совпадение");
+  assert(pickOne(models, " gemma-4-12b-qat ", "Модель").name === "Gemma-4-12B-QAT", "регистр и пробелы не должны мешать");
+  for (const [query, expected] of [["gemma", "Несколько совпадений"], ["mistral", "Нет совпадений"]]) {
+    let message = "";
+    try { pickOne(models, query, "Модель"); } catch (error) { message = error.message; }
+    assert(message.includes(expected), `запрос "${query}" должен объяснять отказ`);
+  }
+  const profiles = latestProfiles([
+    { name: "Automatic", revision: 1 }, { name: "Automatic", revision: 3 }, { name: "Automatic", revision: 2 }, { name: "ngram-simple", revision: 1 },
+  ]);
+  assert(profiles.length === 2, "ревизии одного имени схлопываются в один профиль");
+  assert(profiles.find((profile) => profile.name === "Automatic").revision === 3, "берётся последняя ревизия");
+  console.log("self-check: ок");
+}
+
+const args = process.argv.slice(2);
+// Раньше загрузки собранного сервера: сама проверка от него не зависит, а на свежем клоне
+// (`dist` ещё нет) она должна оставаться способом убедиться, что скрипт цел.
+if (args.includes("--self-check")) {
+  selfCheck();
+  process.exit(0);
+}
+
+const [{ loadConfig }, { buildLlamaServerCommand }, { buildPiModelsConfig }] = await Promise.all([
+  import("../apps/server/dist/config.js"),
+  import("../apps/server/dist/llama-server.js"),
+  import("../apps/server/dist/runners/pi-provider.js"),
+]).catch(() => {
+  console.error("Не загрузить код сервера из apps/server/dist — соберите проект: pnpm build");
+  process.exit(2);
+});
+const portIndex = args.findIndex((arg) => arg === "--port");
+const port = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  console.error("Порт должен быть целым числом от 1 до 65535.");
+  process.exit(2);
+}
+// Значение --port тоже надо пропустить, но только когда флаг есть: иначе выпал бы первый аргумент.
+const portValueIndex = portIndex === -1 ? -1 : portIndex + 1;
+const positional = args.filter((arg, index) => !arg.startsWith("--") && index !== portValueIndex);
+
+const envFile = join(root, ".env");
+if (existsSync(envFile)) process.loadEnvFile(envFile);
+let config;
+try {
+  config = loadConfig(process.env.LLM_ARENA_CONFIG ?? join(root, "arena.config.yaml"));
+} catch (error) {
+  console.error(`Не прочитать конфигурацию арены: ${error.message}`);
+  process.exit(2);
+}
+const databasePath = join(config.dataDir, "arena.sqlite");
+if (!existsSync(databasePath)) {
+  console.error(`Базы ${databasePath} нет — запустите арену хотя бы раз, чтобы завести модели и профили.`);
+  process.exit(2);
+}
+// readOnly: арена может работать прямо сейчас, и её схема не должна зависеть от запуска этого скрипта.
+const database = new DatabaseSync(databasePath, { readOnly: true });
+const models = database
+  .prepare("SELECT id, name, alias, path, mmproj_path, capabilities_json FROM models WHERE archived_at IS NULL AND kind = 'local-gguf' ORDER BY position, created_at")
+  .all()
+  .map((row) => ({
+    id: row.id,
+    name: row.name,
+    alias: row.alias,
+    path: row.path,
+    mmprojPath: row.mmproj_path,
+    vision: Boolean(JSON.parse(row.capabilities_json ?? "{}").vision),
+    profiles: latestProfiles(
+      database.prepare("SELECT name, revision, calibrated, parameters_json FROM execution_profiles WHERE model_id = ? ORDER BY created_at").all(row.id),
+    ).map((profile) => ({ ...profile, parameters: JSON.parse(profile.parameters_json) })),
+  }));
+
+if (!models.length) {
+  console.error("В базе нет локальных GGUF-моделей.");
+  process.exit(2);
+}
+
+if (!positional.length) {
+  console.log(`Локальные модели (${databasePath}):\n`);
+  const width = Math.max(...models.map((model) => model.name.length));
+  for (const model of models) {
+    const profiles = model.profiles.map((profile) => `${profile.name}${profile.calibrated ? "✓" : ""}`).join("  ") || "(профилей нет)";
+    console.log(`  ${model.name.padEnd(width)}  ${profiles}`);
+  }
+  console.log("\n✓ — профиль откалиброван.\nЗапуск:  scripts/local <модель> [профиль] [--port 8080]");
+  process.exit(0);
+}
+
+const [modelQuery, profileQuery] = positional;
+let model;
+let profile;
+try {
+  model = pickOne(models, modelQuery, "Модель");
+  if (!model.profiles.length) throw new Error(`У модели ${model.name} нет профилей запуска.`);
+  // Один профиль — выбирать не из чего; несколько — имя обязательно, иначе выбор был бы случайным.
+  profile = profileQuery
+    ? pickOne(model.profiles, profileQuery, "Профиль")
+    : model.profiles.length === 1 ? model.profiles[0] : null;
+  if (!profile) throw new Error(`У модели ${model.name} несколько профилей: ${model.profiles.map((item) => item.name).join(", ")}. Укажите один.`);
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
+}
+
+const localDir = join(config.dataDir, "local");
+const slotSavePath = join(localDir, "slots");
+mkdirSync(slotSavePath, { recursive: true });
+const argv = buildLlamaServerCommand(
+  config.llamaServer.executable,
+  { path: model.path, alias: model.alias, mmprojPath: model.mmprojPath },
+  profile.parameters,
+  port,
+  slotSavePath,
+);
+
+/**
+ * llama.cpp занимает порт только после загрузки модели, поэтому чужой процесс на нём обнаружился бы
+ * через минуты ожидания. Порт 8080 к тому же общий с внешним запуском из самой арены.
+ */
+const portIsFree = await new Promise((done) => {
+  const probe = createServer()
+    .once("error", () => done(false))
+    .once("listening", () => probe.close(() => done(true)))
+    .listen(port, "127.0.0.1");
+});
+if (!portIsFree) {
+  console.error(`Порт ${port} занят — освободите его или укажите другой: --port <номер>.`);
+  process.exit(2);
+}
+
+const baseUrl = `http://127.0.0.1:${port}`;
+console.log(`${model.name} — профиль ${profile.name} (ревизия ${profile.revision}${profile.calibrated ? ", откалиброван" : ""})`);
+console.log(`${argv.join(" ")}\n`);
+
+const server = spawn(argv[0], argv.slice(1), { stdio: "inherit" });
+server.on("error", (error) => {
+  console.error(`Не запустить ${argv[0]}: ${error.message}`);
+  process.exit(1);
+});
+server.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => server.kill(signal));
+
+/** Реальное окно контекста: профиль мог просить "auto", и тогда его знает только живой сервер. */
+async function waitForContext() {
+  const deadline = Date.now() + config.llamaServer.startupTimeoutMs;
+  while (Date.now() < deadline && server.exitCode === null) {
+    try {
+      const response = await fetch(`${baseUrl}/props`, { signal: AbortSignal.timeout(5_000) });
+      if (response.ok) {
+        const props = await response.json();
+        const value = props.default_generation_settings?.n_ctx ?? props.n_ctx;
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+      }
+    } catch {
+      // Сервер ещё грузит модель — это норма, ждём дальше.
+    }
+    await new Promise((done) => setTimeout(done, 500));
+  }
+  return null;
+}
+
+const writeConfig = (relativePath, value) => {
+  const target = join(localDir, relativePath);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`);
+  return target;
+};
+
+const contextTokens = await waitForContext();
+if (server.exitCode !== null) process.exit(server.exitCode);
+
+const piDir = join(localDir, "pi");
+writeConfig(join("pi", "models.json"), buildPiModelsConfig({
+  baseUrl,
+  modelAlias: model.alias,
+  ...(contextTokens ? { contextTokens } : {}),
+  ...(model.vision && model.mmprojPath ? { vision: true } : {}),
+}));
+const opencodeConfig = writeConfig("opencode.json", {
+  $schema: "https://opencode.ai/config.json",
+  model: `arena/${model.alias}`,
+  providers: {
+    arena: {
+      name: "LLM Arena local",
+      package: "@opencode/ai/providers/openai-compatible",
+      settings: { baseURL: `${baseUrl}/v1` },
+      models: {
+        [model.alias]: {
+          modelID: model.alias,
+          capabilities: { tools: true, input: model.vision && model.mmprojPath ? ["text", "image"] : ["text"], output: ["text"] },
+          // Потолок ответа, а не окна: у длинного контекста незачем разрешать ответ на четверть окна.
+          ...(contextTokens ? { limit: { context: contextTokens, output: Math.min(16_384, Math.floor(contextTokens / 4)) } } : {}),
+        },
+      },
+    },
+  },
+});
+
+console.log(`\n── Модель готова: ${baseUrl} (${contextTokens ? `контекст ${contextTokens} токенов` : "окно контекста неизвестно"}) ──`);
+console.log(`omp:       env LLAMA_CPP_BASE_URL=${baseUrl} omp --model llama.cpp/${model.alias}`);
+console.log(`pi:        env PI_CODING_AGENT_DIR=${piDir} pi --model arena/${model.alias}`);
+// --standalone обязателен: обычный запуск идёт через фоновый сервис opencode, который поднялся
+// раньше и OPENCODE_CONFIG уже не увидит — модели arena в его списке не будет.
+console.log(`opencode:  env OPENCODE_CONFIG=${opencodeConfig} opencode --standalone`);
+console.log(`Ctrl-C в этом окне выгружает модель.\n`);

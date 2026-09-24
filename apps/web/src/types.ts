@@ -60,6 +60,7 @@ export type LlamaParameters = {
   ubatchSize: number;
   flashAttention: boolean | "auto";
   cacheReuse: number;
+  specType?: "ngram-simple" | "ngram-mod";
   fit?: boolean;
   fitTargetMiB?: number;
   fitContextMin?: number;
@@ -123,7 +124,7 @@ export type LeaderboardEntry = {
   estimatedCostPerRun: number | null;
   criteria: { correctness: number | null; codeQuality: number | null; uiQuality: number | null; instructionFollowing: number | null };
 };
-export type Fixture = { id: string; name: string; checks: Array<{ id: string; label: string }>; preview?: unknown };
+export type Fixture = { id: string; name: string; reproduction?: string; checks: Array<{ id: string; label: string }>; hidden?: Array<{ id: string; label: string }>; preview?: unknown };
 export type ModelOption = { id: string; name: string; efforts: string[]; defaultEffort: string | null };
 export type ModelCatalog = { claude: { models: ModelOption[] }; codex: { models: ModelOption[] } };
 
@@ -240,6 +241,8 @@ export type Run = {
   warmup_attempt: number;
   /** Метка массового запуска; null у одиночных прогонов. */
   batch_id?: string | null;
+  /** Ревизия набора задач; null у обычного запуска. У прогона набора своя разметка результата. */
+  suite_revision_id?: string | null;
   status: string;
   activityStatus?: string;
   activeTaskName?: string | null;

@@ -1,0 +1,9 @@
+{
+  "name": "debounce-utility",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "start": "node --disable-warning=ExperimentalWarning server.mjs"
+  }
+}

@@ -1,10 +1,12 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { finalizeWorkspace, prepareWorkspace } from "./artifacts.js";
 import { loadConfig } from "./config.js";
+import { PreviewManager } from "./preview.js";
+import { ProcessSupervisor } from "./process-supervisor.js";
 import { createStore } from "./store.js";
 
 const directories: string[] = [];
@@ -13,6 +15,313 @@ afterEach(() => {
 });
 
 describe("REST API", () => {
+  it("выводит вердикт из исхода и отдаёт последнее слово человеку", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-verdict-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const app = buildApp({ store, config });
+    const task = store.createTask({ name: "Гонка", kind: "prompt", prompt: "Найди", tags: [] });
+    const model = store.createModel({ name: "Model", kind: "cloud", provider: "openai", modelRef: "model" });
+    const suite = store.createSuite("Coding General");
+    const revision = store.createSuiteRevision(suite.id, [{ taskRevisionId: task.currentRevision.id, fixtureId: null, fixtureRevision: null }]);
+    const run = store.createRun({ suiteRevisionId: revision.id, modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "text" });
+    const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, "artifact"), {});
+
+    // Зациклившаяся задача человека не ждёт: причина видна без него.
+    store.saveTaskRunResult(taskRun.id, {}, "agent_loop", "loop");
+    const automatic = await app.inject({ method: "GET", url: `/api/task-runs/${taskRun.id}/verdict` });
+    expect(automatic.json()).toMatchObject({ verdict: "fail", reason: "watchdog-kill", human: false, counted: true });
+
+    // Успешная задача ждёт: пройденные проверки сами по себе PASS не означают.
+    store.saveTaskRunResult(taskRun.id, {}, "completed");
+    const waiting = await app.inject({ method: "GET", url: `/api/task-runs/${taskRun.id}/verdict` });
+    expect(waiting.json()).toMatchObject({ verdict: null, human: false, counted: true });
+
+    const passed = await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/verdict`, payload: { verdict: "pass" } });
+    expect(passed.json()).toMatchObject({ verdict: "pass", reason: null, human: true });
+    const failed = await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/verdict`, payload: { verdict: "fail", reason: "wrong-solution", comment: "захардкодил" } });
+    expect(failed.json()).toMatchObject({ verdict: "fail", reason: "wrong-solution", human: true, comment: "захардкодил" });
+
+    // Провал без причины принимать нельзя: иначе распределение неудач станет бесполезным.
+    const noReason = await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/verdict`, payload: { verdict: "fail" } });
+    expect(noReason.statusCode).toBe(400);
+
+    await app.inject({ method: "DELETE", url: `/api/task-runs/${taskRun.id}/verdict` });
+    expect((await app.inject({ method: "GET", url: `/api/task-runs/${taskRun.id}/verdict` })).json()).toMatchObject({ verdict: null, human: false });
+
+    // Задача бенчмарка выполняется один раз, и обойти это нечем: уточнение дало бы вторую
+    // попытку, а отметка «не работает» задним числом разошлась бы с вердиктом.
+    store.updateRunStatus(run.id, "completed");
+    for (const attempt of [
+      { method: "POST" as const, url: `/api/task-runs/${taskRun.id}/retry`, payload: {} },
+      { method: "POST" as const, url: `/api/task-runs/${taskRun.id}/followups`, payload: { prompt: "доделай" } },
+      { method: "PUT" as const, url: `/api/task-runs/${taskRun.id}/completion`, payload: { completion: "broken" } },
+      { method: "PUT" as const, url: `/api/task-runs/${taskRun.id}/review`, payload: { correctness: 1, codeQuality: 1, uiQuality: 0, instructionFollowing: 1, comment: "", completion: "partial" } },
+    ]) {
+      const response = await app.inject(attempt);
+      expect([attempt.url, response.statusCode]).toEqual([attempt.url, 400]);
+    }
+    expect(store.listFollowups(taskRun.id)).toEqual([]);
+    expect(store.getTaskRun(taskRun.id)?.broken_at).toBeNull();
+
+    const benchmark = await app.inject({ method: "GET", url: `/api/benchmark/runs/${run.id}` });
+    expect(benchmark.json()).toMatchObject({
+      plannedCount: 1,
+      suite: { revision: 1 },
+      summary: { solved: 0, counted: 1, waiting: 1, outcomes: { completed: 1 } },
+      tasks: [{ name: "Гонка", outcome: "completed" }],
+    });
+    await app.close();
+    store.close();
+  });
+
+  it("не отдаёт промпт бенчмарка обычному запуску, но запускает его в наборе", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-benchmark-tag-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+    const task = store.createTask({ name: "Гонка", kind: "prompt", prompt: "Answer", tags: ["benchmark"] });
+    const model = store.createModel({ name: "Alpha", kind: "cloud", provider: "openai", modelRef: "alpha" });
+    const base = { modelId: model.id, executionProfileId: null, runnerId: "pi-local", resultMode: "text" };
+
+    const ordinary = await app.inject({ method: "POST", url: "/api/runs", payload: { ...base, taskRevisionIds: [task.currentRevision.id] } });
+    expect(ordinary.statusCode).toBe(400);
+    expect(ordinary.json().error).toMatch(/только в составе бенчмарка/u);
+
+    const suite = store.createSuite("Coding General");
+    const revision = store.createSuiteRevision(suite.id, [{ taskRevisionId: task.currentRevision.id, fixtureId: null, fixtureRevision: null }]);
+    expect((await app.inject({ method: "POST", url: "/api/runs", payload: { ...base, suiteRevisionId: revision.id } })).statusCode).toBe(202);
+    await app.close();
+    store.close();
+  });
+
+  it("сводит в таблицу только прогоны одной ревизии и помечает другую обвязку", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-benchmark-compare-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    const app = buildApp({ store, config });
+    const task = store.createTask({ name: "Порядок", kind: "prompt", prompt: "Answer", tags: [] });
+    const other = store.createTask({ name: "Другая задача", kind: "prompt", prompt: "Answer", tags: [] });
+    const suite = store.createSuite("Coding General");
+    const revision = store.createSuiteRevision(suite.id, [{ taskRevisionId: task.currentRevision.id, fixtureId: null, fixtureRevision: null }]);
+    const otherRevision = store.createSuiteRevision(suite.id, [{ taskRevisionId: other.currentRevision.id, fixtureId: null, fixtureRevision: null }]);
+    const alpha = store.createModel({ name: "Alpha", kind: "cloud", provider: "openai", modelRef: "alpha" });
+    const beta = store.createModel({ name: "Beta", kind: "cloud", provider: "openai", modelRef: "beta" });
+    const gamma = store.createModel({ name: "Gamma", kind: "cloud", provider: "openai", modelRef: "gamma" });
+    const complete = async (modelId: string, runnerId: string, useOmpAgent = false) => {
+      const run = store.createRun({ suiteRevisionId: revision.id, modelId, executionProfileId: null, runnerId, resultMode: "text", useOmpAgent });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, run.id), {});
+      store.saveTaskRunResult(taskRun.id, { metrics: { outputTokens: { value: 100 }, totalDurationMs: { value: 1_000 } } }, "completed");
+      await app.inject({ method: "PUT", url: `/api/task-runs/${taskRun.id}/verdict`, payload: { verdict: "pass" } });
+      store.updateRunStatus(run.id, "completed");
+      return run;
+    };
+    const first = await complete(alpha.id, "pi-local");
+    const second = await complete(beta.id, "pi-local");
+    const third = await complete(gamma.id, "omp", true);
+    const interrupted = store.createRun({ suiteRevisionId: revision.id, modelId: alpha.id, executionProfileId: null, runnerId: "pi-local", resultMode: "text" });
+
+    const history = await app.inject({ method: "GET", url: `/api/benchmark/runs?suiteRevisionId=${revision.id}&modelId=${beta.id}` });
+    expect(history.json()).toEqual([expect.objectContaining({ model: { id: beta.id, name: "Beta" }, summary: expect.objectContaining({ solveRate: 100 }) })]);
+
+    const compared = await app.inject({ method: "GET", url: `/api/benchmark/compare?runIds=${first.id},${second.id},${third.id}` });
+    expect(compared.json()).toMatchObject({
+      suite: { revisionId: revision.id, name: "Coding General" },
+      environmentWarning: true,
+      runs: [
+        { model: { name: "Alpha" }, tasks: [{ name: "Порядок", verdict: { verdict: "pass" } }] },
+        { model: { name: "Beta" } },
+        { model: { name: "Gamma" }, environment: { useOmpAgent: true } },
+      ],
+    });
+
+    const foreign = store.createRun({ suiteRevisionId: otherRevision.id, modelId: alpha.id, executionProfileId: null, runnerId: "pi-local", resultMode: "text" });
+    expect((await app.inject({ method: "GET", url: `/api/benchmark/compare?runIds=${first.id},${foreign.id}` })).statusCode).toBe(400);
+
+    // Прерванный прогон первым: строки всё равно из плана ревизии, а не из его пустого списка.
+    const partial = await app.inject({ method: "GET", url: `/api/benchmark/compare?runIds=${interrupted.id},${first.id}` });
+    expect(partial.json()).toMatchObject({ tasks: [{ position: 0, name: "Порядок" }], runs: [{ tasks: [] }, { tasks: [{ position: 0 }] }] });
+    await app.close();
+    store.close();
+  });
+
+  it("снимает состав набора по факту и показывает, что разъехалось", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-suites-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const app = buildApp({ store, config });
+    const coding = await app.inject({ method: "POST", url: "/api/tasks", payload: { name: "Гонка поиска", kind: "coding", prompt: "Найди причину", fixtureId: "stale-search-results" } });
+    const taskId = (coding.json() as { id: string }).id;
+    const suite = await app.inject({ method: "POST", url: "/api/suites", payload: { name: "Coding General" } });
+    const suiteId = (suite.json() as { id: string }).id;
+
+    const created = await app.inject({ method: "POST", url: `/api/suites/${suiteId}/revisions`, payload: { taskIds: [taskId] } });
+    const revisionId = (created.json() as { id: string }).id;
+    const fresh = await app.inject({ method: "GET", url: `/api/suite-revisions/${revisionId}` });
+
+    expect(created.statusCode).toBe(201);
+    type Snapshot = {
+      revision: number;
+      items: Array<{ taskRevisionId: string }>;
+      prompts: Array<{ name: string; fixtureId: string; fixtureRevision: string }>;
+      drift: Array<{ taskRevisionId: string; reason: string }>;
+      runs: unknown[];
+    };
+    const snapshot = fresh.json() as Snapshot;
+    expect(snapshot.revision).toBe(1);
+    expect(snapshot.prompts[0]).toMatchObject({ name: "Гонка поиска", fixtureId: "stale-search-results" });
+    expect(snapshot.prompts[0]!.fixtureRevision).toMatch(/^[0-9a-f]{40,64}$/u);
+    expect(snapshot.drift).toEqual([]);
+    expect(snapshot.runs).toEqual([]);
+    const pinned = snapshot.items[0]!.taskRevisionId;
+
+    // Правка промпта снимок не меняет — он и должен остаться прежним, — но расхождение обязано быть видно.
+    await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}`, payload: { name: "Гонка поиска", kind: "coding", prompt: "Найди причину и исправь", fixtureId: "stale-search-results" } });
+    const drifted = (await app.inject({ method: "GET", url: `/api/suite-revisions/${revisionId}` })).json() as Snapshot;
+
+    expect(drifted.items[0]!.taskRevisionId).toBe(pinned);
+    expect(drifted.drift).toEqual([{ taskRevisionId: pinned, reason: "prompt" }]);
+
+    // Архивную задачу вернут в работу, а изменённый промпт уже не тот: причины разные.
+    await app.inject({ method: "DELETE", url: `/api/tasks/${taskId}` });
+    const archived = (await app.inject({ method: "GET", url: `/api/suite-revisions/${revisionId}` })).json() as Snapshot;
+
+    expect(archived.drift).toEqual([{ taskRevisionId: pinned, reason: "prompt-archived" }]);
+    await app.close();
+    store.close();
+  }, 60_000);
+
+  it("addresses a fixture preview by the fixture, not by a task run", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-fixture-lease-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const calls: Array<{ method: string; owner: unknown }> = [];
+    const preview = {
+      start: async () => ({}),
+      startFixture: async () => ({}),
+      stop: async () => undefined,
+      stopIf: async (ownerId: string, versionId: string) => void calls.push({ method: "stopIf", owner: { ownerId, versionId } }),
+      heartbeat: (target?: { ownerId: string; versionId: string }) => void calls.push({ method: "heartbeat", owner: target }),
+    };
+    const app = buildApp({ store, config, preview });
+
+    await app.inject({ method: "POST", url: "/api/preview/heartbeat", payload: { fixtureId: "web-app" } });
+    await app.inject({ method: "DELETE", url: "/api/preview", payload: { fixtureId: "web-app" } });
+    const stray = await app.inject({ method: "POST", url: "/api/preview/heartbeat", payload: { fixtureId: "web-app", url: "http://127.0.0.1:1/" } });
+
+    // Промах в адресе не ломает страницу сразу: preview просто тихо умрёт по истечении аренды.
+    const owner = { ownerId: "fixture-web-app", versionId: "original" };
+    expect(calls).toEqual([{ method: "heartbeat", owner }, { method: "stopIf", owner }]);
+    // Адрес принимается строго: лишнее поле в теле — ошибка, а не молча проигнорированное.
+    expect(stray.statusCode).toBe(400);
+    await app.close();
+    store.close();
+  });
+
+  it("shows the starter project and runs it without touching the fixture itself", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-fixture-preview-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const supervisor = new ProcessSupervisor("fixture-preview-test", 100);
+    const preview = new PreviewManager(store, config, supervisor);
+    const app = buildApp({ store, config, preview, supervisor });
+    const fixture = config.fixtures.find((item) => item.id === "web-app")!;
+
+    const listed = await app.inject({ method: "GET", url: "/api/fixtures/web-app/files" });
+    const file = await app.inject({ method: "GET", url: "/api/fixtures/web-app/files?path=index.html" });
+    const escaping = await app.inject({ method: "GET", url: "/api/fixtures/web-app/files?path=../../package.json" });
+    const missing = await app.inject({ method: "GET", url: "/api/fixtures/nothing-here/files" });
+
+    expect(listed.json()).toContain("index.html");
+    expect(file.body).toContain("<");
+    expect(escaping.statusCode).toBe(400);
+    expect(missing.statusCode).toBe(404);
+
+    const started = await app.inject({ method: "POST", url: "/api/fixtures/web-app/preview" });
+    expect(started.statusCode).toBe(200);
+    const { url } = started.json() as { fixtureId: string; url: string };
+    expect(await (await fetch(url)).text()).toContain("<");
+    // Оригинал запускается из копии: сам fixture остаётся неизменяемым.
+    expect(existsSync(join(directory, "previews", "fixture-web-app", "original", "workspace", "index.html"))).toBe(true);
+    expect(readdirSync(fixture.source).toSorted()).toEqual(["check-assets.mjs", "index.html", "server.mjs"]);
+
+    await app.inject({ method: "DELETE", url: "/api/preview", payload: { fixtureId: "web-app" } });
+    await expect(fetch(url)).rejects.toThrow();
+    expect(existsSync(join(directory, "previews", "fixture-web-app"))).toBe(false);
+    await supervisor.stopAll();
+    await app.close();
+    store.close();
+  }, 120_000);
+
+  it("verifies that a fixture is in the state its author declared", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-fixture-verify-api-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    const supervisor = new ProcessSupervisor("verify-api-test", 100);
+    const app = buildApp({ store, config, supervisor });
+
+    const missing = await app.inject({ method: "POST", url: "/api/fixtures/nothing-here/verify" });
+    const verified = await app.inject({ method: "POST", url: "/api/fixtures/stale-search-results/verify" });
+
+    expect(missing.statusCode).toBe(404);
+    expect(verified.statusCode).toBe(200);
+    const result = verified.json() as { ok: boolean; problems: string[]; baseline: Array<{ id: string; actual: string }>; revision: string };
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+    expect(result.baseline).toEqual([
+      { id: "tests", expected: "pass", actual: "pass", ok: true },
+      { id: "regression", expected: "fail", actual: "fail", ok: true },
+    ]);
+    // Путь к рабочему каталогу — деталь машины оператора, наружу она не нужна.
+    expect(verified.json()).not.toHaveProperty("workspace");
+    await supervisor.stopAll();
+    await app.close();
+    store.close();
+    // Настоящий fixture: скрытая проверка разводит задержки бэкенда на секунды, иначе обход
+    // через debounce проходил бы под ней случайно.
+  }, 120_000);
+
+  it("never hands out the hidden validation of a fixture", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-hidden-validation-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const config = loadConfig("../../arena.config.yaml");
+    config.dataDir = directory;
+    // Агент работает в workspace с shell и видит localhost, поэтому API арены для него —
+    // такой же путь к ответам, как файл рядом с заданием.
+    config.fixtures = [{
+      id: "stale-search",
+      name: "Stale search",
+      source: join(directory, "fixture"),
+      checks: [{ id: "tests", label: "Tests", command: { argv: ["node", "--test"] } }],
+      hidden: [{ id: "regression", label: "Regression", command: { argv: ["node", "--test", "hidden/order.test.js"] } }],
+      baseline: { tests: "pass", regression: "fail" },
+    }];
+    const app = buildApp({ store, config });
+
+    const response = await app.inject({ method: "GET", url: "/api/fixtures" });
+
+    const [fixture] = response.json() as Array<Record<string, unknown>>;
+    expect(fixture).toMatchObject({ id: "stale-search", checks: [{ id: "tests" }] });
+    expect(fixture).not.toHaveProperty("hidden");
+    expect(fixture).not.toHaveProperty("baseline");
+    expect(fixture).not.toHaveProperty("source");
+    expect(JSON.stringify(response.json())).not.toContain("order.test.js");
+    await app.close();
+    store.close();
+  });
+
   it("stores task images before a task revision references them", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-image-api-"));
     directories.push(directory);

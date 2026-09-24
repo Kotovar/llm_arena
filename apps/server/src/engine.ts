@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { FixtureManifest, LlamaProfile, StopReason, TaskImage, WatchdogDiagnostics } from "@llm-arena/shared";
-import { finalizeWorkspace, materializeWorkspaceVersion, prepareWorkspace, type PreparedWorkspace } from "./artifacts.js";
+import { publicFixtureManifest, type LlamaProfile, type PublicFixtureManifest, type StopReason, type TaskImage, type WatchdogDiagnostics } from "@llm-arena/shared";
+import { finalizeWorkspace, fixtureRevision, materializeWorkspaceVersion, prepareWorkspace, type WorkspaceArtifacts } from "./artifacts.js";
 import type { ArenaConfig } from "./config.js";
 import { loadOwnerId, recoverOwnedProcesses } from "./lifecycle.js";
 import { LlamaCppServerManager } from "./llama-server.js";
@@ -19,6 +19,7 @@ import { buildTaskPrompt } from "./task-prompt.js";
 import { POST_PROCESSING_PREFIX, describeGenerationError } from "./generation-error.js";
 import { taskImagePath } from "./task-images.js";
 import { AgentLoopError, createWatchdog } from "./watchdog.js";
+import { runChecks, runHiddenChecks } from "./checks.js";
 
 type RunEvent = { type: string; runId: string; taskRunId?: string; data?: unknown };
 
@@ -66,7 +67,7 @@ function runnerImages(dataDir: string, images: readonly TaskImage[]) {
  * Коммит результата и патч — служебный шаг арены, а не работа агента. Его сбой помечается
  * отдельным префиксом, чтобы неудача пайплайна не выглядела как неудача модели.
  */
-function finalizeResult(prepared: PreparedWorkspace): { artifacts?: ReturnType<typeof finalizeWorkspace>; error?: string } {
+function finalizeResult(prepared: WorkspaceArtifacts): { artifacts?: ReturnType<typeof finalizeWorkspace>; error?: string } {
   try {
     return { artifacts: finalizeWorkspace(prepared) };
   } catch (error) {
@@ -82,6 +83,8 @@ const HEAVY_LANE_BUSY = "Сейчас выполняется другой тяж
 export class BenchmarkEngine {
   readonly #controllers = new Map<string, AbortController>();
   readonly #taskControllers = new Map<string, AbortController>();
+  /** Почему остановлена одна задача: лимит времени — её свойство, а не всего прогона. */
+  readonly #taskStopReasons = new Map<string, StopReason>();
   /** Почему прогон остановлен: сообщение уходит в `error`, причина — в `stop_reason`. */
   readonly #stopReasons = new Map<string, { reason: StopReason; message?: string }>();
   readonly #listeners = new Map<string, Set<(event: RunEvent) => void>>();
@@ -157,7 +160,9 @@ export class BenchmarkEngine {
     this.#emit({ type: "run.status", runId: run.id, data: { status: "running" } });
     try {
       await this.#execute(run, controller.signal);
-      const failedTask = this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed" || taskRun.status === "agent_loop");
+      // В бенчмарке упавшая задача — её исход (проверки, сбой агента, watchdog) и авто-FAIL
+      // модели, а не сбой прогона: он дошёл до конца и должен попасть в итоги.
+      const failedTask = run.suite_revision_id ? undefined : this.store.listTaskRuns(run.id).find((taskRun) => taskRun.status === "failed" || taskRun.status === "agent_loop");
       const status = controller.signal.aborted ? "cancelled" : failedTask ? "failed" : "completed";
       this.store.updateRunStatus(
         run.id,
@@ -293,15 +298,26 @@ export class BenchmarkEngine {
       for (const [position, task] of tasks.entries()) {
         if (signal.aborted) break;
         if (executed.has(position)) continue;
+        /**
+         * Режим результата переопределяет вид задачи только там, где своего исходного проекта у
+         * неё нет: «web» — это готовое приложение на общем fixture, «text» — ответ без проекта.
+         * У задачи со своим fixture он и используется, иначе поле `fixtureId` ничего не значило
+         * бы, а модель получала бы пустой каталог и промпт про несуществующий проект.
+         */
         const effectiveTask = run.result_mode === "web"
           ? { ...task, kind: "coding" as const, fixtureId: "web-app" }
-          : { ...task, kind: "prompt" as const, fixtureId: undefined };
+          : task.kind === "coding" && task.fixtureId
+            ? task
+            : { ...task, kind: "prompt" as const, fixtureId: undefined };
         const artifactRoot = join(runRoot, randomTaskDirectory(position, task.id));
         const fixture = effectiveTask.kind === "coding" ? this.config.fixtures.find((item) => item.id === effectiveTask.fixtureId) : undefined;
         if (effectiveTask.kind === "coding" && !fixture) throw new Error(`Fixture ${effectiveTask.fixtureId} not found`);
         const source = fixture?.source ?? this.#emptyFixture();
         const prepared = prepareWorkspace(source, artifactRoot);
-        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture, model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
+        const revision = fixture ? { fixtureRevision: fixtureRevision(fixture, prepared.baselineTree) } : {};
+        // Пути на диске в снимке не нужны: по ним снимок перестаёт переноситься между машинами.
+        const { source: _source, hiddenSource: _hiddenSource, ...manifest } = fixture ?? {};
+        const taskRun = this.store.createTaskRun(run.id, task.id, position, artifactRoot, { task: effectiveTask, sourceTask: task, fixture: fixture && publicFixtureManifest(manifest), ...revision, model: selectedModel, profile: effectiveProfile, resultMode: run.result_mode, useOmpAgent: run.use_omp_agent === 1, reasoningEffort: run.reasoning_effort, runner: definition });
         this.store.startTaskRun(taskRun.id);
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: "running", position, name: task.name } });
         const stdoutPath = join(artifactRoot, "stdout.log");
@@ -318,6 +334,22 @@ export class BenchmarkEngine {
         const taskController = new AbortController();
         const taskSignal = AbortSignal.any([signal, taskController.signal]);
         this.#taskControllers.set(taskRun.id, taskController);
+        /**
+         * Общий лимит времени задачи. `taskTimeoutMs` раннера — это пауза без вывода, а не
+         * потолок работы: агент, который бодро пишет в stdout час, под него не попадает.
+         * Watchdog ловит патологию, лимит — просто «не уложился».
+         */
+        const limitMs = fixture?.limits?.maxDurationMs;
+        const limit = limitMs
+          ? setTimeout(() => {
+            this.#taskStopReasons.set(taskRun.id, "timeout");
+            appendFileSync(displayPath, `\nЗадача остановлена: исчерпан лимит ${Math.round(limitMs / 1000)} с.\n`);
+            taskController.abort();
+          }, limitMs)
+          : undefined;
+        // Всё, что дальше, — под одним finally: таймер, оставшийся висеть, гасил бы отмену уже
+        // завершённой задачи и держал бы событийный цикл до конца лимита.
+        try {
         const agentInput = {
           definition,
           prompt: buildTaskPrompt(effectiveTask.prompt, fixture?.instructions),
@@ -382,14 +414,33 @@ export class BenchmarkEngine {
           }
           if (backend) result.metrics.startupDurationMs = { value: backend.startupDurationMs, unit: "ms", source: "client-observed" };
           if (backend?.contextTokens) result.metrics.contextWindowTokens = { value: backend.contextTokens, unit: "tokens", source: "llama.cpp" };
-          const checks = fixture ? await this.#runChecks(fixture, prepared.workspace, artifactRoot, taskSignal) : [];
+          const checks = fixture
+            ? [
+              ...await this.#runChecks(fixture, prepared.workspace, artifactRoot, taskSignal),
+              // Проверки бенчмарка идут по копии: в оригинале workspace их файлов быть не должно,
+              // иначе они уедут и в diff, и в превью результата.
+              ...await runHiddenChecks({
+                supervisor: this.supervisor,
+                hidden: fixture.hidden,
+                hiddenSource: fixture.hiddenSource,
+                workspace: prepared.workspace,
+                root: join(this.config.dataDir, "hidden-checks", taskRun.id),
+                defaultTimeoutMs: this.config.defaults.checkTimeoutMs,
+                signal: taskSignal,
+              }),
+            ]
+            : [];
+          // Прерванные на середине проверки — это не «все прошли»: исход решает обработчик прерывания.
+          taskSignal.throwIfAborted();
           const failedCheck = checks.find((check) => check.status !== "pass");
           const agentStatus = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
           // Сбой служебного шага после агента — не сбой агента, поэтому он отделён и подписан отдельно.
           const finalized = agentStatus === "completed" ? finalizeResult(prepared) : { artifacts: undefined, error: undefined };
           const status = agentStatus === "completed" && !finalized.error ? "completed" as const : "failed" as const;
           const previewImage = status === "completed" && await this.#capturePreview(fixture, prepared.workspace, artifactRoot, taskSignal);
-          const saved = { ...result, artifacts: finalized.artifacts, checks, previewImage: Boolean(previewImage) };
+          // Ревизия fixture едет рядом с результатом: по одному файлу на диске видно, на каком
+          // исходном состоянии он получен, без обращения к базе.
+          const saved = { ...result, artifacts: finalized.artifacts, checks, previewImage: Boolean(previewImage), ...revision };
           writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(saved, null, 2)}\n`);
           const failure = finalized.error ?? (agentStatus === "failed" ? failedCheck ? `${failedCheck.label} failed` : `Runner exited ${result.exitCode}` : undefined);
           this.store.saveTaskRunResult(taskRun.id, saved, status, failure);
@@ -401,16 +452,17 @@ export class BenchmarkEngine {
           const result = watchdogError ? { watchdog: watchdogError.diagnostics } : {};
           if (watchdogError) writeFileSync(join(artifactRoot, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
           // Промпт мог оборваться вместе со всем прогоном: тогда причина у него та же, что у прогона.
-          this.store.saveTaskRunResult(taskRun.id, result, status, failure, status === "cancelled" ? this.#stopReason(run.id) : null);
+          this.store.saveTaskRunResult(taskRun.id, result, status, failure, status === "cancelled" ? this.#taskStopReason(run.id, taskRun.id) : null);
           if (repeated) this.store.recordTaskAttempt(taskRun.id, 1, result, status, failure);
         }
-        try {
-          for (let attempt = 2; attempt <= repeats && !taskSignal.aborted; attempt += 1) {
-            if (backend && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
-            await measure(attempt);
-          }
+        for (let attempt = 2; attempt <= repeats && !taskSignal.aborted; attempt += 1) {
+          if (backend && !(await backend.reset())) throw new Error("llama.cpp KV slot reset failed");
+          await measure(attempt);
+        }
         } finally {
+          clearTimeout(limit);
           this.#taskControllers.delete(taskRun.id);
+          this.#taskStopReasons.delete(taskRun.id);
         }
         this.#emit({ type: "task.status", runId: run.id, taskRunId: taskRun.id, data: { status: this.store.getTaskRun(taskRun.id)?.status } });
         if (backend && !signal.aborted && !(await backend.reset())) {
@@ -440,7 +492,7 @@ export class BenchmarkEngine {
     const model = this.store.getModel(run.model_id);
     const definition = this.config.runners.find((item) => item.id === run.runner_id);
     if (!model || !definition) throw new Error("Saved model or runner is unavailable");
-    const snapshot = JSON.parse(taskRun.snapshot_json) as { task: { kind: "prompt" | "coding"; images?: TaskImage[] }; fixture?: FixtureManifest; profile?: { parameters: LlamaProfile } };
+    const snapshot = JSON.parse(taskRun.snapshot_json) as { task: { kind: "prompt" | "coding"; images?: TaskImage[] }; fixture?: PublicFixtureManifest; profile?: { parameters: LlamaProfile } };
     const workspace = join(taskRun.artifact_path, "workspace");
     const gitDir = join(taskRun.artifact_path, "control", "baseline.git");
     const baseVersion = completedResultVersions(taskRun).at(-1);
@@ -498,6 +550,7 @@ export class BenchmarkEngine {
       });
       if (backend?.contextTokens) result.metrics.contextWindowTokens = { value: backend.contextTokens, unit: "tokens", source: "llama.cpp" };
       const checks = snapshot.fixture ? await this.#runChecks(snapshot.fixture, workspace, followup.artifact_path, signal) : [];
+      signal.throwIfAborted();
       const failedCheck = checks.find((check) => check.status !== "pass");
       const agentStatus = result.exitCode === 0 && !failedCheck ? "completed" : "failed";
       const finalized = agentStatus === "completed"
@@ -590,7 +643,7 @@ export class BenchmarkEngine {
   }
 
   // Поднимает результат на свободном порту и снимает превью браузером. Любой сбой — просто нет картинки.
-  async #capturePreview(fixture: FixtureManifest | undefined, workspace: string, artifactRoot: string, signal: AbortSignal): Promise<boolean> {
+  async #capturePreview(fixture: PublicFixtureManifest | undefined, workspace: string, artifactRoot: string, signal: AbortSignal): Promise<boolean> {
     const preview = fixture?.preview;
     if (!preview || signal.aborted) return false;
     const logPath = join(artifactRoot, "preview-shot.log");
@@ -634,43 +687,16 @@ export class BenchmarkEngine {
     }
   }
 
-  async #runChecks(fixture: FixtureManifest, workspace: string, artifactRoot: string, signal: AbortSignal) {
-    const results: Array<{ id: string; label: string; status: string; exitCode: number | null; durationMs: number }> = [];
-    for (const check of fixture.checks) {
-      if (signal.aborted) break;
-      const logPath = join(artifactRoot, "checks", `${check.id}.log`);
-      mkdirSync(join(artifactRoot, "checks"), { recursive: true });
-      writeFileSync(logPath, "");
-      const cwd = check.command.cwd ? resolve(workspace, check.command.cwd) : workspace;
-      let child;
-      try {
-        child = this.supervisor.spawn({
-          argv: check.command.argv,
-          cwd,
-          timeoutMs: check.command.timeoutMs ?? this.config.defaults.checkTimeoutMs,
-          onStdout: (text) => appendFileSync(logPath, text),
-          onStderr: (text) => appendFileSync(logPath, text),
-        });
-      } catch (error) {
-        // Незапустившаяся проверка — провал проверки, а не потеря результата промпта.
-        appendFileSync(logPath, `${(error as Error).message}\n`);
-        results.push({ id: check.id, label: check.label, status: "fail", exitCode: null, durationMs: 0 });
-        continue;
-      }
-      const cancel = () => void child.stop();
-      signal.addEventListener("abort", cancel, { once: true });
-      child.stdin.end();
-      const result = await child.completed;
-      signal.removeEventListener("abort", cancel);
-      results.push({
-        id: check.id,
-        label: check.label,
-        status: result.exitCode === 0 ? "pass" : result.timedOut ? "timeout" : "fail",
-        exitCode: result.exitCode,
-        durationMs: result.durationMs,
-      });
-    }
-    return results;
+  /** Публичные проверки fixture; скрытые идут отдельным шагом и только у benchmark-прогона. */
+  async #runChecks(fixture: PublicFixtureManifest, workspace: string, artifactRoot: string, signal: AbortSignal) {
+    return runChecks({
+      supervisor: this.supervisor,
+      checks: fixture.checks,
+      workspace,
+      artifactRoot,
+      defaultTimeoutMs: this.config.defaults.checkTimeoutMs,
+      signal,
+    });
   }
 
   /**
@@ -681,6 +707,11 @@ export class BenchmarkEngine {
    */
   #stopReason(runId: string): StopReason {
     return this.#stopReasons.get(runId)?.reason ?? (this.#stopping ? "restart" : "user");
+  }
+
+  /** У задачи своя причина главнее: иначе исчерпанный лимит выглядел бы ручной остановкой. */
+  #taskStopReason(runId: string, taskRunId: string): StopReason {
+    return this.#taskStopReasons.get(taskRunId) ?? this.#stopReason(runId);
   }
 
   // ponytail: отмена одного промпта не трогает supervisor.stopAll() — раннер сам гасит свой процесс по сигналу, а бэкенд нужен следующим промптам.

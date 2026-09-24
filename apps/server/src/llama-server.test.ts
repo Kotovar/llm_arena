@@ -19,6 +19,19 @@ describe("llama-server command", () => {
     expect(explicit[explicit.indexOf("--temp") + 1]).toBe("0.9");
   });
 
+  // Профили, сохранённые до появления поля, должны запускаться ровно как раньше: иначе их
+  // прогоны стали бы быстрее задним числом и перестали сравниваться со своими же старыми.
+  it("passes speculative decoding only when the profile asks for it", () => {
+    const base = { context: 4096, nGpuLayers: "all" as const, cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 512, ubatchSize: 256, flashAttention: "auto" as const, cacheReuse: 128 };
+    const model = { path: "/models/a.gguf", alias: "a" };
+
+    const withSpec = buildLlamaServerCommand("/bin/llama-server", model, { ...base, specType: "ngram-simple" }, 8080, "/tmp/arena-slots");
+    const legacy = buildLlamaServerCommand("/bin/llama-server", model, base, 8080, "/tmp/arena-slots");
+
+    expect(withSpec[withSpec.indexOf("--spec-type") + 1]).toBe("ngram-simple");
+    expect(legacy).not.toContain("--spec-type");
+  });
+
   it("forwards a configured sampling seed to llama.cpp", () => {
     const command = buildLlamaServerCommand(
       "/bin/llama-server",

@@ -1,4 +1,4 @@
-import { isCounted, isModelFailure, isSuccess, isUserAbort, outcomeOrder, type TaskOutcome } from "@llm-arena/shared";
+import { isCounted, isModelFailure, isSuccess, isUserAbort, outcomeOrder, type TaskOutcome, type TaskVerdict } from "@llm-arena/shared";
 import type { ArenaStore } from "./store.js";
 
 export type AttemptMetric = "generationTokensPerSecond" | "totalDurationMs" | "outputTokens" | "harnessPromptTokens";
@@ -41,6 +41,43 @@ function metricValue(metrics: StoredMetrics, metric: AttemptMetric): number | nu
 /** Замер из сохранённого result.json; неизмеренное так и остаётся неизмеренным. */
 export function resultMetric(resultJson: string | null, metric: AttemptMetric): number | null {
   return metricValue(parseMetrics(resultJson), metric);
+}
+
+export type BenchmarkMetricRow = {
+  outcome: TaskOutcome;
+  verdict: TaskVerdict;
+  resultJson: string | null;
+};
+
+/**
+ * Сводка одного benchmark-прогона: все технические исходы остаются в распределении, но
+ * процент и цена успеха считают только задачи, которые действительно входят в вердикт.
+ */
+export function benchmarkRunSummary(rows: readonly BenchmarkMetricRow[]) {
+  const outcomes = Object.fromEntries(outcomeOrder.map((outcome) => [outcome, 0])) as Record<TaskOutcome, number>;
+  const counted = rows.filter((row) => row.verdict.counted);
+  const solved = counted.filter((row) => row.verdict.verdict === "pass");
+  const successfulOutputTokens = solved.map((row) => resultMetric(row.resultJson, "outputTokens")).filter((value): value is number => value !== null);
+  const successfulDurations = solved.map((row) => resultMetric(row.resultJson, "totalDurationMs")).filter((value): value is number => value !== null);
+  const averageOutputTokens = mean(successfulOutputTokens);
+  const averageDurationMs = mean(successfulDurations);
+  for (const row of rows) outcomes[row.outcome] += 1;
+  const sum = (key: "outputTokens" | "totalDurationMs") => rows.reduce((total, row) => total + (resultMetric(row.resultJson, key) ?? 0), 0);
+  return {
+    solved: solved.length,
+    failed: counted.filter((row) => row.verdict.verdict === "fail").length,
+    counted: counted.length,
+    waiting: counted.filter((row) => row.verdict.verdict === null).length,
+    solveRate: counted.length ? round((solved.length / counted.length) * 100) : null,
+    outcomes,
+    successful: {
+      count: solved.length,
+      averageOutputTokens: averageOutputTokens === null ? null : Math.round(averageOutputTokens),
+      averageDurationMs: averageDurationMs === null ? null : Math.round(averageDurationMs),
+    },
+    // Цена всего прогона, включая провалы: модель, которая долго ошибается, тоже тратит время.
+    total: { outputTokens: sum("outputTokens"), durationMs: sum("totalDurationMs") },
+  };
 }
 
 /**

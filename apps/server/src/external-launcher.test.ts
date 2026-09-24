@@ -45,6 +45,15 @@ describe("external local-model launcher", () => {
     expect(rendered).toContain('pane name="OMP"');
   });
 
+  // Упавший сервер (занятый порт, нехватка VRAM) иначе оставил бы панель ждать вечно.
+  it("gives the wait loop a deadline taken from the startup timeout", () => {
+    const rendered = renderAgentLayout("/arena/.data", 8181, "my-model-profile-1", { pane: "OMP", launcher: "active-omp.fish" }, 120_000);
+
+    expect(rendered).toContain("set -l deadline (math (date +%s) + 120)");
+    expect(rendered).toContain("if test (date +%s) -gt $deadline");
+    expect(rendered).toContain("exit 1");
+  });
+
   // Функция экспортируемая: без проверки `..` в имени запись ушла бы за пределы каталога экспортов.
   it("refuses an export path that escapes the exports directory", () => {
     expect(() => activeExportPath("/arena/.data", join("..", "..", "etc", "passwd"))).toThrow(/escapes the exports directory/u);

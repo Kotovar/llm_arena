@@ -1,4 +1,4 @@
-import { type CreateRun, classifyTaskRun, createBatchSchema, isModelFailure, type TaskOutcome } from "@llm-arena/shared";
+import { type CreateRun, createBatchSchema, isModelFailure, type TaskOutcome, taskRunOutcome } from "@llm-arena/shared";
 import type { FastifyInstance } from "fastify";
 import type { ArenaStore } from "../store.js";
 
@@ -27,14 +27,7 @@ export function registerBatchRoutes(app: FastifyInstance, store: ArenaStore, dep
       const modelName = store.getModel(run.model_id)?.name ?? run.model_ref ?? run.model_id.slice(0, 8);
       const planned = store.listRunTasks(run.id).length;
       const prompts = store.listTaskRuns(run.id).map((taskRun) => {
-        const outcome = classifyTaskRun({
-          status: taskRun.status,
-          brokenAt: taskRun.broken_at,
-          completion: taskRun.completion,
-          stopReason: taskRun.stop_reason,
-          resultJson: taskRun.result_json,
-          error: taskRun.error,
-        });
+        const outcome = taskRunOutcome(taskRun);
         counts[outcome] = (counts[outcome] ?? 0) + 1;
         const name = deps.taskRunName(taskRun) ?? `Промпт ${taskRun.position + 1}`;
         if (taskRun.status === "running") active = { modelName, taskName: name };

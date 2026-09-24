@@ -42,7 +42,7 @@ const engine = new BenchmarkEngine(store, config, supervisor);
 const preview = new PreviewManager(store, config, supervisor);
 const removedPreviewRoots = preview.cleanupOrphaned();
 if (removedPreviewRoots.length) console.log(`Removed ${removedPreviewRoots.length} orphan preview root(s)`);
-const app = buildApp({ store, config, engine, preview });
+const app = buildApp({ store, config, engine, preview, supervisor });
 
 let closing = false;
 async function shutdown(): Promise<void> {
