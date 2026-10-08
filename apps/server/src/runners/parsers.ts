@@ -211,19 +211,24 @@ export function parseOpenCodeOutput(output: string, totalMs: number, startupMs: 
     const part = event.part as Json | undefined;
     return part?.type === "text" && typeof part.text === "string" ? [part.text] : [];
   });
+  // OpenCode v2 может восстановить завершённый текст без события step_finish.
+  const lastText = events.findLast((event) => event.type === "text")?.part as Json | undefined;
+  const textCompleted = lastText?.type === "text" && typeof lastText.text === "string"
+    && typeof (lastText.time as Json | undefined)?.end === "number";
   const session = events.find((event) => typeof event.sessionID === "string");
   const resultMetrics = metrics(totalMs, startupMs);
-  resultMetrics.inputTokens = runnerNumber(usage.input, "tokens");
-  resultMetrics.cachedInputTokens = runnerNumber(usage.cached, "tokens");
-  resultMetrics.outputTokens = runnerNumber(usage.output, "tokens");
-  resultMetrics.modelRequests = runnerNumber(finished.length, "requests");
+  resultMetrics.inputTokens = runnerNumber(finished.length ? usage.input : undefined, "tokens");
+  resultMetrics.cachedInputTokens = runnerNumber(finished.length ? usage.cached : undefined, "tokens");
+  resultMetrics.outputTokens = runnerNumber(finished.length ? usage.output : undefined, "tokens");
+  const requestCount = finished.length || events.filter((event) => event.type === "step_start").length;
+  resultMetrics.modelRequests = runnerNumber(requestCount || undefined, "requests");
   resultMetrics.generationTokensPerSecond = estimatedNumber(
     usage.output > 0 && totalMs > 0 ? usage.output / (totalMs / 1_000) : undefined,
     "tokens/s",
   );
   return {
     finalAnswer: messages.at(-1) ?? "",
-    exitCode: finished.length ? 0 : 1,
+    exitCode: finished.length || textCompleted ? 0 : 1,
     sessionId: typeof session?.sessionID === "string" ? session.sessionID : null,
     requestId: null,
     metrics: resultMetrics,

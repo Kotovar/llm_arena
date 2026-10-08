@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Falling Sand Lab — 2D Particle Simulator</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <h1>Falling&nbsp;Sand&nbsp;Lab</h1>
+      </div>
+
+      <div class="group materials" id="materials" role="radiogroup" aria-label="Material">
+        <button class="mat is-active" type="button" data-tool="sand" role="radio" aria-checked="true" title="Sand — falls and piles up (1)">
+          <span class="swatch swatch-sand"></span><span class="label">Sand</span><kbd>1</kbd>
+        </button>
+        <button class="mat" type="button" data-tool="water" role="radio" aria-checked="false" title="Water — flows down and spreads sideways (2)">
+          <span class="swatch swatch-water"></span><span class="label">Water</span><kbd>2</kbd>
+        </button>
+        <button class="mat" type="button" data-tool="acid" role="radio" aria-checked="false" title="Acid — spreads and dissolves other materials (3)">
+          <span class="swatch swatch-acid"></span><span class="label">Acid</span><kbd>3</kbd>
+        </button>
+        <button class="mat" type="button" data-tool="wall" role="radio" aria-checked="false" title="Wall — static barrier (4)">
+          <span class="swatch swatch-wall"></span><span class="label">Wall</span><kbd>4</kbd>
+        </button>
+        <button class="mat" type="button" data-tool="erase" role="radio" aria-checked="false" title="Eraser — remove particles (5)">
+          <span class="swatch swatch-erase"></span><span class="label">Eraser</span><kbd>5</kbd>
+        </button>
+      </div>
+
+      <div class="group controls">
+        <label class="slider" for="brush" title="Brush size ([ and ])">
+          <span class="slider-name">Brush</span>
+          <input id="brush" type="range" min="1" max="48" step="1" value="8" />
+          <output id="brushValue" for="brush">8</output>
+        </label>
+        <button class="btn" id="pauseBtn" type="button" title="Pause / resume (Space)">
+          <span class="btn-icon" id="pauseIcon">❙❙</span><span id="pauseText">Pause</span>
+        </button>
+        <button class="btn" id="stepBtn" type="button" title="Advance one frame while paused">Step</button>
+        <button class="btn btn-danger" id="clearBtn" type="button" title="Clear the whole simulation (C)">Clear</button>
+      </div>
+
+      <div class="group stats" aria-live="off">
+        <span class="stat" id="fpsStat">60 fps</span>
+        <span class="stat" id="cellStat">0</span>
+      </div>
+    </header>
+
+    <main class="stage" id="stage">
+      <canvas id="sim" aria-label="Falling sand simulation area"></canvas>
+      <div class="brush-preview" id="brushPreview" aria-hidden="true"></div>
+      <p class="hint">
+        Drag to draw &nbsp;·&nbsp; right-drag to erase &nbsp;·&nbsp; <kbd>1</kbd>–<kbd>5</kbd> material
+        &nbsp;·&nbsp; <kbd>Space</kbd> pause &nbsp;·&nbsp; <kbd>C</kbd> clear
+      </p>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

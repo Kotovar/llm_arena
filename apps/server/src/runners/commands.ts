@@ -94,7 +94,6 @@ export function buildCodexCommand(exec: readonly string[], workspace: string, mo
 
 export function buildOpenCodeCommand(
   exec: readonly string[],
-  workspace: string,
   model: string,
   prompt: string,
   effort: string | null | undefined,
@@ -106,11 +105,8 @@ export function buildOpenCodeCommand(
     "run",
     "--format",
     "json",
-    "--dir",
-    workspace,
     "--model",
-    model,
-    ...(effort ? ["--variant", effort] : []),
+    effort ? `${model}#${effort}` : model,
     ...(taskKind === "coding" ? ["--auto"] : []),
     ...imagePaths.flatMap((path) => ["--file", path]),
     prompt,

@@ -251,7 +251,7 @@ export function createRunner(kind: RunnerKind, supervisor: ProcessSupervisor): M
     case "opencode":
       return new CliRunner(
         supervisor,
-        (input) => buildOpenCodeCommand(input.definition.exec, input.workspace, input.modelRef, input.prompt, input.reasoningEffort, input.taskKind ?? "prompt", input.images?.map((image) => image.path)),
+        (input) => buildOpenCodeCommand(input.definition.exec, input.modelRef, input.prompt, input.reasoningEffort, input.taskKind ?? "prompt", input.images?.map((image) => image.path)),
         parseOpenCodeOutput,
         false,
       );

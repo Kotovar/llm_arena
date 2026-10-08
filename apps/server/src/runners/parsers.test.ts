@@ -134,6 +134,21 @@ describe("runner output parsers", () => {
     expect(() => parseOpenCodeOutput(output, 100, 0)).toThrow("Provider unavailable");
   });
 
+  it("accepts completed OpenCode v2 text without step_finish or token usage", () => {
+    const output = [
+      JSON.stringify({ type: "step_start", sessionID: "opencode-v2", part: { type: "step-start" } }),
+      JSON.stringify({ type: "text", sessionID: "opencode-v2", part: { type: "text", text: "OK", time: { start: 1_000, end: 2_000 } } }),
+    ].join("\n");
+
+    const result = parseOpenCodeOutput(output, 1_000, 0);
+    expect(result).toMatchObject({ finalAnswer: "OK", sessionId: "opencode-v2", exitCode: 0 });
+    expect(result.metrics.inputTokens).toMatchObject({ value: null, source: "unavailable" });
+    expect(result.metrics.cachedInputTokens).toMatchObject({ value: null, source: "unavailable" });
+    expect(result.metrics.outputTokens).toMatchObject({ value: null, source: "unavailable" });
+    expect(result.metrics.modelRequests.value).toBe(1);
+    expect(() => parseOpenCodeOutput(output + "\n" + JSON.stringify({ type: "error", error: { message: "Provider unavailable" } }), 1_000, 0)).toThrow("Provider unavailable");
+  });
+
   it("surfaces an OpenCode nested error message", () => {
     const output = JSON.stringify({
       type: "error",

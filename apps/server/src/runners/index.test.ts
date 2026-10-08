@@ -130,10 +130,15 @@ console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:2,output_t
     const script = join(root, "fake-opencode.mjs");
     writeFileSync(
       script,
-      `const prompt = process.argv.at(-1);
+      `import assert from "node:assert/strict";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+assert.equal(process.cwd(), dirname(fileURLToPath(import.meta.url)));
+assert.ok(!process.argv.includes("--dir") && !process.argv.includes("--variant"));
+assert.equal(process.argv[process.argv.indexOf("--model") + 1], "opencode/mimo-v2.6-flash-free#high");
+const prompt = process.argv.at(-1);
 const automatic = process.argv.includes("--auto");
-console.log(JSON.stringify({type:"text",sessionID:"fake-session",part:{type:"text",text:prompt + ":" + (automatic ? "auto" : "manual")}}));
-console.log(JSON.stringify({type:"step_finish",sessionID:"fake-session",part:{type:"step-finish",tokens:{input:2,output:1,reasoning:0,cache:{read:0,write:0}}}}));`,
+console.log(JSON.stringify({type:"text",sessionID:"fake-session",part:{type:"text",text:prompt + ":" + (automatic ? "auto" : "manual"),time:{start:1000,end:2000}}}));`,
     );
     const runner = createRunner("opencode", new ProcessSupervisor("runner-test", 100));
 
@@ -141,7 +146,8 @@ console.log(JSON.stringify({type:"step_finish",sessionID:"fake-session",part:{ty
       definition: { id: "fake", name: "Fake", kind: "opencode", exec: [process.execPath, script], default: false, env: {}, envPassthrough: [] },
       prompt: "Fix it",
       workspace: root,
-      modelRef: "provider/model",
+      modelRef: "opencode/mimo-v2.6-flash-free",
+      reasoningEffort: "high",
       taskKind: "coding",
       taskDataDir: root,
       timeoutMs: 2_000,
@@ -151,6 +157,7 @@ console.log(JSON.stringify({type:"step_finish",sessionID:"fake-session",part:{ty
     });
 
     expect(result.finalAnswer).toBe("Fix it:auto");
+    expect(result.exitCode).toBe(0);
     expect(result.sessionId).toBe("fake-session");
   });
 
