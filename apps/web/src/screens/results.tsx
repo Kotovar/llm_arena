@@ -40,8 +40,8 @@ function BatchList() {
   if (batches.error) return <p className="error">{batches.error.message}</p>;
   if (!batches.data?.length) return <Empty action={<Link to="/batch">Собрать массовый запуск</Link>}>Массовых прогонов пока нет.</Empty>;
   return <div className="run-list">{batches.data.map((batch) => <Link className="run-row" key={batch.id} to="/batch" search={{ id: batch.id }}>
-    <Status value={batch.finished ? "completed" : batch.active ? "running" : "pending"} />
-    <span className="run-row-copy"><strong>{batch.title}</strong><small>{batch.active ? `${batch.active.modelName} · ${batch.active.taskName}` : batch.modelNames.join(", ")}</small></span>
+    <Status value={batch.finished ? "completed" : batch.active.length ? "running" : "pending"} />
+    <span className="run-row-copy"><strong>{batch.title}</strong><small>{batch.active.length ? batch.active.map((item) => `${item.modelName} · ${item.taskName}`).join("; ") : batch.modelNames.join(", ")}</small></span>
     <span className="run-row-score run-row-score-none">{batch.resultMode === "web" ? "Web" : "Текст"}</span>
     <time dateTime={batch.createdAt} title={new Date(batch.createdAt).toLocaleString("ru-RU")}>{new Date(batch.createdAt).toLocaleString("ru-RU")}</time>
   </Link>)}</div>;

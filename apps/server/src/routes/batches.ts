@@ -22,7 +22,7 @@ export function registerBatchRoutes(app: FastifyInstance, store: ArenaStore, dep
     const runs = store.listBatchRuns(batchId);
     if (!runs.length) throw new Error("Batch not found");
     const counts = {} as Record<TaskOutcome, number>;
-    let active: { modelName: string; taskName: string } | null = null;
+    const active: { modelName: string; taskName: string }[] = [];
     const models = runs.map((run) => {
       const modelName = store.getModel(run.model_id)?.name ?? run.model_ref ?? run.model_id.slice(0, 8);
       const planned = store.listRunTasks(run.id).length;
@@ -30,7 +30,7 @@ export function registerBatchRoutes(app: FastifyInstance, store: ArenaStore, dep
         const outcome = taskRunOutcome(taskRun);
         counts[outcome] = (counts[outcome] ?? 0) + 1;
         const name = deps.taskRunName(taskRun) ?? `Промпт ${taskRun.position + 1}`;
-        if (taskRun.status === "running") active = { modelName, taskName: name };
+        if (taskRun.status === "running") active.push({ modelName, taskName: name });
         return { taskRunId: taskRun.id, taskRevisionId: taskRun.task_revision_id, name, outcome };
       });
       // Раннер и флаг агента едут наружу целиком: по ним экран подписывает обвязку — без этого два

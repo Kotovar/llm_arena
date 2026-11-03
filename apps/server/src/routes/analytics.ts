@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { classifyTaskRun, representativeThreshold } from "@llm-arena/shared";
+import { classifyTaskRun, isBenchmarkTask, representativeThreshold } from "@llm-arena/shared";
 import { harnessKey, harnessLabel } from "@llm-arena/shared/harness";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -30,6 +30,7 @@ type PointMeta = {
 function* enrichedRows(store: ArenaStore, slice: LeaderboardSlice): Generator<EnrichedRow> {
   for (const row of store.listDecisionRows()) {
     const tags = JSON.parse(row.tags_json) as string[];
+    if (isBenchmarkTask({ tags })) continue;
     if (slice.tag !== undefined && !tags.includes(slice.tag)) continue;
     const outcome = classifyTaskRun({
       status: row.status,
@@ -155,7 +156,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, store: ArenaStore,
     // Ось «обвязка» — не отдельный экран и не отдельная выборка: та же таблица, только ключ шире.
     const { groupBy, ...slice } = modelStatsQuerySchema.parse(request.query);
     const byHarness = groupBy === "model-harness";
-    const threshold = representativeThreshold(store.listTasks().length);
+    const threshold = representativeThreshold(store.listTasks().filter((task) => !isBenchmarkTask(task)).length);
     const models = new Map<string, { modelId: string; modelName: string; modelKind: "local-gguf" | "cloud"; harnessKey: string | null; harnessLabel: string | null }>();
     const rows: MetricRow[] = [];
     for (const { row, metricRow } of enrichedRows(store, slice)) {

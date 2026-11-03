@@ -5,16 +5,7 @@ import { api } from "../api.js";
 import { ArrowRightIcon } from "../icons.js";
 import { Page, Panel, SelectMenu, Status, useData, usePrompts, useHotkey, requestNotifications } from "../shell.js";
 import type { BatchCreated, GalleryResult, Model, ModelCatalog, Profile, Run, Runner, Task } from "../types.js";
-import { chooseRunner, cloudProviderCatalogKind, galleryCoverage, type Harness, harnessLabel, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, plural, promptCountLabel, reasoningEffortsForModel, effortLabel, usableHarnesses } from "../ui.js";
-
-const kimiModels = [
-  ["k3.1-pro", "Kimi K3.1 Pro"],
-  ["k3.1-pro-highspeed", "Kimi K3.1 Pro Highspeed"],
-  ["k3", "Kimi K3"],
-  ["k3-256k", "Kimi K3 256K"],
-  ["kimi-for-coding", "Kimi K2.8 Preview"],
-  ["kimi-for-coding-highspeed", "Kimi K2.7 Code Highspeed"],
-].map(([id, name]) => ({ id: `kimi-code-plan-global/${id}`, name: name!, efforts: id === "kimi-for-coding-highspeed" ? [] : ["low", "high", "max"], defaultEffort: null }));
+import { chooseRunner, cloudModelCatalog, galleryCoverage, type Harness, harnessLabel, initializeTaskSelection, latestProfiles, launchModeNote, launchSummary, modelOptionLabel, ompUnavailableReason, plural, promptCountLabel, reasoningEffortsForModel, effortLabel, usableHarnesses } from "../ui.js";
 import { HarnessPicker } from "./harness-picker.js";
 import { PromptPicker } from "./prompt-picker.js";
 
@@ -110,8 +101,7 @@ export function Launcher() {
   const taskKinds: Task["currentRevision"]["kind"][] = [resultMode === "web" ? "coding" : "prompt"];
   const automaticRunner = selectedModel ? chooseRunner(selectedModel, taskKinds, runners.data ?? [], usingPi ? "pi" : usingOmpAgent ? "omp" : "bare") : undefined;
   const selectedRunner = automaticRunner && (!hasImages || automaticRunner.kind !== "claude-code") ? automaticRunner : undefined;
-  const cloudProvider = cloudProviderCatalogKind(selectedModel?.provider ?? "");
-  const providerCatalog = cloudProvider === "claude" ? catalog.data?.claude : cloudProvider === "codex" ? catalog.data?.codex : cloudProvider === "opencode" && (selectedModel?.modelRef.startsWith("kimi-code-plan-global/") || selectedModel?.modelRef.startsWith("kimi-for-coding/")) ? { models: kimiModels } : undefined;
+  const providerCatalog = cloudModelCatalog(selectedModel, catalog.data);
   const effectiveModelRef = selectedModel?.kind === "cloud" ? cloudModelRef || selectedModel.modelRef : selectedModel?.modelRef ?? "";
   const modelOption = providerCatalog?.models.find((option) => option.id === effectiveModelRef);
   const reasoningOptions = reasoningEffortsForModel(selectedModel, modelOption?.efforts);
@@ -166,7 +156,7 @@ export function Launcher() {
   const dataError = models.error ?? tasks.error ?? runners.error ?? profiles.error;
 
   return <div className="launcher-page"><Page title="Запустить проверку модели" eyebrow="Новый запуск" intro="Выберите модель, один или несколько промптов. Остальные параметры приложение подберёт автоматически.">
-    <nav className="launcher-shortcuts" aria-label="Действия с моделями"><Link to="/batch">Сравнить несколько моделей <ArrowRightIcon /></Link><Link to="/gallery">Открыть галерею результатов <ArrowRightIcon /></Link></nav>
+    <nav className="launcher-shortcuts" aria-label="Действия с моделями"><Link to="/batch">Запустить несколько моделей <ArrowRightIcon /></Link><Link to="/gallery">Открыть галерею результатов <ArrowRightIcon /></Link></nav>
     {dataError ? <p className="error" role="alert">Не удалось загрузить параметры запуска: {dataError.message}</p> : null}
     <section className="launch-card" data-empty-models={models.data?.length === 0}>
       <div className="launch-step" data-ready={Boolean(selectedModel)}><span aria-label="Шаг 1">1</span><div className="launch-fields"><label>Подключение<SelectMenu label="Подключение" value={selectedModelId} disabled={!models.data?.length} placeholder="Выберите модель" onSelect={(value) => { setModelId(value); setCloudModelRef(""); setProfileId(""); setHarnesses(["omp"]); setReasoningEffort(""); }} options={[{ value: "", label: "Выберите модель" }, ...(models.data ?? []).map((model) => ({ value: model.id, label: `${model.name} · ${model.provider}` }))]} /></label>{selectedModel?.kind === "local-gguf" ? <label>Профиль запуска<SelectMenu label="Профиль запуска" value={selectedProfile?.id ?? ""} onSelect={setProfileId} options={modelProfiles.map((profile) => ({ value: profile.id, label: `${profile.name} · версия ${profile.revision}` }))} /></label> : null}{selectedModel?.kind === "cloud" ? <div className="model-select">Конкретная модель<SelectMenu label="Конкретная модель" value={effectiveModelRef} onSelect={(value) => { setCloudModelRef(value); setReasoningEffort(""); }} options={[...(providerCatalog?.models.some((option) => option.id === selectedModel.modelRef) ? [] : [{ value: selectedModel.modelRef ?? "", label: selectedModel.modelRef ?? "" }]), ...(providerCatalog?.models ?? []).map((option) => ({ value: option.id, label: modelOptionLabel(option) }))]} /></div> : null}{reasoningOptions.length ? <label>Уровень обдумывания<SelectMenu label="Уровень обдумывания" value={effectiveEffort} onSelect={setReasoningEffort} options={[{ value: "", label: "По умолчанию" }, ...reasoningOptions.map((effort) => ({ value: effort, label: effortLabel(effort) }))]} /><small>{selectedModel?.kind === "local-gguf" ? "Только то, что понимает шаблон чата модели." : "Показывается только для моделей с отмеченной поддержкой reasoning."}</small></label> : null}</div><Link to="/models">Подключить модель</Link></div>

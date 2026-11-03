@@ -21,6 +21,21 @@ const runners = [
   { id: "claude-runner", name: "Claude Code", kind: "claude-code", exec: [], default: true },
 ];
 const profiles = [{ id: "profile-1", modelId: "model-1", name: "Automatic", revision: 1, createdAt: "2026-09-01T00:00:00Z", parameters: {} }];
+const catalog = {
+  claude: { models: [
+    { id: "claude", name: "Claude Default", efforts: ["low", "high"], defaultEffort: null },
+    { id: "claude-selected", name: "Claude Selected", efforts: ["low", "high"], defaultEffort: null },
+  ] },
+  codex: { models: [
+    { id: "gpt", name: "GPT Default", efforts: ["low", "xhigh"], defaultEffort: "low" },
+    { id: "gpt-selected", name: "GPT Selected", efforts: ["high", "xhigh"], defaultEffort: "high" },
+  ] },
+};
+
+async function pick(user: ReturnType<typeof userEvent.setup>, label: string, option: string) {
+  await user.click(await screen.findByLabelText(label, { selector: "summary" }));
+  await user.click(within(screen.getByRole("group", { name: label })).getByRole("button", { name: option }));
+}
 
 const progress: BatchProgress = {
   id: "batch-1",
@@ -38,15 +53,19 @@ const progress: BatchProgress = {
     { runId: "run-2", modelId: "model-2", modelName: "Beta", status: "pending", runner_id: "claude-runner", use_omp_agent: 0, planned: 2, prompts: [] },
   ],
   counts: { error: 1 },
-  active: { modelName: "Alpha", taskName: "Часы" },
+  active: [{ modelName: "Alpha", taskName: "Часы" }],
 };
 
 let posted: { url: string; body: unknown }[];
 let batch: BatchProgress;
+let configuredModels = models;
+let configuredRunners = runners;
 
 beforeEach(() => {
   posted = [];
   batch = progress;
+  configuredModels = models;
+  configuredRunners = runners;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
     if (init?.method === "POST") {
@@ -56,9 +75,10 @@ beforeEach(() => {
     }
     if (url.includes("/api/batches/")) return json(batch);
     if (url.includes("/api/tasks")) return json(tasks);
-    if (url.includes("/api/models")) return json(models);
+    if (url.includes("/api/models")) return json(configuredModels);
     if (url.includes("/api/profiles")) return json(profiles);
-    if (url.includes("/api/runners")) return json(runners);
+    if (url.includes("/api/runners")) return json(configuredRunners);
+    if (url.includes("/api/model-catalog")) return json(catalog);
     return json([]);
   }));
 });
@@ -69,6 +89,79 @@ afterEach(() => {
 });
 
 describe("форма массового запуска", () => {
+  it("задаёт модель и effort каждому подписочному сервису независимо", async () => {
+    configuredModels = [...models, { ...models[1]!, id: "model-3", name: "Gamma", provider: "openai", modelRef: "gpt" }];
+    configuredRunners = [...runners, { id: "codex-runner", name: "Codex", kind: "codex", exec: [], default: true }];
+    const user = userEvent.setup();
+    await renderInApp(<BatchPage />, "/batch");
+    await screen.findByText("Gamma");
+    await user.click(screen.getByRole("button", { name: "Выбрать все модели" }));
+    await user.click(screen.getByRole("checkbox", { name: /Часы/u }));
+    await pick(user, "Конкретная модель · Beta", "Claude Selected");
+    await pick(user, "Уровень обдумывания · Beta", "high");
+    await pick(user, "Конкретная модель · Gamma", "GPT Selected");
+    await pick(user, "Уровень обдумывания · Gamma", "xhigh");
+    // Настройки сервиса сохраняются, когда его убирают из выбора и возвращают.
+    await user.click(screen.getByRole("checkbox", { name: /Beta/u }));
+    await user.click(screen.getByRole("checkbox", { name: /Beta/u }));
+    expect(screen.getByLabelText("Уровень обдумывания · Beta", { selector: "summary" }).textContent).toBe("high");
+    await user.click(screen.getByRole("button", { name: "Запустить батч" }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect((posted[0]!.body as { models: unknown[] }).models).toEqual([
+      { modelId: "model-1", executionProfileId: "profile-1", runnerId: "omp-runner", useOmpAgent: true },
+      { modelId: "model-2", executionProfileId: null, runnerId: "claude-runner", useOmpAgent: false, modelRef: "claude-selected", reasoningEffort: "high" },
+      { modelId: "model-3", executionProfileId: null, runnerId: "codex-runner", useOmpAgent: false, modelRef: "gpt-selected", reasoningEffort: "xhigh" },
+    ]);
+  });
+
+  it("показывает effort локальной модели, если он поддерживается её шаблоном", async () => {
+    configuredModels = models.map((model) => model.kind === "local-gguf" ? { ...model, reasoningEfforts: ["off", "high"] } : model);
+    const user = userEvent.setup();
+    await renderInApp(<BatchPage />, "/batch");
+    await screen.findByText("Alpha");
+    await user.click(screen.getByRole("checkbox", { name: /Alpha/u }));
+    await user.click(screen.getByRole("checkbox", { name: /Часы/u }));
+    expect(screen.queryByLabelText("Конкретная модель · Alpha", { selector: "summary" })).toBeNull();
+    await pick(user, "Уровень обдумывания · Alpha", "high");
+    await user.click(screen.getByRole("button", { name: "Запустить батч" }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect((posted[0]!.body as { models: unknown[] }).models).toEqual([
+      { modelId: "model-1", executionProfileId: "profile-1", runnerId: "omp-runner", useOmpAgent: true, reasoningEffort: "high" },
+    ]);
+  });
+
+  it("убирает прежний effort при смене варианта Kimi на модель без reasoning", async () => {
+    configuredModels = [{ ...models[1]!, id: "kimi", name: "Kimi", provider: "opencode", modelRef: "kimi-code-plan-global/k3.1-pro" }];
+    configuredRunners = [{ id: "opencode", name: "OpenCode", kind: "opencode", exec: [], default: true }];
+    const user = userEvent.setup();
+    await renderInApp(<BatchPage />, "/batch");
+    await screen.findByText("Kimi");
+    await user.click(screen.getByRole("checkbox", { name: /Kimi/u }));
+    await user.click(screen.getByRole("checkbox", { name: /Часы/u }));
+    await pick(user, "Уровень обдумывания · Kimi", "max");
+    await pick(user, "Конкретная модель · Kimi", "Kimi K2.7 Code Highspeed");
+    expect(screen.queryByLabelText("Уровень обдумывания · Kimi", { selector: "summary" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Запустить батч" }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect((posted[0]!.body as { models: unknown[] }).models).toEqual([
+      { modelId: "kimi", executionProfileId: null, runnerId: "opencode", useOmpAgent: false, modelRef: "kimi-code-plan-global/kimi-for-coding-highspeed" },
+    ]);
+  });
+
+  it("запускает несколько подписочных моделей без установленных локальных обвязок", async () => {
+    configuredModels = [models[1]!, { ...models[1]!, id: "model-3", name: "Gamma" }];
+    configuredRunners = runners.filter((runner) => runner.kind === "claude-code");
+    const user = userEvent.setup();
+    await renderInApp(<BatchPage />, "/batch");
+    await screen.findByText("Gamma");
+    await user.click(screen.getByRole("button", { name: "Выбрать все модели" }));
+    await user.click(screen.getByRole("checkbox", { name: /Часы/u }));
+    expect(screen.getByRole("status", { name: "Готовность батча" }).textContent).toBe("Всё готово к запуску");
+    await user.click(screen.getByRole("button", { name: "Запустить батч" }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect((posted[0]!.body as { models: { modelId: string }[] }).models.map((model) => model.modelId)).toEqual(["model-2", "model-3"]);
+  });
+
   it("выбирает все модели и объясняет, чего не хватает для запуска", async () => {
     const user = userEvent.setup();
     await renderInApp(<BatchPage />, "/batch");
@@ -106,7 +199,7 @@ describe("форма массового запуска", () => {
       taskRevisionIds: ["rev-1", "rev-2"],
       models: [
         { modelId: "model-1", executionProfileId: "profile-1", runnerId: "omp-runner", useOmpAgent: true },
-        { modelId: "model-2", executionProfileId: null, runnerId: "claude-runner", useOmpAgent: false },
+        { modelId: "model-2", executionProfileId: null, runnerId: "claude-runner", useOmpAgent: false, modelRef: "claude" },
       ],
       resultMode: "web",
     });
@@ -207,6 +300,12 @@ describe("форма массового запуска", () => {
 });
 
 describe("прогресс батча", () => {
+  it("показывает все одновременно выполняющиеся модели", async () => {
+    batch = { ...progress, active: [{ modelName: "Alpha", taskName: "Часы" }, { modelName: "Beta", taskName: "Аквариум" }] };
+    await renderInApp(<BatchPage />, "/batch?id=batch-1");
+    expect(await screen.findByText("Alpha · Часы; Beta · Аквариум")).toBeTruthy();
+  });
+
   it("показывает текущую пару, счётчики исходов и прогоны", async () => {
     await renderInApp(<BatchPage />, "/batch?id=batch-1");
 
@@ -220,21 +319,21 @@ describe("прогресс батча", () => {
 
   // Кнопка без работы сбивает с толку: повторять нечего, если ни одна пара не провалилась.
   it("прячет повтор неудач, когда неудач нет", async () => {
-    batch = { ...progress, finished: true, active: null, failedCount: 0, counts: { full: 2 } };
+    batch = { ...progress, finished: true, active: [], failedCount: 0, counts: { full: 2 } };
     await renderInApp(<BatchPage />, "/batch?id=batch-1");
     await screen.findByText("Батч завершён");
 
     expect(screen.queryByRole("button", { name: /Повторить неудачи/u })).toBeNull();
 
     cleanup();
-    batch = { ...progress, finished: true, active: null, failedCount: 2 };
+    batch = { ...progress, finished: true, active: [], failedCount: 2 };
     await renderInApp(<BatchPage />, "/batch?id=batch-1");
 
     expect(await screen.findByRole("button", { name: "Повторить неудачи (2)" })).toBeTruthy();
   });
 
   it("для текстового батча ведёт сравнение в /compare на первые два прогона", async () => {
-    batch = { ...progress, resultMode: "text", finished: true, active: null };
+    batch = { ...progress, resultMode: "text", finished: true, active: [] };
     await renderInApp(<BatchPage />, "/batch?id=batch-1");
     await screen.findByText("Батч завершён");
 
@@ -247,7 +346,7 @@ describe("прогресс батча", () => {
     batch = {
       ...progress,
       finished: true,
-      active: null,
+      active: [],
       modelIds: ["model-1"],
       models: [
         { ...progress.models[0]!, status: "succeeded" },
@@ -269,7 +368,7 @@ describe("прогресс батча", () => {
     batch = {
       ...progress,
       finished: true,
-      active: null,
+      active: [],
       models: [
         { ...progress.models[0]!, status: "succeeded" },
         { runId: "run-3", modelId: "model-1", modelName: "Alpha", status: "succeeded", runner_id: "pi-local", use_omp_agent: 0, planned: 2, prompts: [] },
@@ -301,7 +400,7 @@ describe("прогресс батча", () => {
     await waitFor(() => expect(posted.some((item) => item.url.endsWith("/cancel"))).toBe(true));
 
     cleanup();
-    batch = { ...progress, finished: true, active: null };
+    batch = { ...progress, finished: true, active: [] };
     await renderInApp(<BatchPage />, "/batch?id=batch-1");
     await screen.findByText("Батч завершён");
 

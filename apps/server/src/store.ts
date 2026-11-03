@@ -19,7 +19,7 @@ import {
   type TaskImage,
   type TaskRevision,
   type Verdict,
-  BENCHMARK_TAG,
+  isBenchmarkTask,
 } from "@llm-arena/shared";
 
 type TaskRow = {
@@ -534,7 +534,7 @@ export function createStore(filename: string) {
     if (!taskRevisionIds.length) throw new Error("Run has no prompts");
     for (const taskRevisionId of taskRevisionIds) {
       if (!getTaskRevision(taskRevisionId)) throw new Error(`Task revision ${taskRevisionId} not found`);
-      if (!suiteRevision && store.taskTagsByRevision(taskRevisionId).includes(BENCHMARK_TAG)) throw new Error("Промпт бенчмарка запускается только в составе бенчмарка");
+      if (!suiteRevision && isBenchmarkTask({ tags: store.taskTagsByRevision(taskRevisionId) })) throw new Error("Промпт бенчмарка запускается только в составе бенчмарка");
     }
     const modelRef = model.kind === "cloud" ? input.modelRef ?? model.modelRef : model.modelRef;
     const id = randomUUID();
@@ -1000,9 +1000,12 @@ export function createStore(filename: string) {
     setRunSnapshot(id: string, snapshot: unknown) {
       sqlite.prepare("UPDATE benchmark_runs SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(snapshot), id);
     },
-    claimNextRun() {
+    claimNextRun(kind: "cloud" | "local-gguf" | null = null) {
       return transaction(() => {
-        const pending = one<RunRow>("SELECT * FROM benchmark_runs WHERE status = 'pending' ORDER BY sequence LIMIT 1");
+        const pending = one<RunRow>(`SELECT benchmark_runs.* FROM benchmark_runs
+          JOIN models ON models.id = benchmark_runs.model_id
+          WHERE benchmark_runs.status = 'pending' AND (? IS NULL OR models.kind = ?)
+          ORDER BY benchmark_runs.sequence LIMIT 1`, kind, kind);
         if (!pending) return undefined;
         const startedAt = now();
         sqlite.prepare("UPDATE benchmark_runs SET status = 'running', started_at = ? WHERE id = ?").run(startedAt, pending.id);
@@ -1058,6 +1061,7 @@ export function createStore(filename: string) {
         LEFT JOIN task_revisions ON task_revisions.id = task_runs.task_revision_id
         LEFT JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
+        WHERE benchmark_runs.suite_revision_id IS NULL
         ORDER BY benchmark_runs.sequence
       `);
     },
@@ -1156,6 +1160,7 @@ export function createStore(filename: string) {
         JOIN tasks ON tasks.id = task_revisions.task_id
         LEFT JOIN reviews ON reviews.task_run_id = task_runs.id
         WHERE task_runs.status IN ('completed', 'failed', 'agent_loop', 'cancelled')
+          AND benchmark_runs.suite_revision_id IS NULL
         ORDER BY task_runs.created_at
       `);
     },
@@ -1225,9 +1230,14 @@ export function createStore(filename: string) {
         .run(id, taskRunId, position, prompt, artifactPath, now());
       return one<FollowupRow>("SELECT * FROM task_run_followups WHERE id = ?", id)!;
     },
-    claimNextFollowup() {
+    claimNextFollowup(kind: "cloud" | "local-gguf" | null = null) {
       return transaction(() => {
-        const pending = one<FollowupRow>("SELECT * FROM task_run_followups WHERE status = 'pending' ORDER BY sequence LIMIT 1");
+        const pending = one<FollowupRow & { model_id: string }>(`SELECT task_run_followups.*, benchmark_runs.model_id FROM task_run_followups
+          JOIN task_runs ON task_runs.id = task_run_followups.task_run_id
+          JOIN benchmark_runs ON benchmark_runs.id = task_runs.benchmark_run_id
+          JOIN models ON models.id = benchmark_runs.model_id
+          WHERE task_run_followups.status = 'pending' AND (? IS NULL OR models.kind = ?)
+          ORDER BY task_run_followups.sequence LIMIT 1`, kind, kind);
         if (!pending) return undefined;
         const startedAt = now();
         sqlite.prepare("UPDATE task_run_followups SET status = 'running', started_at = ? WHERE id = ?").run(startedAt, pending.id);

@@ -96,7 +96,8 @@ export class BenchmarkEngine {
   /** Почему прогон остановлен: сообщение уходит в `error`, причина — в `stop_reason`. */
   readonly #stopReasons = new Map<string, { reason: StopReason; message?: string }>();
   readonly #listeners = new Map<string, Set<(event: RunEvent) => void>>();
-  #pumping: Promise<void> | undefined;
+  readonly #active = new Set<Promise<void>>();
+  #localBusy = false;
   #stopping = false;
   #calibrating = false;
   #testing = false;
@@ -128,23 +129,31 @@ export class BenchmarkEngine {
   }
 
   wake(): void {
-    // Калибровка и проверка модели держат свой llama-server с той же меткой владельца: очередь,
-    // стартовавшая поверх них, добила бы его в #reapOrphans. Обе сами зовут wake() в finally.
-    if (this.#calibrating || this.#testing) return;
-    if (!this.#pumping && !this.#stopping) {
-      const pumping = this.#pump();
-      this.#pumping = pumping;
-      void pumping.finally(() => {
-        if (this.#pumping === pumping) this.#pumping = undefined;
-      });
-    }
+    if (this.#calibrating || this.#testing || this.#stopping) return;
+    while (this.#startNext("cloud")) {}
+    this.#startNext("local-gguf");
   }
 
-  async #pump(): Promise<void> {
-    while (!this.#stopping && (await this.processNext())) {
-      // ponytail: one global worker is deliberate; add resource-aware lanes only if concurrent benchmarks become useful.
-      this.#reapOrphans();
-    }
+  #startNext(kind?: "cloud" | "local-gguf"): Promise<void> | undefined {
+    if (this.#stopping || this.#calibrating || this.#testing || (kind === "local-gguf" && this.#localBusy)) return;
+    const allowed = kind ?? (this.#localBusy ? "cloud" : null);
+    const run = this.store.claimNextRun(allowed);
+    const followup = run ? undefined : this.store.claimNextFollowup(allowed);
+    if (!run && !followup) return;
+    const local = this.store.getModel(run?.model_id ?? followup!.model_id)?.kind === "local-gguf";
+    if (local) this.#localBusy = true;
+    const work = (run ? this.#processRun(run) : this.#processFollowup(followup!)).finally(() => {
+      this.#active.delete(work);
+      if (local) this.#localBusy = false;
+      // processNext() выполняет один шаг, wake() продолжает очередь.
+      if (kind) {
+        // Общая метка владельца есть и у соседних запусков: чистим только после завершения всех.
+        if (!this.#active.size) this.#reapOrphans();
+        this.wake();
+      }
+    });
+    this.#active.add(work);
+    return work;
   }
 
   /**
@@ -161,8 +170,13 @@ export class BenchmarkEngine {
   }
 
   async processNext(): Promise<boolean> {
-    const run = this.store.claimNextRun();
-    if (!run) return this.#processNextFollowup();
+    const work = this.#startNext();
+    if (!work) return false;
+    await work;
+    return true;
+  }
+
+  async #processRun(run: NonNullable<ReturnType<ArenaStore["claimNextRun"]>>): Promise<void> {
     const controller = new AbortController();
     this.#controllers.set(run.id, controller);
     this.#emit({ type: "run.status", runId: run.id, data: { status: "running" } });
@@ -190,16 +204,13 @@ export class BenchmarkEngine {
       this.#stopReasons.delete(run.id);
       this.#emit({ type: "run.status", runId: run.id, data: { status: this.store.getRun(run.id)?.status } });
     }
-    return true;
   }
 
-  async #processNextFollowup(): Promise<boolean> {
-    const followup = this.store.claimNextFollowup();
-    if (!followup) return false;
+  async #processFollowup(followup: NonNullable<ReturnType<ArenaStore["claimNextFollowup"]>>): Promise<void> {
     const taskRun = this.store.getTaskRun(followup.task_run_id);
     if (!taskRun) {
       this.store.saveFollowupResult(followup.id, {}, "failed", "Task run not found");
-      return true;
+      return;
     }
     const controller = new AbortController();
     this.#controllers.set(followup.id, controller);
@@ -214,7 +225,6 @@ export class BenchmarkEngine {
       this.#stopReasons.delete(followup.id);
       this.#emit({ type: "followup.status", runId: taskRun.benchmark_run_id, taskRunId: taskRun.id, data: { id: followup.id, status: this.store.getFollowup(followup.id)?.status } });
     }
-    return true;
   }
 
   #environment(
@@ -298,6 +308,7 @@ export class BenchmarkEngine {
             stderr: (text) => appendFileSync(backendStderr, text),
           },
           run.reasoning_effort,
+          signal,
         );
         this.#emit({ type: "backend.ready", runId: run.id, data: { port: backend.port, startupDurationMs: backend.startupDurationMs } });
       }
@@ -531,6 +542,7 @@ export class BenchmarkEngine {
           snapshot.profile.parameters,
           { stdout: (text) => appendFileSync(stdoutPath, text), stderr: (text) => appendFileSync(stderrPath, text) },
           run.reasoning_effort,
+          signal,
         );
       }
       const result = await this.#runAgent({
@@ -737,14 +749,13 @@ export class BenchmarkEngine {
     // приложения выдало бы решение человека за перезапуск.
     if (!this.#stopReasons.has(runId)) this.#stopReasons.set(runId, { reason: "user" });
     controller.abort();
-    await this.supervisor.stopAll();
     return true;
   }
 
   // Ошибки калибровки и проверки модели пользователь читает прямо в интерфейсе, поэтому они
   // по-русски и с путём к журналу: английский текст веб-клиент прячет за общей заглушкой.
   async calibrate(profileId: string) {
-    if (this.#calibrating || this.#testing || this.#controllers.size > 0 || this.#pumping) throw new Error(HEAVY_LANE_BUSY);
+    if (this.#calibrating || this.#testing || this.#controllers.size > 0 || this.#active.size > 0) throw new Error(HEAVY_LANE_BUSY);
     const profile = this.store.getExecutionProfile(profileId);
     if (!profile) throw new Error("Execution profile not found");
     const model = this.store.getModel(profile.modelId);
@@ -791,7 +802,7 @@ export class BenchmarkEngine {
   }
 
   async testModel(modelId: string, runnerId: string) {
-    if (this.#calibrating || this.#testing || this.#controllers.size > 0 || this.#pumping) throw new Error(HEAVY_LANE_BUSY);
+    if (this.#calibrating || this.#testing || this.#controllers.size > 0 || this.#active.size > 0) throw new Error(HEAVY_LANE_BUSY);
     const model = this.store.getModel(modelId);
     if (!model) throw new Error("Model not found");
     const definition = this.config.runners.find((runner) => runner.id === runnerId);
@@ -859,7 +870,7 @@ export class BenchmarkEngine {
     this.#stopping = true;
     for (const controller of this.#controllers.values()) controller.abort();
     await this.supervisor.stopAll();
-    await this.#pumping;
+    await Promise.all(this.#active);
   }
 }
 

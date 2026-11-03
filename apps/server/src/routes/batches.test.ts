@@ -32,6 +32,26 @@ async function arena() {
 const modelEntry = (modelId: string) => ({ modelId, executionProfileId: null, runnerId: "llama-chat" });
 
 describe("batches", () => {
+  it("сохраняет конкретную подписочную модель и effort отдельно для каждого прогона", async () => {
+    const { app, store } = await arena();
+    const claude = store.createModel({ name: "Claude", kind: "cloud", provider: "anthropic", modelRef: "claude-default" });
+    const codex = store.createModel({ name: "Codex", kind: "cloud", provider: "openai", modelRef: "gpt-default" });
+    const task = store.createTask({ name: "Часы", kind: "prompt", prompt: "Сделай часы", tags: [] });
+    const created = await app.inject({ method: "POST", url: "/api/batches", payload: {
+      taskRevisionIds: [task.currentRevision.id], resultMode: "web",
+      models: [
+        { modelId: claude.id, runnerId: "claude-code", modelRef: "claude-selected", reasoningEffort: "high" },
+        { modelId: codex.id, runnerId: "codex", modelRef: "gpt-selected", reasoningEffort: "xhigh" },
+      ],
+    } });
+    expect(created.statusCode).toBe(202);
+    expect(store.listBatchRuns(created.json().batchId).map((run) => [run.model_ref, run.reasoning_effort])).toEqual([
+      ["claude-selected", "high"], ["gpt-selected", "xhigh"],
+    ]);
+    await app.close();
+    store.close();
+  });
+
   it("создаёт по прогону на модель с общей меткой и собирает прогресс", async () => {
     const { app, store, connect } = await arena();
     const alpha = await connect("Alpha.gguf", "Alpha");
@@ -105,13 +125,13 @@ describe("batches", () => {
     store.startTaskRun(taskRun.id);
 
     const running = await app.inject({ method: "GET", url: `/api/batches/${batchId}` });
-    expect(running.json().active).toEqual({ modelName: "Alpha", taskName: "Часы" });
+    expect(running.json().active).toEqual([{ modelName: "Alpha", taskName: "Часы" }]);
     expect(running.json().counts).toEqual({ running: 1 });
 
     store.saveTaskRunResult(taskRun.id, {}, "failed", "boom");
     const failed = await app.inject({ method: "GET", url: `/api/batches/${batchId}` });
     expect(failed.json().counts).toEqual({ error: 1 });
-    expect(failed.json().active).toBeNull();
+    expect(failed.json().active).toEqual([]);
 
     await app.close();
     store.close();

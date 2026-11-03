@@ -1,4 +1,4 @@
-import { classifyTaskRun, representativeThreshold } from "@llm-arena/shared";
+import { classifyTaskRun, isBenchmarkTask, representativeThreshold } from "@llm-arena/shared";
 import type { FastifyInstance } from "fastify";
 import { paramsFromPath, quantFromPath } from "../gguf.js";
 import { aggregateModelStats, attemptMetrics, mean, median, type MetricRow, reviewCriteria, round, scoreShare } from "../metrics.js";
@@ -10,11 +10,12 @@ type ModelMeta = { modelName: string; modelKind: "local-gguf" | "cloud"; quant: 
 export function registerLeaderboardRoutes(app: FastifyInstance, store: ArenaStore): void {
   app.get<{ Querystring: SliceQuery }>("/api/leaderboard", async (request) => {
     const slice = leaderboardSliceSchema.parse(request.query);
-    const threshold = representativeThreshold(store.listTasks().length);
+    const threshold = representativeThreshold(store.listTasks().filter((task) => !isBenchmarkTask(task)).length);
     const models = new Map<string, ModelMeta>();
     const rows: MetricRow[] = [];
     for (const row of store.listLeaderboardTaskRuns()) {
       const tags = row.tags_json === null ? undefined : JSON.parse(row.tags_json) as string[];
+      if (isBenchmarkTask({ tags: tags ?? [] })) continue;
       if (slice.tag !== undefined && !tags?.includes(slice.tag)) continue;
       const outcome = classifyTaskRun({
         status: row.task_run_status ?? "pending",

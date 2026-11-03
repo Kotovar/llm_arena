@@ -77,7 +77,9 @@ beforeEach(() => {
     const body = url.includes("/model-stats")
       ? [modelStats(filtered ? { outcomes: { ...modelStats().outcomes, completed: 0 } } : {}), modelStats({ modelId: "model-2", modelName: "Медленная", successCount: 4, attempted: 6, failureCount: 2, scorePercent: 60, representative: false })]
       : url.startsWith("/api/tasks")
-      ? [{ id: "task-1", tags: ["web"], currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["web"], images: [] } }]
+      ? [{ id: "task-1", tags: ["web"], currentRevision: { id: "rev-1", taskId: "task-1", name: "Аквариум", kind: "coding", prompt: "Сделай", revision: 1, contentHash: "h", tags: ["web"], images: [] } },
+        { id: "task-2", tags: ["cat:algorithm", "diff:medium"] },
+        { id: "task-3", tags: ["benchmark", "diff:easy"] }]
       : url.includes("tag=web") ? [point({ qualityPercent: 90 })]
       : all;
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
@@ -87,6 +89,15 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it("не показывает категории и другие теги задач бенчмарка в срезах и тепловой карте", async () => {
+  await renderAnalytics();
+  expect(await screen.findByRole("button", { name: "web" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /cat:|diff:|benchmark/u })).toBeNull();
+  await userEvent.setup().click(screen.getByRole("tab", { name: "Срезы нагрузки" }));
+  expect(screen.queryByText("cat:algorithm")).toBeNull();
+  expect(requested.some((url) => /cat|diff|benchmark/u.test(url))).toBe(false);
 });
 
 describe("раскладка подписей", () => {

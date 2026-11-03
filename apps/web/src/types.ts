@@ -356,7 +356,7 @@ export type BatchProgress = {
   finished: boolean;
   models: { runId: string; modelId: string; modelName: string; status: string; runner_id: string; use_omp_agent: number; planned: number; prompts: BatchPrompt[] }[];
   counts: Partial<Record<TaskOutcome, number>>;
-  active: { modelName: string; taskName: string } | null;
+  active: { modelName: string; taskName: string }[];
 };
 
 export type BatchSummary = {
@@ -368,5 +368,5 @@ export type BatchSummary = {
   resultMode: "text" | "web";
   finished: boolean;
   counts: Partial<Record<TaskOutcome, number>>;
-  active: { modelName: string; taskName: string } | null;
+  active: { modelName: string; taskName: string }[];
 };

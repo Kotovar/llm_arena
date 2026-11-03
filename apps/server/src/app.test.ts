@@ -770,6 +770,38 @@ describe("REST API", () => {
     store.close();
   });
 
+  it("исключает бенчмарк из экспорта и всех срезов аналитики, включая старые результаты", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llm-arena-gallery-prompts-"));
+    directories.push(directory);
+    const store = createStore(join(directory, "arena.sqlite"));
+    const app = buildApp({ store, config: loadConfig("../../arena.config.yaml") });
+    const model = store.createModel({ name: "Cloud", kind: "cloud", provider: "openai", modelRef: "cloud" });
+    const ordinary = await app.inject({ method: "POST", url: "/api/tasks", payload: { name: "Галерея", kind: "prompt", prompt: "Build", tags: [" creative ", "creative"] } });
+    expect(ordinary.statusCode).toBe(201);
+    expect(ordinary.json().tags).toEqual(["creative"]);
+    for (const [index, tags] of [["creative"], ["cat:algorithm", "creative"], ["benchmark", "diff:easy"]].entries()) {
+      const task = index === 0 ? ordinary.json<ReturnType<typeof store.createTask>>() : store.createTask({ name: `Benchmark ${index}`, kind: "prompt", prompt: "Build", tags: [] });
+      const run = store.createRun({ taskRevisionIds: [task.currentRevision.id], modelId: model.id, executionProfileId: null, runnerId: "codex", resultMode: "web" });
+      const taskRun = store.createTaskRun(run.id, task.currentRevision.id, 0, join(directory, `task-${index}`), { task: task.currentRevision });
+      store.saveTaskRunResult(taskRun.id, { finalAnswer: "Done", metrics: { generationTokensPerSecond: { value: index ? 999 : 10 } } });
+      store.updateRunStatus(run.id, "completed");
+      store.setTaskTags(task.id, tags);
+    }
+    // Много категорий бенчмарка не поднимают порог репрезентативности галереи.
+    for (let index = 0; index < 40; index++) store.createTask({ name: `Category ${index}`, kind: "prompt", prompt: "Build", tags: ["cat:algorithm"] });
+
+    const exported = (await app.inject({ method: "GET", url: "/api/tasks/export" })).json();
+    expect(exported).toEqual([{ name: "Галерея", prompt: "Build", tags: ["creative"] }]);
+    for (const url of ["/api/analytics/model-stats", "/api/analytics/model-stats?groupBy=model-harness", "/api/leaderboard"]) {
+      expect((await app.inject({ method: "GET", url })).json()).toEqual([expect.objectContaining({ attempted: 1, representativeThreshold: 10 })]);
+      expect((await app.inject({ method: "GET", url: `${url}${url.includes("?") ? "&" : "?"}tag=cat%3Aalgorithm` })).json()).toEqual([]);
+    }
+    expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points" })).json()).toEqual([expect.objectContaining({ sampleCount: 1, medianTokensPerSecond: 10 })]);
+    expect((await app.inject({ method: "GET", url: "/api/analytics/decision-points?tag=cat%3Aalgorithm" })).json()).toEqual([]);
+    await app.close();
+    store.close();
+  });
+
   it("отдаёт имя промпта из снапшота, а описание — текущее с задачи", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llm-arena-task-labels-"));
     directories.push(directory);

@@ -129,7 +129,7 @@ describe("фильтры списка запусков", () => {
 // В общем списке батч неотличим от одиночных запусков: у него своя вкладка.
 describe("вкладка массовых прогонов", () => {
   const run = (id: string, modelId: string, name: string) => ({ id, model_id: modelId, runner_id: "runner-1", status: "completed", created_at: "2026-01-01T00:00:00.000Z", snapshot_json: JSON.stringify({ model: { name } }), use_omp_agent: 0 });
-  const batch = { id: "batch-1", createdAt: "2026-09-02T14:30:00.000Z", title: "2 × 3, 2 сентября 14:30", modelNames: ["Alpha", "Beta"], promptCount: 3, resultMode: "web", finished: true, counts: { full: 6 }, active: null };
+  const batch = { id: "batch-1", createdAt: "2026-09-02T14:30:00.000Z", title: "2 × 3, 2 сентября 14:30", modelNames: ["Alpha", "Beta"], promptCount: 3, resultMode: "web", finished: true, counts: { full: 6 }, active: [] };
 
   beforeEach(() => {
     fetchMock.mockImplementation(async (url: string) => {

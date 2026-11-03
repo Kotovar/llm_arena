@@ -802,6 +802,9 @@ body:has(.gallery-dialog[open]) { overflow: hidden; }
   .gallery-open-hint { opacity: 1; }
 }
 .batch-active { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+.batch-settings { grid-column: 1; padding: 0 24px 24px 76px; display: grid; gap: 16px; }
+.batch-model-settings { min-width: 0; margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.batch-model-settings legend { padding-inline: 6px; color: var(--muted); font-size: 13px; }
 .batch-counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
 .batch-counts div { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-1); }
 .batch-counts dt { font-size: 10px; }
@@ -856,9 +859,10 @@ body:has(.gallery-dialog[open]) { overflow: hidden; }
   .launcher-page .launch-footer, .launcher-page .advanced { padding: 16px; }
   .launcher-page .prompt-options > label { grid-template-columns: auto minmax(0, 1fr); }
   .launcher-page .prompt-covered { grid-column: 2; white-space: normal; justify-self: start; }
+  .batch-settings { padding: 0 16px 16px 52px; }
 }
 
-.batch-page .launch-footer { grid-row: 1 / span 3; }
+.batch-page .launch-footer { grid-row: 1 / span 4; }
 .batch-progress-page .page-head { max-width: none; }
 .batch-progress-page .batch-active { padding: 16px; margin-bottom: 20px; border-left: 2px solid var(--signal); background: var(--surface-accent); color: var(--signal); line-height: 1.5; }
 .batch-progress-page .batch-counts { gap: 12px; margin-bottom: 24px; }

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ComponentProps, type Rea
 import { api } from "./api.js";
 import { ChevronDownIcon, ChevronUpIcon } from "./icons.js";
 import { useToast } from "./toast.js";
-import { BENCHMARK_TAG } from "@llm-arena/shared";
+import { isBenchmarkTask } from "@llm-arena/shared";
 import type { GpuInfo, Model, Run, Task } from "./types.js";
 import { finishedSince, runIsActive, runModelName, statusLabel } from "./ui.js";
 
@@ -20,7 +20,7 @@ export function usePrompts(scope: "ordinary" | "benchmark") {
   return useQuery({
     queryKey: ["tasks"],
     queryFn: () => api<Task[]>("/tasks"),
-    select: (tasks) => tasks.filter((task) => task.tags.includes(BENCHMARK_TAG) === (scope === "benchmark")),
+    select: (tasks) => tasks.filter((task) => isBenchmarkTask(task) === (scope === "benchmark")),
   });
 }
 
@@ -229,11 +229,15 @@ function ActivityCard() {
   }, [runs.data, models.data, toast, notify]);
   const active = runs.data?.filter(runIsActive) ?? [];
   if (!active.length) return null;
-  const [current, ...queued] = active;
+  const current = active.find((run) => run.status !== "pending") ?? active[0]!;
+  const others = active.filter((run) => run !== current);
+  const running = others.filter((run) => run.status !== "pending").length;
+  const queued = others.length - running;
   return <Link className="activity" to="/runs/$runId" params={{ runId: current!.id }}>
     <span className="activity-head"><i className="spinner" /><strong>{runModelName(current!, models.data ?? [])}</strong></span>
     <span className="activity-meta"><span>{statusLabel(current!.activityStatus ?? current!.status)}</span><span><Elapsed since={current!.started_at} /></span></span>
-    {queued.length ? <small>ещё {queued.length} в очереди</small> : null}
+    {running ? <small>ещё {running} выполняется</small> : null}
+    {queued ? <small>ещё {queued} в очереди</small> : null}
   </Link>;
 }
 

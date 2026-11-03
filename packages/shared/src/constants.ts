@@ -3,3 +3,7 @@ export const DEFAULT_LLAMA_TEMPERATURE = 0.2;
 
 /** Промпт с этим тегом принадлежит бенчмарку: его условия заточены под прогон набора, обычному запуску он не отдаётся. */
 export const BENCHMARK_TAG = "benchmark";
+
+export function isBenchmarkTask(task: { tags: readonly string[] }): boolean {
+  return task.tags.some((tag) => tag === BENCHMARK_TAG || tag.startsWith("cat:"));
+}

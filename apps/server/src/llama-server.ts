@@ -117,8 +117,11 @@ export class LlamaCppServerManager {
     profile: LlamaProfile,
     logs: { stdout: (text: string) => void; stderr: (text: string) => void },
     reasoningEffort?: string | null,
+    signal?: AbortSignal,
   ) {
+    signal?.throwIfAborted();
     const port = await allocatePort();
+    signal?.throwIfAborted();
     const slotSavePath = mkdtempSync(join(tmpdir(), "llm-arena-slots-"));
     const command = buildLlamaServerCommand(this.executable, model, profile, port, slotSavePath, reasoningEffort);
     const startedAt = performance.now();
@@ -131,6 +134,10 @@ export class LlamaCppServerManager {
       cleanup();
       throw error;
     }
+    const cancel = () => void process.stop();
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    void process.completed.then(() => signal?.removeEventListener("abort", cancel));
     const baseUrl = `http://127.0.0.1:${port}`;
     try {
       await waitForHealth(baseUrl, this.startupTimeoutMs, process);

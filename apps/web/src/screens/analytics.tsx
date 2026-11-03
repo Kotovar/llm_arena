@@ -2,9 +2,9 @@ import { Link } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api.js";
-import { Empty, Page, Panel, SelectMenu, Skeleton, useData } from "../shell.js";
+import { Empty, Page, Panel, SelectMenu, Skeleton, usePrompts } from "../shell.js";
 import { useTableSort } from "../table-sort.js";
-import type { DecisionPoint, ModelStats, Task } from "../types.js";
+import type { DecisionPoint, ModelStats } from "../types.js";
 import { DEFAULT_PROFILE_NAME, failureTone, formatDuration, formatMetricValue, formatVram, modelKindFilters, plural, scoreTone, shortLabel, toneClass } from "../ui.js";
 import type { ModelKindFilter } from "../ui.js";
 
@@ -395,7 +395,7 @@ export function AnalyticsPage() {
   // Ось «обвязка»: та же таблица, только строка на каждую пару «модель + обвязка».
   const [byHarness, setByHarness] = useState(false);
   const [onlyRepresentative, setOnlyRepresentative] = useState(true);
-  const tasks = useData<Task[]>("tasks", "/tasks");
+  const tasks = usePrompts("ordinary");
   const tags = [...new Set((tasks.data ?? []).flatMap((task) => task.tags))].sort((left, right) => left.localeCompare(right, "ru"));
   const query = sliceQuery(slice, completion);
   // Ключ той же формы, что у запросов тепловой карты: иначе общий срез грузится дважды.

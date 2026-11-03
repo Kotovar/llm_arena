@@ -25,7 +25,7 @@ import {
   selectResultVersionSchema,
   updateModelCapabilitiesSchema,
   publicFixtureManifest,
-  BENCHMARK_TAG,
+  isBenchmarkTask,
 } from "@llm-arena/shared";
 import Fastify from "fastify";
 import { z, ZodError, type ZodType } from "zod";
@@ -591,7 +591,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
   app.patch<{ Params: { id: string } }>("/api/tasks/:id", async (request) => store.updateTask(request.params.id, parseTask(request.body)));
   app.get("/api/tasks/export", async (_request, reply) => {
     reply.header("content-disposition", 'attachment; filename="llm-arena-prompts.json"');
-    return store.listTasks().map((task) => ({
+    return store.listTasks().filter((task) => !isBenchmarkTask(task)).map((task) => ({
       name: task.currentRevision.name,
       ...(task.description ? { description: task.description } : {}),
       prompt: task.currentRevision.prompt,
@@ -747,7 +747,7 @@ export function buildApp(options: { store: ArenaStore; config: ArenaConfig; engi
       // Прогоны бенчмарка и его промпты в галерею не идут: их условия заточены под проверку, а не под показ.
       if (run.result_mode !== "web" || run.suite_revision_id) return [];
       return store.listTaskRuns(run.id).flatMap((taskRun) => {
-        if (store.taskTagsByRevision(taskRun.task_revision_id).includes(BENCHMARK_TAG)) return [];
+        if (isBenchmarkTask({ tags: store.taskTagsByRevision(taskRun.task_revision_id) })) return [];
         if (taskRun.status !== "completed" || taskRun.broken_at !== null || !checksPassed(taskRun.result_json)) return [];
         const selected = selectedResultVersionRecord(taskRun);
         const snapshot = parseGallerySnapshot(taskRun.snapshot_json);

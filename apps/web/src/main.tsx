@@ -83,7 +83,8 @@ function TasksPage() {
     try {
       setUploading(true);
       const description = String(data.get("description") ?? "").trim();
-      await create.mutateAsync({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt"), images: await uploadTaskImages(files), ...(description ? { description } : {}) });
+      const tags = String(data.get("tags") ?? "").split(",").map((tag) => tag.trim()).filter(Boolean);
+      await create.mutateAsync({ name: data.get("name"), kind: "prompt", prompt: data.get("prompt"), tags, images: await uploadTaskImages(files), ...(description ? { description } : {}) });
       form.reset();
       setFiles([]);
     } finally {
@@ -98,6 +99,7 @@ function TasksPage() {
       <label className="span-2">Название<input name="name" required /></label>
       <label className="span-2">Краткое описание<input name="description" maxLength={4000} placeholder="Для чего промпт и что проверять" /><small>Только для вас: в модель не уходит, видно в галерее и результатах.</small></label>
       <label className="span-2">Текст промпта<textarea name="prompt" rows={8} required /></label>
+      <label className="span-2">Теги<input name="tags" placeholder="games, creative" /><small>Через запятую. По тегам фильтруются галерея и аналитика.</small></label>
       <label className="span-2">Референс-изображения<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { setFiles(Array.from(event.currentTarget.files ?? []).slice(0, 8)); }} /><small>До 8 PNG, JPEG или WebP; они станут частью неизменяемой версии промпта.</small></label>
       {files.length ? <ul className="image-attachments span-2">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => setFiles((current) => current.filter((_, position) => position !== index))}>Убрать</button></li>)}</ul> : null}
       <button className="primary" disabled={create.isPending || uploading}>{uploading || create.isPending ? "Загружаем…" : "Добавить"}</button>{create.error ? <p className="error">{create.error.message}</p> : null}

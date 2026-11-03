@@ -1,7 +1,7 @@
 import { DEFAULT_LLAMA_TEMPERATURE } from "@llm-arena/shared/constants";
 import { harnessAxisLabel, harnessKey, harnessLabel as sharedHarnessLabel } from "@llm-arena/shared/harness";
 import type { TaskOutcome, WatchdogDiagnostics } from "@llm-arena/shared";
-import type { GalleryResult, Model, Runner, Task, TaskRun } from "./types.js";
+import type { GalleryResult, Model, ModelCatalog, Runner, Task, TaskRun } from "./types.js";
 
 const statusLabels: Record<string, string> = {
   pending: "В очереди",
@@ -39,6 +39,23 @@ export function cloudProviderCatalogKind(provider: string) {
   if (normalized.includes("openai") || normalized.includes("codex")) return "codex";
   if (normalized.includes("opencode")) return "opencode";
   return undefined;
+}
+
+const kimiModels = [
+  ["k3.1-pro", "Kimi K3.1 Pro"],
+  ["k3.1-pro-highspeed", "Kimi K3.1 Pro Highspeed"],
+  ["k3", "Kimi K3"],
+  ["k3-256k", "Kimi K3 256K"],
+  ["kimi-for-coding", "Kimi K2.8 Preview"],
+  ["kimi-for-coding-highspeed", "Kimi K2.7 Code Highspeed"],
+].map(([id, name]) => ({ id: `kimi-code-plan-global/${id}`, name: name!, efforts: id === "kimi-for-coding-highspeed" ? [] : ["low", "high", "max"], defaultEffort: null }));
+
+export function cloudModelCatalog(model: Model | undefined, catalog: ModelCatalog | undefined) {
+  const provider = cloudProviderCatalogKind(model?.provider ?? "");
+  if (provider === "opencode") {
+    return model?.modelRef.startsWith("kimi-code-plan-global/") || model?.modelRef.startsWith("kimi-for-coding/") ? { models: kimiModels } : undefined;
+  }
+  return provider ? catalog?.[provider] : undefined;
 }
 
 /** Обвязка локальной модели: OMP, минимальный агент pi или её отсутствие. */

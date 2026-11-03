@@ -1,5 +1,40 @@
-import { describe, expect, it } from "vitest";
-import { buildLlamaServerCommand } from "./llama-server.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { buildLlamaServerCommand, LlamaCppServerManager } from "./llama-server.js";
+import { ProcessSupervisor } from "./process-supervisor.js";
+
+it("cancels a loading llama-server without stopping a sibling process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "llm-arena-llama-cancel-"));
+  const script = join(root, "llama-server");
+  writeFileSync(script, "#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n", { mode: 0o755 });
+  const supervisor = new ProcessSupervisor("llama-cancel-test", 100);
+  const sibling = supervisor.spawn({ argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"] });
+  const spawn = vi.spyOn(supervisor, "spawn");
+  const controller = new AbortController();
+  try {
+    const starting = new LlamaCppServerManager(script, 10_000, supervisor).start(
+      { path: "/fake.gguf", alias: "fake" },
+      { context: 4096, nGpuLayers: "all", cacheTypeK: "q8_0", cacheTypeV: "q8_0", batchSize: 512, ubatchSize: 256, flashAttention: "auto", cacheReuse: 128 },
+      { stdout: () => {}, stderr: () => {} },
+      null,
+      controller.signal,
+    );
+    const rejected = expect(starting).rejects.toThrow("exited before becoming healthy");
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    const server = spawn.mock.results[0]!.value;
+    controller.abort();
+    await rejected;
+    expect((await server.completed).cancelled).toBe(true);
+    expect(() => process.kill(sibling.pid, 0)).not.toThrow();
+  } finally {
+    controller.abort();
+    await supervisor.stopAll();
+    spawn.mockRestore();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("llama-server command", () => {
   it("pins sampling temperature so long-context tool calls stay parseable", () => {
