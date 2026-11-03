@@ -334,6 +334,20 @@ describe("профиль локальной модели", () => {
     await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ reasoningEffort: "low" })]));
   });
 
+  it("позволяет выбрать уровень обдумывания Kimi через OpenCode", async () => {
+    const user = userEvent.setup();
+    payloads["/api/models"] = [{ id: "model-1", name: "Kimi", kind: "cloud", provider: "opencode", modelRef: "kimi-for-coding/kimi-for-coding", capabilities: { toolUse: true, vision: true, reasoning: true } }];
+    payloads["/api/runners"] = [{ id: "opencode", name: "OpenCode", kind: "opencode", exec: ["opencode"], default: true }];
+    await renderInApp(<Launcher />, "/");
+    await screen.findByText("Аквариум");
+    await pick(user, "Конкретная модель", "Kimi K3.1 Pro");
+    await user.click(await screen.findByLabelText("Уровень обдумывания", { selector: "summary" }));
+    for (const effort of ["low", "high", "max"]) expect(screen.getByRole("button", { name: effort })).toBeDefined();
+    await user.click(screen.getByRole("button", { name: "high" }));
+    await user.click(await screen.findByRole("button", { name: /Запустить/u }));
+    await waitFor(() => expect(runBodies).toEqual([expect.objectContaining({ runnerId: "opencode", modelRef: "kimi-code-plan-global/k3.1-pro", reasoningEffort: "high" })]));
+  });
+
   it("запускает по Ctrl+Enter и открывает поиск промптов по «/»", async () => {
     const user = userEvent.setup();
     await renderInApp(<Launcher />, "/");

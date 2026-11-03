@@ -91,7 +91,7 @@ button:where(:has(.icon)), a:where(:has(.icon)) { display: inline-flex; align-it
 .launch-step > span:first-of-type { display: grid; place-items: center; width: 36px; height: 36px; color: var(--surface-0); background: #75829e; border-radius: 50%; font: 700 14px var(--font-mono); box-shadow: inset 0 0 0 4px rgba(14, 20, 35, .12); }
 .launch-step[data-ready="true"] > span:first-of-type { background: var(--good); box-shadow: 0 0 0 4px rgba(130, 208, 173, .1); }
 .launch-step:nth-of-type(-n+2)::after { content: ""; position: absolute; left: 48px; bottom: -12px; width: 2px; height: 24px; background: var(--line-strong); z-index: 1; }.launch-step[data-ready="true"]:nth-of-type(-n+2)::after { background: var(--good); }
-.launch-step label, .advanced label { color: #c1c8d8; font-size: 13px; font-weight: 600; }
+.launch-step label, .launch-step .model-select, .advanced label { color: #c1c8d8; font-size: 13px; font-weight: 600; }
 .launch-step .select-menu > summary, .advanced .select-menu > summary { padding: 12px; }
 .launch-step > a { align-self: start; display: inline-flex; min-height: 42px; align-items: center; justify-content: center; margin-top: calc(1lh + 8px); padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-md); font-size: 13px; white-space: nowrap; }
 .launch-fields { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }

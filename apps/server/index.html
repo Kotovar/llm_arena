@@ -3,62 +3,165 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Falling Sand Lab — 2D Particle Simulator</title>
+    <meta name="theme-color" content="#f4f1e8" />
+    <title>Downstream — A quiet river journey</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <header class="toolbar">
-      <div class="brand">
-        <span class="logo" aria-hidden="true"></span>
-        <h1>Falling&nbsp;Sand&nbsp;Lab</h1>
-      </div>
+    <main class="page">
+      <header class="heading">
+        <div>
+          <p class="eyebrow"><span></span> A little room to wander</p>
+          <h1>Go with the <em>flow.</em></h1>
+        </div>
+        <button class="motion-toggle" id="motionToggle" type="button" aria-label="Pause animation" aria-pressed="false">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path id="toggleIcon" d="M6 4h3v12H6zm5 0h3v12h-3z" /></svg>
+          <span id="toggleText">Pause scene</span>
+        </button>
+      </header>
 
-      <div class="group materials" id="materials" role="radiogroup" aria-label="Material">
-        <button class="mat is-active" type="button" data-tool="sand" role="radio" aria-checked="true" title="Sand — falls and piles up (1)">
-          <span class="swatch swatch-sand"></span><span class="label">Sand</span><kbd>1</kbd>
-        </button>
-        <button class="mat" type="button" data-tool="water" role="radio" aria-checked="false" title="Water — flows down and spreads sideways (2)">
-          <span class="swatch swatch-water"></span><span class="label">Water</span><kbd>2</kbd>
-        </button>
-        <button class="mat" type="button" data-tool="acid" role="radio" aria-checked="false" title="Acid — spreads and dissolves other materials (3)">
-          <span class="swatch swatch-acid"></span><span class="label">Acid</span><kbd>3</kbd>
-        </button>
-        <button class="mat" type="button" data-tool="wall" role="radio" aria-checked="false" title="Wall — static barrier (4)">
-          <span class="swatch swatch-wall"></span><span class="label">Wall</span><kbd>4</kbd>
-        </button>
-        <button class="mat" type="button" data-tool="erase" role="radio" aria-checked="false" title="Eraser — remove particles (5)">
-          <span class="swatch swatch-erase"></span><span class="label">Eraser</span><kbd>5</kbd>
-        </button>
-      </div>
+      <section class="landscape" aria-label="An animated wooden boat drifting along a winding river through green hills">
+        <svg id="riverScene" class="river-scene" viewBox="0 0 1200 700" role="img" aria-labelledby="sceneTitle sceneDesc" preserveAspectRatio="xMidYMid slice">
+          <title id="sceneTitle">Downstream</title>
+          <desc id="sceneDesc">A small boat rocks gently as it follows a blue river through an illustrated countryside. Clouds drift and ripples flow along the current.</desc>
+          <defs>
+            <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+              <stop stop-color="#dcecee" />
+              <stop offset="1" stop-color="#f5efdc" />
+            </linearGradient>
+            <linearGradient id="water" x1="0" y1="0" x2="0.8" y2="1">
+              <stop stop-color="#80bdc3" />
+              <stop offset="0.55" stop-color="#64a9b4" />
+              <stop offset="1" stop-color="#4f96a5" />
+            </linearGradient>
+            <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1">
+              <stop stop-color="#b7ca8d" />
+              <stop offset="1" stop-color="#8eae75" />
+            </linearGradient>
+            <linearGradient id="hull" x1="0" y1="0" x2="0" y2="1">
+              <stop stop-color="#bd7047" />
+              <stop offset="1" stop-color="#8f4f37" />
+            </linearGradient>
+            <filter id="softShadow" x="-30%" y="-50%" width="160%" height="200%">
+              <feGaussianBlur stdDeviation="7" />
+            </filter>
+            <filter id="boatShadow" x="-40%" y="-100%" width="180%" height="300%">
+              <feGaussianBlur stdDeviation="4" />
+            </filter>
+            <clipPath id="riverClip">
+              <path d="M-40 345C130 315 235 500 410 470S615 315 800 300 1080 438 1240 390V590C1030 635 940 480 780 505S590 670 390 675 110 510-40 545Z" />
+            </clipPath>
+            <g id="cloud" fill="#fffdf5">
+              <ellipse cx="0" cy="8" rx="57" ry="17" />
+              <circle cx="-23" cy="0" r="23" />
+              <circle cx="12" cy="-10" r="31" />
+              <circle cx="38" cy="4" r="18" />
+            </g>
+            <g id="tree">
+              <path d="M0 5v44" stroke="#6d7450" stroke-width="7" stroke-linecap="round" />
+              <ellipse cy="-8" rx="27" ry="39" fill="#527c62" />
+              <ellipse cx="-8" cy="-17" rx="13" ry="24" fill="#6f9671" />
+            </g>
+            <g id="roundTree">
+              <path d="M0 8v40" stroke="#796c4d" stroke-width="7" stroke-linecap="round" />
+              <circle cy="-7" r="31" fill="#789766" />
+              <circle cx="-10" cy="-17" r="18" fill="#91ab75" />
+            </g>
+            <g id="grassTuft" fill="none" stroke="#63845e" stroke-width="3" stroke-linecap="round">
+              <path d="M0 0q-2-13-10-18M0 0q1-18 5-24M0 0q7-12 14-15" />
+            </g>
+          </defs>
 
-      <div class="group controls">
-        <label class="slider" for="brush" title="Brush size ([ and ])">
-          <span class="slider-name">Brush</span>
-          <input id="brush" type="range" min="1" max="48" step="1" value="8" />
-          <output id="brushValue" for="brush">8</output>
-        </label>
-        <button class="btn" id="pauseBtn" type="button" title="Pause / resume (Space)">
-          <span class="btn-icon" id="pauseIcon">❙❙</span><span id="pauseText">Pause</span>
-        </button>
-        <button class="btn" id="stepBtn" type="button" title="Advance one frame while paused">Step</button>
-        <button class="btn btn-danger" id="clearBtn" type="button" title="Clear the whole simulation (C)">Clear</button>
-      </div>
+          <rect width="1200" height="700" fill="url(#sky)" />
+          <circle cx="1005" cy="112" r="55" fill="#f2ce7b" opacity=".9" />
+          <circle cx="1005" cy="112" r="73" fill="none" stroke="#f7dfa8" stroke-width="2" opacity=".6" />
 
-      <div class="group stats" aria-live="off">
-        <span class="stat" id="fpsStat">60 fps</span>
-        <span class="stat" id="cellStat">0</span>
-      </div>
-    </header>
+          <g class="cloud cloud-one" opacity=".86"><use href="#cloud" /></g>
+          <g class="cloud cloud-two" opacity=".65"><use href="#cloud" /></g>
+          <g class="cloud cloud-three" opacity=".72"><use href="#cloud" /></g>
 
-    <main class="stage" id="stage">
-      <canvas id="sim" aria-label="Falling sand simulation area"></canvas>
-      <div class="brush-preview" id="brushPreview" aria-hidden="true"></div>
-      <p class="hint">
-        Drag to draw &nbsp;·&nbsp; right-drag to erase &nbsp;·&nbsp; <kbd>1</kbd>–<kbd>5</kbd> material
-        &nbsp;·&nbsp; <kbd>Space</kbd> pause &nbsp;·&nbsp; <kbd>C</kbd> clear
-      </p>
+          <path d="M0 300 135 168l60 64 100-113 137 150 118-102 130 120 134-154 166 163 120-91v215H0Z" fill="#b5c8b2" />
+          <path d="m0 329 174-116 84 82 133-103 145 120 165-83 126 91 177-111 196 86v146H0Z" fill="#96b397" />
+          <path d="M0 349q145-68 284-16t264 4 272-5 380 21v347H0Z" fill="url(#grass)" />
+          <path d="M0 361q138-56 272-12t276 4" fill="none" stroke="#d0d8a4" stroke-width="5" opacity=".75" />
+
+          <g opacity=".98">
+            <use href="#tree" transform="translate(95 336) scale(.8)" />
+            <use href="#roundTree" transform="translate(151 351) scale(.65)" />
+            <use href="#tree" transform="translate(1070 345) scale(.9)" />
+            <use href="#roundTree" transform="translate(1133 356) scale(.7)" />
+            <use href="#tree" transform="translate(746 298) scale(.55)" />
+          </g>
+
+          <path d="M-40 335C130 305 235 490 410 460S615 305 800 290 1080 428 1240 380" fill="none" stroke="#d5d4a5" stroke-width="22" />
+          <path d="M-40 555C110 520 180 685 390 685S615 540 780 515 1030 645 1240 600" fill="none" stroke="#6e9469" stroke-width="15" opacity=".55" />
+          <path d="M-40 345C130 315 235 500 410 470S615 315 800 300 1080 438 1240 390V590C1030 635 940 480 780 505S590 670 390 675 110 510-40 545Z" fill="url(#water)" />
+          <g clip-path="url(#riverClip)" fill="none" stroke-linecap="round">
+            <path class="current current-one" d="M-100 410C120 360 250 555 430 520S650 370 820 365 1070 520 1320 455" stroke="#d8eeea" stroke-width="5" stroke-dasharray="42 38" opacity=".65" />
+            <path class="current current-two" d="M-80 470C130 430 260 620 445 580S660 435 825 430 1080 575 1310 510" stroke="#b9dbd8" stroke-width="3" stroke-dasharray="25 55" opacity=".55" />
+            <path class="current current-three" d="M-50 365C160 345 250 475 420 445S640 330 795 325 1050 455 1260 420" stroke="#eff7ec" stroke-width="3" stroke-dasharray="18 62" opacity=".48" />
+            <path d="M55 405q22-10 44 0M295 530q20-9 40 0M912 417q25-10 50 0M1080 490q18-8 36 0" stroke="#d8eeea" stroke-width="3" opacity=".6" />
+          </g>
+
+          <g class="reeds" stroke="#597c59" stroke-width="4" stroke-linecap="round" fill="none">
+            <path d="M118 527q-3-36-16-55M122 526q7-40 19-56M126 530q18-25 27-30" />
+            <path d="M1018 539q-2-34-14-53M1023 541q6-42 17-60M1028 543q15-26 25-33" />
+            <path d="M520 628q-2-29-13-45M526 627q7-33 17-47" />
+          </g>
+          <g fill="#8a6744">
+            <ellipse cx="102" cy="472" rx="4" ry="11" transform="rotate(-25 102 472)" />
+            <ellipse cx="141" cy="470" rx="4" ry="11" transform="rotate(20 141 470)" />
+            <ellipse cx="1004" cy="486" rx="4" ry="11" transform="rotate(-20 1004 486)" />
+            <ellipse cx="1040" cy="481" rx="4" ry="11" transform="rotate(18 1040 481)" />
+          </g>
+          <g fill="#829387">
+            <ellipse cx="191" cy="590" rx="30" ry="13" />
+            <ellipse cx="218" cy="594" rx="18" ry="9" fill="#9eaaa0" />
+            <ellipse cx="1100" cy="584" rx="34" ry="14" />
+            <ellipse cx="1068" cy="587" rx="18" ry="9" fill="#a2aea1" />
+          </g>
+          <g>
+            <use href="#grassTuft" transform="translate(60 602)" />
+            <use href="#grassTuft" transform="translate(320 681) scale(.8)" />
+            <use href="#grassTuft" transform="translate(1160 616)" />
+            <use href="#grassTuft" transform="translate(963 557) scale(.8)" />
+            <use href="#grassTuft" transform="translate(710 311) scale(.7)" />
+          </g>
+          <g transform="translate(1090 253)">
+            <path d="M-54 23h108v57H-54Z" fill="#f0dfb7" />
+            <path d="m-68 25 68-48 68 48Z" fill="#a9664c" />
+            <path d="M-9 80V45H12v35M-43 40h20v19h-20M27 40h17v19H27" fill="#6e8f83" />
+            <path d="M32-9v-25h13v38" fill="#a9664c" />
+          </g>
+
+          <g id="boat">
+            <animateMotion dur="24s" repeatCount="indefinite" rotate="auto" path="M-190 445C100 405 240 585 420 565S650 385 805 400 1050 535 1390 475" />
+            <ellipse class="boat-shadow" cx="0" cy="20" rx="55" ry="10" fill="#316f7c" opacity=".28" filter="url(#boatShadow)" />
+            <g class="wake" fill="none" stroke="#d7ece5" stroke-linecap="round">
+              <path d="M-45 16q-30 10-53 2" stroke-width="3" />
+              <path d="M-39 25q-20 9-39 6" stroke-width="2" opacity=".65" />
+            </g>
+            <g class="boat-rock">
+              <path d="M-46-7Q-39 24 0 27T46-7Z" fill="url(#hull)" />
+              <path d="M-46-7Q0 4 46-7" fill="none" stroke="#6f4233" stroke-width="5" stroke-linecap="round" />
+              <path d="M-31 3Q0 12 31 3" fill="none" stroke="#d39661" stroke-width="4" opacity=".8" />
+              <path d="M-13-3v18M16-4v17" stroke="#734432" stroke-width="4" />
+              <path d="m-16 1 55-28" stroke="#76563c" stroke-width="4" stroke-linecap="round" />
+              <path d="m37-26 15-8" stroke="#b78a5a" stroke-width="7" stroke-linecap="round" />
+              <circle cx="-3" cy="-31" r="9" fill="#d6a276" />
+              <path d="M-15-21q13-9 25 1l4 20h-34Z" fill="#e8c16d" />
+              <path d="M-13-33q10-14 21 0Z" fill="#597b70" />
+              <path d="M-16-33h27" stroke="#49685f" stroke-width="3" stroke-linecap="round" />
+            </g>
+          </g>
+
+          <g class="birds" fill="none" stroke="#6b8b85" stroke-width="3" stroke-linecap="round">
+            <path d="M735 131q8-9 16 0 8-9 16 0M785 153q6-7 12 0 6-7 12 0" />
+          </g>
+        </svg>
+      </section>
+      <footer class="footnote"><span>Nothing to do.</span><span class="footer-line"></span><span>Nowhere to hurry.</span></footer>
     </main>
-
     <script src="app.js"></script>
   </body>
 </html>

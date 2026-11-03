@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { resolve } from "node:path";
 
 export type ProcessResult = {
   exitCode: number | null;
@@ -39,7 +40,8 @@ export class ProcessSupervisor {
     const child = spawn(executable, args, {
       cwd: options.cwd,
       detached: true,
-      env: { ...process.env, ...options.env, LLM_ARENA_OWNER: this.ownerId },
+      // OpenCode предпочитает PWD фактическому cwd процесса.
+      env: { ...process.env, ...options.env, PWD: resolve(options.cwd ?? "."), LLM_ARENA_OWNER: this.ownerId },
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });

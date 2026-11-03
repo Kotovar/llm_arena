@@ -1,7 +1,24 @@
+import { tmpdir } from "node:os";
+import { relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ProcessSupervisor } from "./process-supervisor.js";
 
 describe("owned process groups", () => {
+  it.each([tmpdir(), relative(process.cwd(), tmpdir()), undefined])("keeps PWD aligned with the child cwd (%s)", async (cwd) => {
+    const supervisor = new ProcessSupervisor("test-owner", 100);
+    let output = "";
+    const child = supervisor.spawn({
+      argv: [process.execPath, "-e", "console.log(JSON.stringify({ cwd: process.cwd(), pwd: process.env.PWD }))"],
+      ...(cwd === undefined ? {} : { cwd }),
+      env: { PWD: "/stale-parent-directory" },
+      onStdout: (chunk) => { output += chunk; },
+    });
+    child.stdin.end();
+
+    expect((await child.completed).exitCode).toBe(0);
+    expect(JSON.parse(output)).toEqual({ cwd: resolve(cwd ?? "."), pwd: resolve(cwd ?? ".") });
+  });
+
   it("cancels a long-running child without leaving its process alive", async () => {
     const supervisor = new ProcessSupervisor("test-owner", 100);
     let ready!: () => void;
